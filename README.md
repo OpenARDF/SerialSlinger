@@ -73,3 +73,35 @@ From the repository root:
 - `./gradlew shared:desktopTest`
 - `./gradlew desktopSmokeRun --args="list"`
 - `./gradlew desktopAppRun`
+
+## macOS Packaging
+
+From the repository root on macOS:
+
+- `./gradlew desktopAppImage`
+- `./gradlew desktopDmg`
+
+The generated packaging artifacts are written under:
+
+- `shared/build/packaging/output`
+
+`desktopDmg` currently produces an unsigned `.dmg` for local drag-and-drop testing. Apple signing and notarization can be added later for normal end-user distribution.
+
+Note: the packaged macOS installer version uses a `1.x.y` format because `jpackage` does not accept an app-package version beginning with `0`. The in-app SerialSlinger version shown in the log and window title remains on the project’s `0.1.x` development track.
+
+## Windows Packaging
+
+From the repository root on Windows:
+
+- `gradlew.bat desktopExe`
+- `gradlew.bat desktopMsi`
+
+The generated packaging artifacts are written under:
+
+- `shared\\build\\packaging\\output`
+
+Notes:
+
+- `desktopExe` is the simplest Windows installer target to start with.
+- `desktopMsi` may require Windows packaging tooling such as WiX depending on the local JDK/jpackage setup.
+- Windows installers use the same `1.x.y` package-version track as macOS packaging, while the in-app SerialSlinger version remains on the `0.1.x` development track.

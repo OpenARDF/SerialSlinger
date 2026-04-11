@@ -8,7 +8,7 @@ class DesktopSerialTransportTest {
     fun prependsWakePreambleBeforeFirstCommandBatch() {
         val payloads = DesktopSerialTransport.payloadsForSend(
             commands = listOf("FOX", "FRE 1"),
-            wakePreambleSent = false,
+            shouldWake = true,
         )
 
         assertEquals(
@@ -22,12 +22,29 @@ class DesktopSerialTransportTest {
     }
 
     @Test
-    fun skipsWakePreambleAfterFirstBatch() {
+    fun prependsWakePreambleForLaterCommandBatchesToo() {
         val payloads = DesktopSerialTransport.payloadsForSend(
             commands = listOf("EVT"),
-            wakePreambleSent = true,
+            shouldWake = true,
         )
 
-        assertEquals(listOf("EVT\n"), payloads)
+        assertEquals(listOf("**\r", "EVT\n"), payloads)
+    }
+
+    @Test
+    fun skipsWakePreambleWhenRecentTrafficShouldKeepDeviceAwake() {
+        val payloads = DesktopSerialTransport.payloadsForSend(
+            commands = listOf("BAT"),
+            shouldWake = false,
+        )
+
+        assertEquals(listOf("BAT\n"), payloads)
+    }
+
+    @Test
+    fun requestsWakePreambleAfterLongIdleGap() {
+        assertEquals(true, DesktopSerialTransport.shouldSendWakePreamble(lastWriteAtMs = null, nowMs = 10_000))
+        assertEquals(true, DesktopSerialTransport.shouldSendWakePreamble(lastWriteAtMs = 1_000, nowMs = 3_000, wakeAfterIdleMs = 1_500))
+        assertEquals(false, DesktopSerialTransport.shouldSendWakePreamble(lastWriteAtMs = 1_000, nowMs = 2_000, wakeAfterIdleMs = 1_500))
     }
 }

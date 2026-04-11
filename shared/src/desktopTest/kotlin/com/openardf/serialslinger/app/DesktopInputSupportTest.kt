@@ -20,7 +20,35 @@ class DesktopInputSupportTest {
             startsInFallback = "15 minutes 30 seconds",
         )
 
-        assertEquals("Starts in 15 minutes 30 seconds", label)
+        assertEquals("Starts in 15m 30s", label)
+    }
+
+    @Test
+    fun describesEventStatusUsesLiveCountdownInsteadOfStaticFallback() {
+        val label = DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = true,
+            eventStateSummary = null,
+            currentTimeCompact = "260410140001",
+            startTimeCompact = "260410141530",
+            finishTimeCompact = "260410160000",
+            startsInFallback = "15 minutes 30 seconds",
+        )
+
+        assertEquals("Starts in 15m 29s", label)
+    }
+
+    @Test
+    fun describesEventStatusUsesLiveRemainingTimeInsteadOfStaticSummary() {
+        val label = DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = true,
+            eventStateSummary = "Time remaining: 1h 00m 00s",
+            currentTimeCompact = "260410150001",
+            startTimeCompact = "260410141530",
+            finishTimeCompact = "260410160000",
+            startsInFallback = null,
+        )
+
+        assertEquals("Time remaining: 59m 59s", label)
     }
 
     @Test
@@ -181,5 +209,30 @@ class DesktopInputSupportTest {
         )
 
         assertEquals(LocalDateTime.of(2026, 4, 11, 13, 5, 0, 0), truncated)
+    }
+
+    @Test
+    fun formatsUnsetBatteryAndTemperatureFieldsAsWaitingForRead() {
+        assertEquals("Waiting for read", DesktopInputSupport.formatThresholdOrWaiting(null))
+        assertEquals("Waiting for read", DesktopInputSupport.formatVoltageOrWaiting(null))
+        assertEquals("Waiting for read", DesktopInputSupport.formatTemperatureOrWaiting(null))
+    }
+
+    @Test
+    fun hidesClassicTimedEventFrequencyRowsThatDoNotApply() {
+        val visibility = DesktopInputSupport.timedEventFrequencyVisibility(EventType.CLASSIC)
+
+        assertEquals(true, visibility.showFrequency1)
+        assertEquals(false, visibility.showFrequency2)
+        assertEquals(false, visibility.showFrequency3)
+        assertEquals(true, visibility.showFrequencyB)
+    }
+
+    @Test
+    fun suppressesPlaceholderNoneEventTypeFromUiOptions() {
+        assertEquals(
+            listOf(EventType.CLASSIC, EventType.FOXORING, EventType.SPRINT),
+            DesktopInputSupport.selectableEventTypes(),
+        )
     }
 }

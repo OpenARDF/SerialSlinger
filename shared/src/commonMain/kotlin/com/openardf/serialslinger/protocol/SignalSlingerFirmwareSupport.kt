@@ -50,7 +50,7 @@ object SignalSlingerFirmwareSupport {
     private val sharedVerificationReadbackCommands: Map<SettingKey, List<String>> = mapOf(
         SettingKey.STATION_ID to listOf("ID"),
         SettingKey.EVENT_TYPE to listOf("EVT", "FRE"),
-        SettingKey.FOX_ROLE to listOf("FOX", "FRE"),
+        SettingKey.FOX_ROLE to listOf("FOX", "SPD P", "FRE"),
         SettingKey.PATTERN_TEXT to listOf("PAT"),
         SettingKey.ID_CODE_SPEED_WPM to listOf("SPD I"),
         SettingKey.PATTERN_CODE_SPEED_WPM to listOf("SPD P"),

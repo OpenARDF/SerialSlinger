@@ -14,13 +14,15 @@ class DesktopSerialTransport(
     private val baudRate: Int = 9_600,
     private val lineTerminator: String = "\n",
     private val wakePreamble: String = "**\r",
+    private val wakeSettleMs: Long = 80,
+    private val wakeAfterIdleMs: Long = 1_500,
     private val readTimeoutMs: Long = 1_000,
     private val quietPeriodMs: Long = 120,
     private val pollIntervalMs: Long = 20,
 ) : DeviceTransport {
     private var serialPort: SerialPort? = null
     private val lineBuffer = DesktopSerialLineBuffer()
-    private var wakePreambleSent: Boolean = false
+    private var lastWriteAtMs: Long? = null
 
     override fun connect() {
         if (serialPort?.isOpen == true) {
@@ -42,13 +44,13 @@ class DesktopSerialTransport(
         }
 
         serialPort = port
-        wakePreambleSent = false
+        lastWriteAtMs = null
     }
 
     override fun disconnect() {
         serialPort?.closePort()
         serialPort = null
-        wakePreambleSent = false
+        lastWriteAtMs = null
     }
 
     override fun sendCommands(commands: List<String>) {
@@ -56,9 +58,16 @@ class DesktopSerialTransport(
             "Serial port `$portDescriptor` is not connected."
         }
 
-        buildPayloads(commands).forEach { payload ->
+        val now = System.currentTimeMillis()
+        if (shouldSendWakePreamble(lastWriteAtMs, now)) {
+            writePayload(port, wakePreamble)
+            Thread.sleep(wakeSettleMs)
+        }
+
+        commands.map(::ensureLineTerminated).forEach { payload ->
             writePayload(port, payload)
         }
+        lastWriteAtMs = System.currentTimeMillis()
     }
 
     override fun readAvailableLines(): List<String> {
@@ -93,21 +102,6 @@ class DesktopSerialTransport(
         }
     }
 
-    private fun buildPayloads(commands: List<String>): List<String> {
-        if (commands.isEmpty()) {
-            return emptyList()
-        }
-
-        val payloads = mutableListOf<String>()
-        if (!wakePreambleSent) {
-            payloads += wakePreamble
-            wakePreambleSent = true
-        }
-
-        payloads += commands.map(::ensureLineTerminated)
-        return payloads
-    }
-
     private fun writePayload(port: SerialPort, payload: String) {
         val bytes = payload.encodeToByteArray()
         val bytesWritten = port.writeBytes(bytes, bytes.size)
@@ -117,18 +111,26 @@ class DesktopSerialTransport(
     }
 
     companion object {
+        internal fun shouldSendWakePreamble(
+            lastWriteAtMs: Long?,
+            nowMs: Long,
+            wakeAfterIdleMs: Long = 1_500,
+        ): Boolean {
+            return lastWriteAtMs == null || (nowMs - lastWriteAtMs) >= wakeAfterIdleMs
+        }
+
         internal fun payloadsForSend(
             commands: List<String>,
-            wakePreambleSent: Boolean,
             lineTerminator: String = "\n",
             wakePreamble: String = "**\r",
+            shouldWake: Boolean = true,
         ): List<String> {
             if (commands.isEmpty()) {
                 return emptyList()
             }
 
             val payloads = mutableListOf<String>()
-            if (!wakePreambleSent) {
+            if (shouldWake) {
                 payloads += wakePreamble
             }
             payloads += commands.map { command ->

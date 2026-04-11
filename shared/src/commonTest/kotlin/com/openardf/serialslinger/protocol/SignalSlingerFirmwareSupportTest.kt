@@ -33,4 +33,14 @@ class SignalSlingerFirmwareSupportTest {
 
         assertEquals("modern-1.2+", profile.id)
     }
+
+    @Test
+    fun foxRoleVerificationReadbackIncludesPatternSpeedRefresh() {
+        val profile = SignalSlingerFirmwareSupport.resolve("1.2s")
+
+        assertEquals(
+            listOf("FOX", "SPD P", "FRE"),
+            profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.FOX_ROLE],
+        )
+    }
 }

@@ -27,8 +27,6 @@ import java.awt.Dimension
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
 import java.time.Duration
@@ -39,8 +37,8 @@ import javax.swing.BoundedRangeModel
 import javax.swing.BorderFactory
 import javax.swing.BoxLayout
 import javax.swing.DefaultComboBoxModel
+import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
-import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JFrame
 import javax.swing.JLabel
@@ -59,6 +57,7 @@ import javax.swing.WindowConstants
 import javax.swing.SpinnerDateModel
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
+import javax.swing.JList
 
 fun main() {
     SwingUtilities.invokeLater {
@@ -67,7 +66,7 @@ fun main() {
 }
 
 private object SerialSlingerAppVersion {
-    const val value = "0.1.18"
+    const val value = "0.1.36"
 }
 
 private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerAppVersion.value}") {
@@ -76,7 +75,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val autoDetectButton = JButton("Auto Detect")
     private val submitButton = JButton("Clone")
     private val toggleLogButton = JButton("Show Log")
-    private val copyLogButton = JButton("Copy Log")
     private val openLogFolderButton = JButton("Open Log Folder")
     private val headlineLabel = JLabel(" ")
     private val statusLabel = JLabel("Idle")
@@ -91,7 +89,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val contentSplitPane by lazy { JSplitPane(JSplitPane.HORIZONTAL_SPLIT, formScroll, JPanel()) }
 
     private val stationIdField = JTextField()
-    private val eventTypeCombo = JComboBox(DefaultComboBoxModel(EventType.entries.toTypedArray()))
+    private val eventTypeCombo =
+        JComboBox(DefaultComboBoxModel(DesktopInputSupport.selectableEventTypes().toTypedArray()))
     private val foxRoleCombo = JComboBox<FoxRole>()
     private val patternTextField = JTextField()
     private val idSpeedField = JTextField()
@@ -113,9 +112,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val frequency2Field = JTextField()
     private val frequency3Field = JTextField()
     private val frequencyBField = JTextField()
+    private val frequency1Label = JLabel("Frequency 1")
+    private val frequency2Label = JLabel("Frequency 2")
+    private val frequency3Label = JLabel("Frequency 3")
+    private val frequencyBLabel = JLabel("Frequency B")
     private val batteryThresholdField = JTextField()
     private val batteryModeCombo = JComboBox(DefaultComboBoxModel(ExternalBatteryControlMode.entries.toTypedArray()))
-    private val transmissionsEnabledCheckbox = JCheckBox("Enabled")
+    private val transmissionsField = JTextField()
     private val versionInfoField = JTextField()
     private val internalBatteryField = JTextField()
     private val externalBatteryField = JTextField()
@@ -136,6 +139,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var autoDetectNoDeviceFound: Boolean = false
     private var deviceTimeOffset: Duration? = null
     private var lastDeviceTimeCheckAtMs: Long = 0L
+    private var consecutiveDeviceTimeCheckNoResponseCount: Int = 0
     private var cloneTemplateSettings: DeviceSettings? = null
     private val knownProbeResults = linkedMapOf<String, SignalSlingerPortProbe>()
     private val portMemory: DesktopPortMemory = PreferencesDesktopPortMemory
@@ -181,8 +185,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         internalBatteryField.isEditable = false
         externalBatteryField.isEditable = false
         temperatureField.isEditable = false
+        transmissionsField.isEditable = false
         configureNullableDateTimeSpinner(startTimeSpinner, startTimeStatusLabel)
         configureNullableDateTimeSpinner(finishTimeSpinner, finishTimeStatusLabel)
+        installTrimmedComboRenderer(eventTypeCombo)
+        installTrimmedComboRenderer(foxRoleCombo)
+        installTrimmedComboRenderer(batteryModeCombo)
         configureLogAutoScroll()
         showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "Not Connected")
         appendRenderedLog(sessionLog.loadCurrentLogText())
@@ -193,7 +201,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         syncTimeButton.addActionListener { syncDeviceTimeToSystem() }
         disableEventButton.addActionListener { disableProgrammedEvent() }
         toggleLogButton.addActionListener { setLogVisible(!logVisible) }
-        copyLogButton.addActionListener { copyLogToClipboard() }
         openLogFolderButton.addActionListener { openLogFolder() }
         rawCommandField.addActionListener { sendRawSerialCommand() }
         portComboBox.addActionListener {
@@ -216,7 +223,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             if (!updatingForm) {
                 updatingForm = true
                 try {
-                    syncFoxRoleOptions(eventTypeCombo.selectedItem as EventType, foxRoleCombo.selectedItem as FoxRole?)
+                    val eventType = eventTypeCombo.selectedItem as EventType
+                    syncFoxRoleOptions(eventType, foxRoleCombo.selectedItem as FoxRole?)
+                    updateTimedEventFrequencyVisibility(eventType)
                 } finally {
                     updatingForm = false
                 }
@@ -261,8 +270,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             add(Box.createHorizontalStrut(16))
             add(toggleLogButton)
             add(Box.createHorizontalStrut(8))
-            add(copyLogButton)
-            add(Box.createHorizontalStrut(8))
             add(openLogFolderButton)
         }
     }
@@ -288,6 +295,29 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun installTrimmedComboRenderer(comboBox: JComboBox<*>) {
+        comboBox.renderer = object : DefaultListCellRenderer() {
+            override fun getListCellRendererComponent(
+                list: JList<*>?,
+                value: Any?,
+                index: Int,
+                isSelected: Boolean,
+                cellHasFocus: Boolean,
+            ): java.awt.Component {
+                val component = super.getListCellRendererComponent(
+                    list,
+                    value?.toString()?.trim(),
+                    index,
+                    isSelected,
+                    cellHasFocus,
+                )
+                border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
+                text = value?.toString()?.trim().orEmpty()
+                return component
+            }
+        }
+    }
+
     private fun buildFormPanel(): JPanel {
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -302,7 +332,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 row = addRow(section, row, "Current Frequency", currentFrequencyField)
                 row = addRow(section, row, "Current Bank", currentBankField)
                 row = addRow(section, row, "Battery Mode", batteryModeCombo)
-                row = addRow(section, row, "Transmissions", transmissionsEnabledCheckbox)
+                row = addRow(section, row, "Transmissions", transmissionsField)
                 addRow(section, row, "Low Battery Threshold", batteryThresholdField)
             })
             add(Box.createVerticalStrut(12))
@@ -316,10 +346,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 row = addRow(section, row, "Event Status", buildEventStatusRow())
                 row = addRow(section, row, "Lasts", lastsField)
                 row = addRow(section, row, "Days To Run", daysField)
-                row = addRow(section, row, "Frequency 1", frequency1Field)
-                row = addRow(section, row, "Frequency 2", frequency2Field)
-                row = addRow(section, row, "Frequency 3", frequency3Field)
-                row = addRow(section, row, "Frequency B", frequencyBField)
+                row = addRow(section, row, frequency1Label, frequency1Field)
+                row = addRow(section, row, frequency2Label, frequency2Field)
+                row = addRow(section, row, frequency3Label, frequency3Field)
+                row = addRow(section, row, frequencyBLabel, frequencyBField)
                 addRow(section, row, "Event Enabled", eventEnabledField)
             })
             add(Box.createVerticalStrut(12))
@@ -402,11 +432,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 applyBatteryModeChange()
             }
         }
-        transmissionsEnabledCheckbox.addActionListener {
-            if (!updatingForm) {
-                applyTransmissionsEnabledChange()
-            }
-        }
         installDateTimeCommitHandler(startTimeSpinner) { applyStartTimeChange() }
         installDateTimeCommitHandler(finishTimeSpinner) { applyFinishTimeChange() }
     }
@@ -447,6 +472,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun addRow(panel: JPanel, row: Int, label: String, component: Component): Int {
+        return addRow(panel, row, JLabel(label), component)
+    }
+
+    private fun addRow(panel: JPanel, row: Int, labelComponent: JLabel, component: Component): Int {
         val labelConstraints = GridBagConstraints().apply {
             gridx = 0
             gridy = row
@@ -460,7 +489,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             fill = GridBagConstraints.HORIZONTAL
             insets = Insets(4, 8, 4, 8)
         }
-        panel.add(JLabel(label), labelConstraints)
+        panel.add(labelComponent, labelConstraints)
         panel.add(component, fieldConstraints)
         return row + 1
     }
@@ -1134,19 +1163,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun applyTransmissionsEnabledChange() {
-        applyImmediateEdit("RF Transmissions", updatesTimedEventTemplate = false) { base ->
-            EditableDeviceSettings.fromDeviceSettings(base).copy(
-                transmissionsEnabled = SettingsField(
-                    "transmissionsEnabled",
-                    "RF Transmissions",
-                    base.transmissionsEnabled,
-                    transmissionsEnabledCheckbox.isSelected,
-                ),
-            )
-        }
-    }
-
     private fun applySnapshotToForm(snapshot: DeviceSnapshot?, recalculateClockOffset: Boolean = true) {
         if (snapshot == null) {
             return
@@ -1159,7 +1175,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         updatingForm = true
         try {
             stationIdField.text = timedSettings.stationId
-            eventTypeCombo.selectedItem = timedSettings.eventType
+            eventTypeCombo.selectedItem =
+                timedSettings.eventType.takeIf { it in DesktopInputSupport.selectableEventTypes() }
+                    ?: DesktopInputSupport.selectableEventTypes().first()
             syncFoxRoleOptions(settings.eventType, settings.foxRole)
             patternTextField.text = DesktopInputSupport.displayPatternText(
                 eventType = settings.eventType,
@@ -1180,29 +1198,30 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             frequency2Field.text = FrequencySupport.formatFrequencyMhz(timedSettings.mediumFrequencyHz)
             frequency3Field.text = FrequencySupport.formatFrequencyMhz(timedSettings.highFrequencyHz)
             frequencyBField.text = FrequencySupport.formatFrequencyMhz(timedSettings.beaconFrequencyHz)
-            batteryThresholdField.text = settings.lowBatteryThresholdVolts?.toString().orEmpty()
+            updateTimedEventFrequencyVisibility(timedSettings.eventType)
+            batteryThresholdField.text = DesktopInputSupport.formatThresholdOrWaiting(settings.lowBatteryThresholdVolts)
             batteryModeCombo.selectedItem = settings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF
-            updateTransmissionsEnabledCheckbox(settings.transmissionsEnabled)
+            updateTransmissionsField(settings.transmissionsEnabled)
             versionInfoField.text = DesktopInputSupport.formatReportedVersion(
                 softwareVersion = snapshot.info.softwareVersion,
                 hardwareBuild = snapshot.info.hardwareBuild,
             )
-            internalBatteryField.text = snapshot.status.internalBatteryVolts?.let { "$it V" }.orEmpty()
-            externalBatteryField.text = snapshot.status.externalBatteryVolts?.let { "$it V" }.orEmpty()
-            temperatureField.text = snapshot.status.temperatureC?.let { "$it C" }.orEmpty()
+            internalBatteryField.text = DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.internalBatteryVolts)
+            externalBatteryField.text = DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.externalBatteryVolts)
+            temperatureField.text = DesktopInputSupport.formatTemperatureOrWaiting(snapshot.status.temperatureC)
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
             if (recalculateClockOffset) {
                 updateDeviceClockOffset(settings.currentTimeCompact)
             }
             updateDisplayedClockFields()
+            updateWritableControlAvailability(backgroundWorkInProgress)
         } finally {
             updatingForm = false
         }
     }
 
-    private fun updateTransmissionsEnabledCheckbox(isEnabled: Boolean) {
-        transmissionsEnabledCheckbox.isSelected = isEnabled
-        transmissionsEnabledCheckbox.text = "Enabled"
+    private fun updateTransmissionsField(isEnabled: Boolean) {
+        transmissionsField.text = if (isEnabled) "Enabled" else "Disabled"
     }
 
     private fun syncFoxRoleOptions(eventType: EventType, selectedRole: FoxRole?) {
@@ -1210,6 +1229,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val model = DefaultComboBoxModel(options.toTypedArray())
         foxRoleCombo.model = model
         foxRoleCombo.selectedItem = selectedRole?.takeIf { it in options } ?: options.firstOrNull()
+    }
+
+    private fun updateTimedEventFrequencyVisibility(eventType: EventType) {
+        val visibility = DesktopInputSupport.timedEventFrequencyVisibility(eventType)
+        frequency1Label.isVisible = visibility.showFrequency1
+        frequency1Field.isVisible = visibility.showFrequency1
+        frequency2Label.isVisible = visibility.showFrequency2
+        frequency2Field.isVisible = visibility.showFrequency2
+        frequency3Label.isVisible = visibility.showFrequency3
+        frequency3Field.isVisible = visibility.showFrequency3
+        frequencyBLabel.isVisible = visibility.showFrequencyB
+        frequencyBField.isVisible = visibility.showFrequencyB
+        revalidate()
+        repaint()
     }
 
     private fun displayedTimedEventSettings(snapshot: DeviceSnapshot): DeviceSettings {
@@ -1434,13 +1467,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun setBusy(isBusy: Boolean) {
         autoDetectButton.isEnabled = !isBusy
         portComboBox.isEnabled = !isBusy
-        toggleLogButton.isEnabled = !isBusy
-        copyLogButton.isEnabled = logVisible
+        toggleLogButton.isEnabled = true
         openLogFolderButton.isEnabled = logVisible
         rawCommandField.isEnabled =
             !isBusy &&
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED
+        updateWritableControlAvailability(isBusy)
         if (isBusy) {
             syncTimeButton.isEnabled = false
             disableEventButton.isEnabled = false
@@ -1452,6 +1485,31 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED &&
             cloneTemplateSettings != null
+    }
+
+    private fun updateWritableControlAvailability(isBusy: Boolean) {
+        val connected = currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
+        val schedulingSupported = loadedSnapshot?.capabilities?.supportsScheduling == true
+        val writableEnabled = connected && !isBusy
+
+        stationIdField.isEnabled = writableEnabled
+        eventTypeCombo.isEnabled = writableEnabled
+        foxRoleCombo.isEnabled = writableEnabled
+        patternTextField.isEnabled = writableEnabled
+        idSpeedField.isEnabled = writableEnabled
+        patternSpeedField.isEnabled = writableEnabled
+        batteryThresholdField.isEnabled = writableEnabled
+        batteryModeCombo.isEnabled = writableEnabled
+        transmissionsField.isEnabled = true
+
+        daysField.isEnabled = writableEnabled && schedulingSupported
+        frequency1Field.isEnabled = writableEnabled
+        frequency2Field.isEnabled = writableEnabled
+        frequency3Field.isEnabled = writableEnabled
+        frequencyBField.isEnabled = writableEnabled
+
+        applyDateTimeEditorCapability(startTimeSpinner, writableEnabled && schedulingSupported)
+        applyDateTimeEditorCapability(finishTimeSpinner, writableEnabled && schedulingSupported)
     }
 
     private fun setStatus(status: String) {
@@ -1645,6 +1703,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentState = connection.result.state
         currentConnectedPortPath = connection.portPath
         loadedSnapshot = connection.result.state.snapshot
+        consecutiveDeviceTimeCheckNoResponseCount = 0
         connection.result.state.snapshot?.settings?.let { loadedSettings ->
             if (cloneTemplateSettings == null) {
                 rememberCloneTemplateFrom(loadedSettings)
@@ -1711,7 +1770,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun setLogVisible(isVisible: Boolean) {
         logVisible = isVisible
         toggleLogButton.text = if (isVisible) "Hide Log" else "Show Log"
-        copyLogButton.isVisible = isVisible
         openLogFolderButton.isVisible = isVisible
         contentSplitPane.rightComponent = if (isVisible) logScroll else JPanel()
         contentSplitPane.dividerSize = if (isVisible) 8 else 0
@@ -1726,12 +1784,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setBusy(backgroundWorkInProgress)
         revalidate()
         repaint()
-    }
-
-    private fun copyLogToClipboard() {
-        val selection = StringSelection(logPane.text)
-        Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
-        setStatus("Session log copied to clipboard.")
     }
 
     private fun openLogFolder() {
@@ -1968,22 +2020,75 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             responseLines += transport.readAvailableLines()
             transport.sendCommands(listOf("EVT"))
             responseLines += transport.readAvailableLines()
-            currentState = DeviceSessionWorkflow.ingestReportLines(state, responseLines)
-            loadedSnapshot = currentState?.snapshot
-            updateDeviceClockOffset(loadedSnapshot?.settings?.currentTimeCompact)
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
 
             SwingUtilities.invokeLater {
                 if (responseLines.isNotEmpty()) {
+                    consecutiveDeviceTimeCheckNoResponseCount = 0
+                    currentState = DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+                    loadedSnapshot = currentState?.snapshot
+                    updateDeviceClockOffset(loadedSnapshot?.settings?.currentTimeCompact)
                     appendLog(
                         "Device Time Check",
                         responseLines.map { DesktopLogEntry("RX $it", DesktopLogCategory.SERIAL) },
                     )
+                    updateDisplayedClockFields()
+                    setStatus("Device time checked.")
+                } else {
+                    consecutiveDeviceTimeCheckNoResponseCount += 1
+                    val noResponseCount = consecutiveDeviceTimeCheckNoResponseCount
+                    appendLog(
+                        "Device Time Check",
+                        listOf(
+                            DesktopLogEntry(
+                                "No response from connected SignalSlinger during periodic time check (${noResponseCount} of 2).",
+                                DesktopLogCategory.APP,
+                            ),
+                        ),
+                    )
+                    if (noResponseCount >= 2) {
+                        markConnectedPortAsUnresponsive("No response to two consecutive periodic device time checks.")
+                    } else {
+                        setStatus("No response from SignalSlinger during periodic time check (1 of 2).")
+                    }
                 }
-                updateDisplayedClockFields()
-                setStatus("Device time checked.")
             }
         }
+    }
+
+    private fun markConnectedPortAsUnresponsive(reason: String) {
+        val portPath = currentConnectedPortPath ?: return
+        val updatedState = currentState?.let { state ->
+            state.copy(
+                connectionState = ConnectionState.DISCONNECTED,
+                snapshot = state.snapshot?.copy(
+                    status = state.snapshot.status.copy(
+                        connectionState = ConnectionState.DISCONNECTED,
+                        lastCommunicationError = reason,
+                    ),
+                ),
+                lastError = reason,
+            )
+        }
+        currentState = updatedState
+        loadedSnapshot = updatedState?.snapshot
+        knownProbeResults[portPath] = knownProbeResults[portPath]?.copy(
+            state = PortProbeState.NOT_DETECTED,
+            summary = "SignalSlinger no longer detected",
+            lastProbedAtMs = System.currentTimeMillis(),
+        ) ?: SignalSlingerPortProbe(
+            portInfo = resolvePortInfoFor(portPath),
+            state = PortProbeState.NOT_DETECTED,
+            summary = "SignalSlinger no longer detected",
+            lastProbedAtMs = System.currentTimeMillis(),
+        )
+        showConnectionIndicator(
+            ConnectionIndicatorState.DISCONNECTED,
+            "SignalSlinger is not responding on ${portPath}",
+        )
+        setStatus("SignalSlinger stopped responding on ${portPath}.")
+        refreshAvailablePorts(silent = true)
+        updateDisplayedClockFields()
     }
 
     private fun createDateTimeSpinner(): JSpinner {

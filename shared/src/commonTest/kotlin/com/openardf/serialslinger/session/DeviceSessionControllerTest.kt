@@ -148,6 +148,7 @@ class DeviceSessionControllerTest {
             scriptedResponses = mapOf(
                 "FOX 2" to listOf("""* Fox:Foxoring "Medium Freq" Fox"""),
                 "FOX" to listOf("""* Fox:Foxoring "Medium Freq" Fox"""),
+                "SPD P" to listOf("* PAT SPD:8 WPM"),
                 "FRE" to listOf("* FRE=3540.0 kHz"),
             ),
         )
@@ -168,11 +169,11 @@ class DeviceSessionControllerTest {
         val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
 
         assertEquals(listOf("FOX 2"), result.commandsSent)
-        assertEquals(listOf("FOX", "FRE"), result.readbackCommandsSent)
+        assertEquals(listOf("FOX", "SPD P", "FRE"), result.readbackCommandsSent)
         assertEquals(FoxRole.FOXORING_2, result.state.snapshot?.settings?.foxRole)
         assertEquals(3_540_000L, result.state.snapshot?.settings?.defaultFrequencyHz)
         assertEquals(
-            listOf("FOX 2", "FOX", "FRE"),
+            listOf("FOX 2", "FOX", "SPD P", "FRE"),
             transport.sentCommands,
         )
     }

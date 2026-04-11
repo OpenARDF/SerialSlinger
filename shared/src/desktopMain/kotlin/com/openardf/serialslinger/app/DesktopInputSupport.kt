@@ -13,6 +13,7 @@ object DesktopInputSupport {
     private const val timeSyncThresholdSeconds = 1L
     private const val syncLeadSeconds = 2L
     private val minimumValidTimestamp = LocalDateTime.of(2021, 1, 1, 0, 0, 0)
+    private const val waitingForReadPlaceholder = "Waiting for read"
 
     data class ClockPhaseSample(
         val midpointAt: LocalDateTime,
@@ -23,6 +24,17 @@ object DesktopInputSupport {
         val startTimeCompact: String?,
         val finishTimeCompact: String?,
     )
+
+    data class TimedEventFrequencyVisibility(
+        val showFrequency1: Boolean,
+        val showFrequency2: Boolean,
+        val showFrequency3: Boolean,
+        val showFrequencyB: Boolean,
+    )
+
+    fun selectableEventTypes(): List<EventType> {
+        return EventType.entries.filterNot { it == EventType.NONE }
+    }
 
     fun truncateToMinute(value: LocalDateTime): LocalDateTime {
         return value.withSecond(0).withNano(0)
@@ -109,6 +121,26 @@ object DesktopInputSupport {
         }
     }
 
+    fun timedEventFrequencyVisibility(eventType: EventType): TimedEventFrequencyVisibility {
+        return when (eventType) {
+            EventType.CLASSIC -> TimedEventFrequencyVisibility(
+                showFrequency1 = true,
+                showFrequency2 = false,
+                showFrequency3 = false,
+                showFrequencyB = true,
+            )
+            EventType.FOXORING,
+            EventType.SPRINT,
+            EventType.NONE,
+            -> TimedEventFrequencyVisibility(
+                showFrequency1 = true,
+                showFrequency2 = true,
+                showFrequency3 = true,
+                showFrequencyB = true,
+            )
+        }
+    }
+
     fun parseFrequencyAssignment(value: String): Long {
         return requireNotNull(FrequencySupport.parseFrequencyHz(value)) {
             "Unsupported frequency value `$value`. Use bare values, Hz, kHz, or MHz."
@@ -185,6 +217,18 @@ object DesktopInputSupport {
         return systemNow.format(displayTimestampFormatter)
     }
 
+    fun formatVoltageOrWaiting(value: Double?): String {
+        return value?.let { "$it V" } ?: waitingForReadPlaceholder
+    }
+
+    fun formatTemperatureOrWaiting(value: Double?): String {
+        return value?.let { "$it C" } ?: waitingForReadPlaceholder
+    }
+
+    fun formatThresholdOrWaiting(value: Double?): String {
+        return value?.toString() ?: waitingForReadPlaceholder
+    }
+
     fun formatDurationCompact(duration: Duration): String {
         val totalSeconds = duration.seconds.coerceAtLeast(0)
         val days = totalSeconds / 86_400
@@ -220,16 +264,20 @@ object DesktopInputSupport {
     ): String {
         val normalizedSummary = eventStateSummary?.trim().orEmpty()
         val summaryLower = normalizedSummary.lowercase()
+        val current = currentTimeCompact?.let(::parseCompactTimestamp)
+        val start = startTimeCompact?.let(::parseCompactTimestamp)
+        val finish = finishTimeCompact?.let(::parseCompactTimestamp)
 
         if (isManualEventStateSummary(normalizedSummary)) {
             return "Manually started event in progress"
         }
         if (summaryLower.startsWith("time remaining:")) {
+            if (current != null && finish != null && current < finish) {
+                return "Time remaining: ${formatDurationCompact(Duration.between(current, finish))}"
+            }
             return normalizedSummary
         }
         if (summaryLower == "in progress" || summaryLower.contains("on the air")) {
-            val current = currentTimeCompact?.let(::parseCompactTimestamp)
-            val finish = finishTimeCompact?.let(::parseCompactTimestamp)
             if (current != null && finish != null && current < finish) {
                 return "Time remaining: ${formatDurationCompact(Duration.between(current, finish))}"
             }
@@ -239,16 +287,16 @@ object DesktopInputSupport {
             return "Disabled"
         }
 
-        val current = currentTimeCompact?.let(::parseCompactTimestamp)
-            ?: return startsInFallback?.takeIf { it.isNotBlank() }?.let { "Starts in $it" } ?: "Not Available"
-        val start = startTimeCompact?.let(::parseCompactTimestamp)
-            ?: return "Disabled"
-        val finish = finishTimeCompact?.let(::parseCompactTimestamp)
+        if (current == null) {
+            return startsInFallback?.takeIf { it.isNotBlank() }?.let { "Starts in $it" } ?: "Not Available"
+        }
+        if (start == null) {
+            return "Disabled"
+        }
 
         return when {
             start == finish -> "Disabled"
-            current < start -> startsInFallback?.takeIf { it.isNotBlank() }?.let { "Starts in $it" }
-                ?: "Starts in ${formatDurationCompact(Duration.between(current, start))}"
+            current < start -> "Starts in ${formatDurationCompact(Duration.between(current, start))}"
             finish != null && current < finish -> "Time remaining: ${formatDurationCompact(Duration.between(current, finish))}"
             else -> "Disabled"
         }
