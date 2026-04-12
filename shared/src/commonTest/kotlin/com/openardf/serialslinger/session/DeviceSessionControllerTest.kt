@@ -64,6 +64,8 @@ class DeviceSessionControllerTest {
         assertEquals(ConnectionState.CONNECTED, result.state.connectionState)
         assertEquals("W1FOX", result.state.editableSettings?.stationId?.editedValue)
         assertFalse(result.state.editableSettings?.hasDirtyFields ?: true)
+        assertEquals(result.commandsSent.size + result.linesReceived.size, result.traceEntries.size)
+        assertEquals(SerialTraceDirection.TX, result.traceEntries.first().direction)
     }
 
     @Test
@@ -108,6 +110,8 @@ class DeviceSessionControllerTest {
         assertTrue(result.verifications.all { it.observedInReadback && it.verified })
         assertFalse(result.state.editableSettings?.hasDirtyFields ?: true)
         assertEquals(emptyList(), result.state.pendingSubmitCommands)
+        assertEquals(result.commandsSent.size + result.linesReceived.size, result.submitTraceEntries.size)
+        assertEquals(result.readbackCommandsSent.size + result.readbackLinesReceived.size, result.readbackTraceEntries.size)
     }
 
     @Test

@@ -23,6 +23,7 @@ class DesktopSessionLogTest {
                 DesktopLogEntry(
                     message = "Detected /dev/tty.usbserial-1234",
                     category = DesktopLogCategory.DEVICE,
+                    timestampMs = Instant.parse("2026-04-10T14:22:33Z").toEpochMilli(),
                 ),
             ),
         )
@@ -48,5 +49,34 @@ class DesktopSessionLogTest {
         Files.writeString(file, "[14:00:00] == Existing ==\n[14:00:00] hello\n\n")
 
         assertEquals("[14:00:00] == Existing ==\n[14:00:00] hello\n\n", log.loadCurrentLogText())
+    }
+
+    @Test
+    fun rendersEachEntryWithItsOwnTimestamp() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val log = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+        )
+
+        val rendered = log.renderSection(
+            title = "Clone",
+            entries = listOf(
+                DesktopLogEntry(
+                    message = "TX EVT S",
+                    category = DesktopLogCategory.SERIAL,
+                    timestampMs = Instant.parse("2026-04-10T14:22:31Z").toEpochMilli(),
+                ),
+                DesktopLogEntry(
+                    message = "RX * Event:Sprint",
+                    category = DesktopLogCategory.SERIAL,
+                    timestampMs = Instant.parse("2026-04-10T14:22:32Z").toEpochMilli(),
+                ),
+            ),
+        )
+
+        assertTrue(rendered.contains("[14:22:31] == Clone =="))
+        assertTrue(rendered.contains("[14:22:31] [SERIAL] TX EVT S"))
+        assertTrue(rendered.contains("[14:22:32] [SERIAL] RX * Event:Sprint"))
     }
 }

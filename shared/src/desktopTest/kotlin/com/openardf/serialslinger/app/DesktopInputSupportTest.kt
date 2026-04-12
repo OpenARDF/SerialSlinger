@@ -100,6 +100,15 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun truncatesSubsecondTimesForDisplayAlignment() {
+        val compact = DesktopInputSupport.formatTruncatedCompactTimestamp(
+            LocalDateTime.of(2026, 4, 11, 12, 0, 5, 750_000_000),
+        )
+
+        assertEquals("260411120005", compact)
+    }
+
+    @Test
     fun doesNotEnableSyncForSubsecondDifferenceUnderThreshold() {
         val shouldSync = DesktopInputSupport.shouldEnableTimeSync(
             currentTimeCompact = "260411120005",

@@ -15,6 +15,21 @@ data class DeviceLoadResult(
     val state: DeviceSessionState,
     val commandsSent: List<String>,
     val linesReceived: List<String>,
+    val traceEntries: List<SerialTraceEntry>,
+)
+
+enum class SerialTraceDirection {
+    TX,
+    RX;
+
+    val label: String
+        get() = name
+}
+
+data class SerialTraceEntry(
+    val timestampMs: Long,
+    val direction: SerialTraceDirection,
+    val payload: String,
 )
 
 data class SettingVerification(
@@ -32,6 +47,8 @@ data class DeviceSubmitResult(
     val readbackCommandsSent: List<String>,
     val readbackLinesReceived: List<String>,
     val verifications: List<SettingVerification>,
+    val submitTraceEntries: List<SerialTraceEntry>,
+    val readbackTraceEntries: List<SerialTraceEntry>,
 )
 
 object DeviceSessionController {
@@ -51,13 +68,20 @@ object DeviceSessionController {
     ): DeviceLoadResult {
         val commands = mutableListOf<String>()
         val lines = mutableListOf<String>()
+        val traceEntries = mutableListOf<SerialTraceEntry>()
         var updatedState = state.copy(connectionState = ConnectionState.CONNECTED)
 
         for (command in SignalSlingerFirmwareSupport.bootstrapLoadCommands()) {
+            val sentAtMs = System.currentTimeMillis()
             transport.sendCommands(listOf(command))
+            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
             commands += command
             lines += responseLines
+            traceEntries += responseLines.map { line ->
+                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+            }
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
         }
 
@@ -68,10 +92,16 @@ object DeviceSessionController {
             snapshot = updatedState.snapshot?.copy(capabilities = firmwareProfile.capabilities),
         )
         for (command in firmwareProfile.loadCommandsAfterVersion) {
+            val sentAtMs = System.currentTimeMillis()
             transport.sendCommands(listOf(command))
+            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
             commands += command
             lines += responseLines
+            traceEntries += responseLines.map { line ->
+                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+            }
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
         }
 
@@ -83,6 +113,7 @@ object DeviceSessionController {
             state = updatedState,
             commandsSent = commands,
             linesReceived = lines,
+            traceEntries = traceEntries,
         )
     }
 
@@ -93,9 +124,17 @@ object DeviceSessionController {
     ): DeviceSubmitResult {
         val submission = DeviceSessionWorkflow.submitChanges(state, editedSettings)
         val submitLines = mutableListOf<String>()
+        val submitTraceEntries = mutableListOf<SerialTraceEntry>()
         for (command in submission.commands) {
+            val sentAtMs = System.currentTimeMillis()
             transport.sendCommands(listOf(command))
-            submitLines += transport.readAvailableLines()
+            submitTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+            val responseLines = transport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
+            submitLines += responseLines
+            submitTraceEntries += responseLines.map { line ->
+                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+            }
         }
         val validatedSettings = editedSettings.toValidatedDeviceSettings()
         val baseSnapshot = requireNotNull(submission.state.snapshot) {
@@ -120,12 +159,19 @@ object DeviceSessionController {
         )
         val readbackCommands = buildVerificationReadbackCommands(submission.writePlan, firmwareProfile)
         val readbackLines = mutableListOf<String>()
+        val readbackTraceEntries = mutableListOf<SerialTraceEntry>()
         val observedReadbackKeys = linkedSetOf<SettingKey>()
 
         for (command in readbackCommands) {
+            val sentAtMs = System.currentTimeMillis()
             transport.sendCommands(listOf(command))
+            readbackTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
             readbackLines += responseLines
+            readbackTraceEntries += responseLines.map { line ->
+                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+            }
             observedReadbackKeys += extractObservedSettingKeys(responseLines)
             nextState = DeviceSessionWorkflow.ingestReportLines(nextState, responseLines)
         }
@@ -152,6 +198,8 @@ object DeviceSessionController {
             readbackCommandsSent = readbackCommands,
             readbackLinesReceived = readbackLines,
             verifications = verifications,
+            submitTraceEntries = submitTraceEntries,
+            readbackTraceEntries = readbackTraceEntries,
         )
     }
 

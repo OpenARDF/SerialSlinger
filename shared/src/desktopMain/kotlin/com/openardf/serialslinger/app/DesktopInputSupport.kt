@@ -326,6 +326,10 @@ object DesktopInputSupport {
         return formatCompactTimestamp(systemNow)
     }
 
+    fun formatTruncatedCompactTimestamp(timestamp: LocalDateTime): String {
+        return formatCompactTimestamp(timestamp.withNano(0))
+    }
+
     fun formatRoundedCompactTimestamp(timestamp: LocalDateTime): String {
         val rounded = if (timestamp.nano >= 500_000_000) {
             timestamp.plusSeconds(1)

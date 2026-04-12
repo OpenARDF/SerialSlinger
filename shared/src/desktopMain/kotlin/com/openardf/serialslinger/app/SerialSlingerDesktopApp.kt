@@ -8,7 +8,9 @@ import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
+import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
+import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.session.DeviceLoadResult
@@ -16,6 +18,8 @@ import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
 import com.openardf.serialslinger.session.DeviceSubmitResult
+import com.openardf.serialslinger.session.SerialTraceDirection
+import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.session.SettingVerification
 import com.openardf.serialslinger.transport.DesktopSerialPortInfo
 import com.openardf.serialslinger.transport.DesktopSerialTransport
@@ -29,6 +33,8 @@ import java.awt.GridBagLayout
 import java.awt.Insets
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.time.Duration
 import java.time.ZoneId
 import java.util.Calendar
@@ -66,7 +72,7 @@ fun main() {
 }
 
 private object SerialSlingerAppVersion {
-    const val value = "0.1.36"
+    const val value = "0.1.50"
 }
 
 private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerAppVersion.value}") {
@@ -74,6 +80,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val portComboBox = JComboBox(portModel)
     private val autoDetectButton = JButton("Auto Detect")
     private val submitButton = JButton("Clone")
+    private val cloneTemplateLabel = JLabel("Clone template not set")
     private val toggleLogButton = JButton("Show Log")
     private val openLogFolderButton = JButton("Open Log Folder")
     private val headlineLabel = JLabel(" ")
@@ -141,6 +148,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var lastDeviceTimeCheckAtMs: Long = 0L
     private var consecutiveDeviceTimeCheckNoResponseCount: Int = 0
     private var cloneTemplateSettings: DeviceSettings? = null
+    private var clockDisplayTimer: Timer? = null
+    private var clockPhaseWarningActive: Boolean = false
+    private var autoDetectButtonLongPressTimer: Timer? = null
+    private var suppressNextAutoDetectAction: Boolean = false
+    private var cloneButtonLongPressTimer: Timer? = null
+    private var suppressNextCloneAction: Boolean = false
     private val knownProbeResults = linkedMapOf<String, SignalSlingerPortProbe>()
     private val portMemory: DesktopPortMemory = PreferencesDesktopPortMemory
     private val sessionLog = DesktopSessionLog()
@@ -174,6 +187,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         logPane.background = Color(0xFC, 0xFC, 0xFC)
         headlineLabel.isOpaque = true
         headlineLabel.border = BorderFactory.createEmptyBorder(6, 12, 6, 12)
+        cloneTemplateLabel.foreground = Color(0x55, 0x65, 0x73)
         currentTimeField.isEditable = false
         systemTimeField.isEditable = false
         currentFrequencyField.isEditable = false
@@ -196,8 +210,24 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         appendRenderedLog(sessionLog.loadCurrentLogText())
         setLogVisible(false)
 
-        autoDetectButton.addActionListener { autoDetectPorts() }
-        submitButton.addActionListener { cloneTimedEventSettings() }
+        autoDetectButton.toolTipText = "Click to scan ports. Press and hold to reload the current/selected port as the active device."
+        installAutoDetectButtonLongPressHandler()
+        autoDetectButton.addActionListener {
+            if (suppressNextAutoDetectAction) {
+                suppressNextAutoDetectAction = false
+                return@addActionListener
+            }
+            autoDetectPorts()
+        }
+        submitButton.toolTipText = "Click to clone. Press and hold to reload the clone template from the attached device."
+        installCloneButtonLongPressHandler()
+        submitButton.addActionListener {
+            if (suppressNextCloneAction) {
+                suppressNextCloneAction = false
+                return@addActionListener
+            }
+            cloneTimedEventSettings()
+        }
         syncTimeButton.addActionListener { syncDeviceTimeToSystem() }
         disableEventButton.addActionListener { disableProgrammedEvent() }
         toggleLogButton.addActionListener { setLogVisible(!logVisible) }
@@ -234,10 +264,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         installImmediateApplyHandlers()
 
         Timer(3_000) { smartPollPorts() }.start()
-        Timer(1_000) {
-            updateDisplayedClockFields()
-            maybeRefreshDeviceTimeFromDevice()
-        }.start()
+        updateDisplayedClockFields()
+        scheduleClockDisplayTick()
         refreshAvailablePorts(silent = true)
         appendLog(
             "Session Started",
@@ -267,6 +295,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             add(autoDetectButton)
             add(Box.createHorizontalStrut(8))
             add(submitButton)
+            add(Box.createHorizontalStrut(12))
+            add(cloneTemplateLabel)
             add(Box.createHorizontalStrut(16))
             add(toggleLogButton)
             add(Box.createHorizontalStrut(8))
@@ -790,6 +820,78 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun installAutoDetectButtonLongPressHandler() {
+        autoDetectButton.addMouseListener(
+            object : MouseAdapter() {
+                override fun mousePressed(event: MouseEvent) {
+                    if (event.button != MouseEvent.BUTTON1 || !autoDetectButton.isEnabled) {
+                        return
+                    }
+                    autoDetectButtonLongPressTimer?.stop()
+                    autoDetectButtonLongPressTimer = Timer(AUTO_DETECT_BUTTON_LONG_PRESS_MS) {
+                        autoDetectButtonLongPressTimer = null
+                        if (
+                            autoDetectButton.model.isPressed &&
+                            autoDetectButton.model.isArmed &&
+                            !backgroundWorkInProgress
+                        ) {
+                            suppressNextAutoDetectAction = true
+                            reloadCurrentPortAsDetected()
+                        }
+                    }.apply {
+                        isRepeats = false
+                        start()
+                    }
+                }
+
+                override fun mouseReleased(event: MouseEvent) {
+                    autoDetectButtonLongPressTimer?.stop()
+                    autoDetectButtonLongPressTimer = null
+                }
+
+                override fun mouseExited(event: MouseEvent) {
+                    autoDetectButtonLongPressTimer?.stop()
+                    autoDetectButtonLongPressTimer = null
+                }
+            },
+        )
+    }
+
+    private fun reloadCurrentPortAsDetected() {
+        val selectedPath = selectedProbe()?.portInfo?.systemPortPath ?: currentConnectedPortPath
+        if (selectedPath == null) {
+            JOptionPane.showMessageDialog(this, "Select or connect a serial port first.")
+            return
+        }
+
+        showConnectionIndicator(
+            ConnectionIndicatorState.SEARCHING,
+            "Reloading $selectedPath as the active SignalSlinger...",
+        )
+        runInBackground("Reloading $selectedPath...") {
+            val reloadedConnection = loadPort(selectedPath)
+            val loadResult = reloadedConnection.copy(
+                loadLogTitle = "Auto Detect Reload",
+                loadLogLeadEntries = listOf(
+                    DesktopLogEntry(
+                        "Reloading $selectedPath as the active device without scanning other ports.",
+                        DesktopLogCategory.APP,
+                    ),
+                    DesktopLogEntry(
+                        "Loaded ${reloadedConnection.result.commandsSent.size} command(s) and received ${reloadedConnection.result.linesReceived.size} line(s).",
+                        DesktopLogCategory.APP,
+                    ),
+                ),
+            )
+            SwingUtilities.invokeLater {
+                autoDetectNoDeviceFound = false
+                selectPort(selectedPath)
+                applyLoadedConnection(loadResult)
+                setStatus("Reloaded settings from $selectedPath.")
+            }
+        }
+    }
+
     private fun connectAndLoadSelectedPort() {
         val probe = selectedProbe()
         if (probe == null) {
@@ -809,19 +911,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun cloneTimedEventSettings() {
         val transport = currentTransport
         val state = currentState
-        val snapshot = loadedSnapshot
         val templateSettings = cloneTemplateSettings
-        if (transport == null || state == null || snapshot == null || templateSettings == null) {
+        if (transport == null || state == null || loadedSnapshot == null || templateSettings == null) {
             JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
             return
         }
-
-        val editable = buildCloneEditableSettings(snapshot.settings, templateSettings)
-        val validated = editable.toValidatedDeviceSettings()
-        val writePlan = WritePlanner.create(snapshot.settings, validated)
+        updateCloneTemplateLabel(
+            "Clone template locked. Display shows attached device state.",
+            Color(0x9A, 0x67, 0x11),
+        )
 
         runInBackground("Cloning Timed Event Settings...") {
-            val result = DeviceSessionController.submitEdits(state, editable, transport)
+            val targetRefresh = DeviceSessionController.refreshFromDevice(state, transport, startEditing = true)
+            val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
+            val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
+            val validated = editable.toValidatedDeviceSettings()
+            val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
+            val result = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
             val verificationFailures = result.verifications.filter { !it.verified }
             val refreshed = DeviceSessionController.refreshFromDevice(result.state, transport, startEditing = true)
             var finalState = refreshed.state
@@ -850,7 +956,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 } else {
                     applySnapshotToForm(finalState.snapshot)
                 }
-                appendWriteLog("Clone", result, refreshed)
+                appendWriteLog(
+                    title = "Clone",
+                    writePlan = writePlan,
+                    result = result,
+                    preRefreshResult = targetRefresh,
+                    refreshResult = refreshed,
+                    comparedFieldKeys = cloneComparedFieldKeys(),
+                )
                 syncOperation?.let {
                     appendSyncLog(
                         title = "Clone Time Sync",
@@ -859,6 +972,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     )
                 }
                 if (cloneSucceeded) {
+                    updateCloneTemplateLabel(
+                        "Clone template locked. Display shows attached device state.",
+                        Color(0x9A, 0x67, 0x11),
+                    )
                     showConnectionIndicator(
                         ConnectionIndicatorState.CONNECTED,
                         if (writePlan.changes.isEmpty()) {
@@ -869,12 +986,89 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     )
                     setStatus("Clone succeeded.")
                 } else {
+                    updateCloneTemplateLabel(
+                        "Clone template locked. Display shows attached device state.",
+                        Color(0x9A, 0x67, 0x11),
+                    )
                     showConnectionIndicator(
                         ConnectionIndicatorState.DISCONNECTED,
                         "Clone failed on ${currentConnectedPortPath.orEmpty()}. Check verification or sync results in the log.",
                     )
                     setStatus("Clone failed.")
+                    JOptionPane.showMessageDialog(
+                        this,
+                        "Clone failed. Review the log, then you can retry Clone.",
+                        "Clone Failed",
+                        JOptionPane.WARNING_MESSAGE,
+                    )
                 }
+            }
+        }
+    }
+
+    private fun installCloneButtonLongPressHandler() {
+        submitButton.addMouseListener(
+            object : MouseAdapter() {
+                override fun mousePressed(event: MouseEvent) {
+                    if (event.button != MouseEvent.BUTTON1 || !submitButton.isEnabled) {
+                        return
+                    }
+                    cloneButtonLongPressTimer?.stop()
+                    cloneButtonLongPressTimer = Timer(CLONE_BUTTON_LONG_PRESS_MS) {
+                        cloneButtonLongPressTimer = null
+                        if (
+                            submitButton.model.isPressed &&
+                            submitButton.model.isArmed &&
+                            !backgroundWorkInProgress
+                        ) {
+                            suppressNextCloneAction = true
+                            reloadCloneTemplateFromAttachedDevice()
+                        }
+                    }.apply {
+                        isRepeats = false
+                        start()
+                    }
+                }
+
+                override fun mouseReleased(event: MouseEvent) {
+                    cloneButtonLongPressTimer?.stop()
+                    cloneButtonLongPressTimer = null
+                }
+
+                override fun mouseExited(event: MouseEvent) {
+                    cloneButtonLongPressTimer?.stop()
+                    cloneButtonLongPressTimer = null
+                }
+            },
+        )
+    }
+
+    private fun reloadCloneTemplateFromAttachedDevice() {
+        val portPath = currentConnectedPortPath
+        if (portPath == null || currentState?.connectionState != ConnectionState.CONNECTED) {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+
+        runInBackground("Reloading clone template from attached device...") {
+            val refreshedConnection = loadPort(portPath).copy(
+                loadLogTitle = "Clone Template Reload",
+                loadLogLeadEntries = listOf(
+                    DesktopLogEntry(
+                        "Reloading clone template from the attached device before updating the template.",
+                        DesktopLogCategory.APP,
+                    ),
+                ),
+            )
+
+            SwingUtilities.invokeLater {
+                applyLoadedConnection(refreshedConnection)
+                refreshedConnection.result.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+                updateCloneTemplateLabel(
+                    "Clone template reloaded from attached device.",
+                    Color(0x0B, 0x3D, 0x91),
+                )
+                setStatus("Clone template reloaded from attached device.")
             }
         }
     }
@@ -894,6 +1088,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             mediumFrequencyHz = SettingsField("mediumFrequencyHz", "Frequency 2 (FRE 2)", targetBaseSettings.mediumFrequencyHz, templateSettings.mediumFrequencyHz),
             highFrequencyHz = SettingsField("highFrequencyHz", "Frequency 3 (FRE 3)", targetBaseSettings.highFrequencyHz, templateSettings.highFrequencyHz),
             beaconFrequencyHz = SettingsField("beaconFrequencyHz", "Frequency B (FRE B)", targetBaseSettings.beaconFrequencyHz, templateSettings.beaconFrequencyHz),
+        )
+    }
+
+    private fun cloneComparedFieldKeys(): List<SettingKey> {
+        return listOf(
+            SettingKey.STATION_ID,
+            SettingKey.EVENT_TYPE,
+            SettingKey.ID_CODE_SPEED_WPM,
+            SettingKey.START_TIME,
+            SettingKey.FINISH_TIME,
+            SettingKey.DAYS_TO_RUN,
+            SettingKey.LOW_FREQUENCY_HZ,
+            SettingKey.MEDIUM_FREQUENCY_HZ,
+            SettingKey.HIGH_FREQUENCY_HZ,
+            SettingKey.BEACON_FREQUENCY_HZ,
         )
     }
 
@@ -956,17 +1165,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
 
             SwingUtilities.invokeLater {
-                refreshClockSample?.second?.let { sample ->
-                    updateDeviceClockOffset(
-                        currentTimeCompact = sample.reportedTimeCompact,
-                        referenceTime = sample.midpointAt,
-                    )
-                }
+                refreshClockSample?.second?.let(::applyClockDisplayAnchor)
                 applySnapshotToForm(
                     finalState.snapshot,
                     recalculateClockOffset = refreshClockSample == null,
                 )
-                appendWriteLog("Apply $description", result, refreshedWithClock)
+                if (updatesTimedEventTemplate && changeSucceeded) {
+                    updateCloneTemplateLabel(
+                        "Clone template updated from current device.",
+                        Color(0x0B, 0x3D, 0x91),
+                    )
+                }
+                appendWriteLog("Apply $description", writePlan, result, refreshResult = refreshedWithClock)
                 if (changeSucceeded) {
                     showConnectionIndicator(
                         ConnectionIndicatorState.CONNECTED,
@@ -1269,6 +1479,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun updateCloneTemplateLabel(
+        message: String,
+        foreground: Color = Color(0x55, 0x65, 0x73),
+    ) {
+        cloneTemplateLabel.text = message
+        cloneTemplateLabel.foreground = foreground
+    }
+
     private fun currentConnectedTimedSettings(): DeviceSettings {
         return (loadedSnapshot ?: error("No device snapshot is loaded.")).settings
     }
@@ -1301,55 +1519,221 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     ) {
         val entries = buildList {
             addAll(leadEntries)
-            result.commandsSent.forEach { command ->
-                add(DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL))
-            }
-            result.linesReceived.forEach { line ->
-                add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL))
-            }
-            add(DesktopLogEntry("Device settings loaded.", DesktopLogCategory.DEVICE))
+            addAll(traceEntriesToLogEntries(result.traceEntries))
+            add(
+                DesktopLogEntry(
+                    message = "Device settings loaded.",
+                    category = DesktopLogCategory.DEVICE,
+                    timestampMs = latestTraceTimestamp(result.traceEntries),
+                ),
+            )
         }
         appendLog(title, entries)
     }
 
     private fun appendWriteLog(
         title: String,
+        writePlan: WritePlan,
         result: DeviceSubmitResult,
+        preRefreshResult: DeviceLoadResult? = null,
         refreshResult: DeviceLoadResult? = null,
+        comparedFieldKeys: List<SettingKey>? = null,
     ) {
         val entries = mutableListOf<DesktopLogEntry>()
-        result.commandsSent.forEach { command ->
-            entries += DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL)
+        val changedFieldKeys = writePlan.changes.map { it.fieldKey }
+        if (preRefreshResult != null) {
+            entries += DesktopLogEntry(
+                message = "Refreshing attached device snapshot before comparing clone settings.",
+                category = DesktopLogCategory.APP,
+                timestampMs = preRefreshResult.traceEntries.firstOrNull()?.timestampMs ?: System.currentTimeMillis(),
+            )
+            entries += traceEntriesToLogEntries(preRefreshResult.traceEntries, suffix = "(target)")
         }
-        result.linesReceived.forEach { line ->
-            entries += DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL)
-        }
-        if (result.readbackCommandsSent.isNotEmpty()) {
-            result.readbackCommandsSent.forEach { command ->
-                entries += DesktopLogEntry("TX(readback) $command", DesktopLogCategory.SERIAL)
-            }
-            result.readbackLinesReceived.forEach { line ->
-                entries += DesktopLogEntry("RX(readback) $line", DesktopLogCategory.SERIAL)
-            }
-        }
+        entries += traceEntriesToLogEntries(result.submitTraceEntries)
+        entries += traceEntriesToLogEntries(result.readbackTraceEntries, suffix = "(readback)")
         if (result.verifications.isNotEmpty()) {
+            val verificationTimestampMs = latestTimestamp(
+                result.readbackTraceEntries,
+                result.submitTraceEntries,
+            )
             entries += result.verifications.map { verification ->
                 DesktopLogEntry(
                     message = "${verification.fieldKey}: ${if (verification.verified) "OK" else "MISMATCH"}",
                     category = DesktopLogCategory.DEVICE,
+                    timestampMs = verificationTimestampMs,
                 )
             }
         }
         if (refreshResult != null) {
-            entries += DesktopLogEntry("Refreshing device snapshot after write.", DesktopLogCategory.APP)
-            refreshResult.commandsSent.forEach { command ->
-                entries += DesktopLogEntry("TX(refresh) $command", DesktopLogCategory.SERIAL)
-            }
-            refreshResult.linesReceived.forEach { line ->
-                entries += DesktopLogEntry("RX(refresh) $line", DesktopLogCategory.SERIAL)
+            entries += DesktopLogEntry(
+                message = "Refreshing device snapshot after write.",
+                category = DesktopLogCategory.APP,
+                timestampMs = refreshResult.traceEntries.firstOrNull()?.timestampMs ?: System.currentTimeMillis(),
+            )
+            entries += traceEntriesToLogEntries(refreshResult.traceEntries, suffix = "(refresh)")
+        }
+        entries += buildWriteSummaryEntries(
+            writePlan = writePlan,
+            comparedFieldKeys = comparedFieldKeys,
+            changedFieldKeys = changedFieldKeys,
+            timestampMs = latestTimestamp(
+                refreshResult?.traceEntries,
+                preRefreshResult?.traceEntries,
+                result.readbackTraceEntries,
+                result.submitTraceEntries,
+            ),
+        )
+        appendLog(title, entries)
+    }
+
+    private fun describeSettingKey(fieldKey: SettingKey): String {
+        return when (fieldKey) {
+            SettingKey.STATION_ID -> "Station ID"
+            SettingKey.EVENT_TYPE -> "Event Type"
+            SettingKey.FOX_ROLE -> "Fox Role"
+            SettingKey.PATTERN_TEXT -> "Pattern Text"
+            SettingKey.ID_CODE_SPEED_WPM -> "ID Speed"
+            SettingKey.PATTERN_CODE_SPEED_WPM -> "Pattern Speed"
+            SettingKey.CURRENT_TIME -> "Current Time"
+            SettingKey.START_TIME -> "Start Time"
+            SettingKey.FINISH_TIME -> "Finish Time"
+            SettingKey.DAYS_TO_RUN -> "Days To Run"
+            SettingKey.DEFAULT_FREQUENCY_HZ -> "Current Frequency"
+            SettingKey.LOW_FREQUENCY_HZ -> "Frequency 1"
+            SettingKey.MEDIUM_FREQUENCY_HZ -> "Frequency 2"
+            SettingKey.HIGH_FREQUENCY_HZ -> "Frequency 3"
+            SettingKey.BEACON_FREQUENCY_HZ -> "Frequency B"
+            SettingKey.LOW_BATTERY_THRESHOLD_VOLTS -> "Low Battery Threshold"
+            SettingKey.EXTERNAL_BATTERY_CONTROL_MODE -> "Battery Mode"
+            SettingKey.TRANSMISSIONS_ENABLED -> "Transmissions"
+        }
+    }
+
+    private fun formatSettingValue(fieldKey: SettingKey, value: Any?): String {
+        return when (fieldKey) {
+            SettingKey.EVENT_TYPE -> (value as? EventType)?.toString().orEmpty()
+            SettingKey.FOX_ROLE -> (value as? FoxRole)?.toString() ?: "Not Set"
+            SettingKey.ID_CODE_SPEED_WPM,
+            SettingKey.PATTERN_CODE_SPEED_WPM,
+            -> value?.let { "$it WPM" } ?: "Not Set"
+            SettingKey.CURRENT_TIME,
+            SettingKey.START_TIME,
+            SettingKey.FINISH_TIME,
+            -> DesktopInputSupport.formatCompactTimestampOrNotSet(value as? String)
+            SettingKey.DEFAULT_FREQUENCY_HZ,
+            SettingKey.LOW_FREQUENCY_HZ,
+            SettingKey.MEDIUM_FREQUENCY_HZ,
+            SettingKey.HIGH_FREQUENCY_HZ,
+            SettingKey.BEACON_FREQUENCY_HZ,
+            -> FrequencySupport.formatFrequencyMhz(value as? Long)
+            SettingKey.LOW_BATTERY_THRESHOLD_VOLTS -> value?.toString() ?: "Not Set"
+            SettingKey.EXTERNAL_BATTERY_CONTROL_MODE -> (value as? ExternalBatteryControlMode)?.toString() ?: "Not Set"
+            SettingKey.TRANSMISSIONS_ENABLED -> if (value == true) "Enabled" else "Disabled"
+            else -> value?.toString() ?: "Not Set"
+        }
+    }
+
+    private fun traceEntriesToLogEntries(
+        traceEntries: List<SerialTraceEntry>,
+        suffix: String = "",
+    ): List<DesktopLogEntry> {
+        return traceEntries.map { trace ->
+            DesktopLogEntry(
+                message = "${trace.direction.label}$suffix ${trace.payload}",
+                category = DesktopLogCategory.SERIAL,
+                timestampMs = trace.timestampMs,
+            )
+        }
+    }
+
+    private fun buildWriteSummaryEntries(
+        writePlan: WritePlan,
+        comparedFieldKeys: List<SettingKey>?,
+        changedFieldKeys: List<SettingKey>,
+        timestampMs: Long,
+    ): List<DesktopLogEntry> {
+        if (comparedFieldKeys != null) {
+            val alreadyMatchedKeys = comparedFieldKeys.filterNot { it in changedFieldKeys }
+            return buildList {
+                add(
+                    DesktopLogEntry(
+                        "Fields compared: ${comparedFieldKeys.joinToString(", ") { describeSettingKey(it) }}",
+                        DesktopLogCategory.APP,
+                        timestampMs,
+                    ),
+                )
+                if (changedFieldKeys.isEmpty()) {
+                    add(
+                        DesktopLogEntry(
+                            "Fields written: none",
+                            DesktopLogCategory.APP,
+                            timestampMs,
+                        ),
+                    )
+                } else {
+                    add(
+                        DesktopLogEntry(
+                            "Fields written:",
+                            DesktopLogCategory.APP,
+                            timestampMs,
+                        ),
+                    )
+                    addAll(
+                        writePlan.changes.map { change ->
+                            DesktopLogEntry(
+                                "${describeSettingKey(change.fieldKey)} = ${formatSettingValue(change.fieldKey, change.newValue)}",
+                                DesktopLogCategory.APP,
+                                timestampMs,
+                            )
+                        },
+                    )
+                }
+                if (alreadyMatchedKeys.isNotEmpty()) {
+                    add(
+                        DesktopLogEntry(
+                            "Fields already matched: ${alreadyMatchedKeys.joinToString(", ") { describeSettingKey(it) }}",
+                            DesktopLogCategory.APP,
+                            timestampMs,
+                        ),
+                    )
+                }
             }
         }
-        appendLog(title, entries)
+
+        if (writePlan.changes.isEmpty()) {
+            return listOf(
+                DesktopLogEntry(
+                    "No differing settings needed to be written.",
+                    DesktopLogCategory.APP,
+                    timestampMs,
+                ),
+            )
+        }
+
+        return buildList {
+            add(DesktopLogEntry("Planned writes:", DesktopLogCategory.APP, timestampMs))
+            addAll(
+                writePlan.changes.map { change ->
+                    DesktopLogEntry(
+                        "${describeSettingKey(change.fieldKey)} = ${formatSettingValue(change.fieldKey, change.newValue)}",
+                        DesktopLogCategory.APP,
+                        timestampMs,
+                    )
+                },
+            )
+        }
+    }
+
+    private fun latestTimestamp(vararg traceGroups: List<SerialTraceEntry>?): Long {
+        return traceGroups.asSequence()
+            .filterNotNull()
+            .flatMap { it.asSequence() }
+            .maxOfOrNull { it.timestampMs }
+            ?: System.currentTimeMillis()
+    }
+
+    private fun latestTraceTimestamp(traceEntries: List<SerialTraceEntry>): Long {
+        return traceEntries.maxOfOrNull { it.timestampMs } ?: System.currentTimeMillis()
     }
 
     private fun appendSyncLog(
@@ -1363,31 +1747,25 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             entries += DesktopLogEntry(
                 "Clock probe RTT median: ${DesktopInputSupport.formatSignedDurationMillis(medianRtt)}",
                 DesktopLogCategory.APP,
+                latencySamples.first().receivedAtMs,
             )
         }
         attempts.forEachIndexed { index, attempt ->
+            val attemptTimestampMs = latestTimestamp(
+                attempt.submitResult.readbackTraceEntries,
+                attempt.submitResult.submitTraceEntries,
+            )
             entries += DesktopLogEntry(
                 "Attempt ${index + 1}: target ${DesktopInputSupport.formatSystemTimestamp(attempt.targetTime)}, estimated one-way delay ${attempt.estimatedOneWayDelayMillis} ms",
                 DesktopLogCategory.APP,
+                attemptTimestampMs,
             )
-            attempt.submitResult.commandsSent.forEach { command ->
-                entries += DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL)
-            }
-            attempt.submitResult.linesReceived.forEach { line ->
-                entries += DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL)
-            }
-            if (attempt.submitResult.readbackCommandsSent.isNotEmpty()) {
-                attempt.submitResult.readbackCommandsSent.forEach { command ->
-                    entries += DesktopLogEntry("TX(readback) $command", DesktopLogCategory.SERIAL)
-                }
-                attempt.submitResult.readbackLinesReceived.forEach { line ->
-                    entries += DesktopLogEntry("RX(readback) $line", DesktopLogCategory.SERIAL)
-                }
-            }
+            entries += traceEntriesToLogEntries(attempt.submitResult.submitTraceEntries)
+            entries += traceEntriesToLogEntries(attempt.submitResult.readbackTraceEntries, suffix = "(readback)")
             attempt.verificationSamples.forEach { sample ->
-                entries += DesktopLogEntry("TX(verify) CLK T", DesktopLogCategory.SERIAL)
+                entries += DesktopLogEntry("TX(verify) CLK T", DesktopLogCategory.SERIAL, sample.sentAtMs)
                 sample.responseLines.forEach { line ->
-                    entries += DesktopLogEntry("RX(verify) $line", DesktopLogCategory.SERIAL)
+                    entries += DesktopLogEntry("RX(verify) $line", DesktopLogCategory.SERIAL, sample.receivedAtMs)
                 }
             }
             entries += DesktopLogEntry(
@@ -1395,6 +1773,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "Measured phase error: ${DesktopInputSupport.formatSignedDurationMillis(it)}"
                 } ?: "Measured phase error: unavailable",
                 DesktopLogCategory.APP,
+                attempt.verificationSamples.lastOrNull()?.receivedAtMs ?: attemptTimestampMs,
             )
         }
         appendLog(title, entries)
@@ -1631,7 +2010,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 previousState = null,
                 loadLogTitle = "Load",
                 loadLogLeadEntries = emptyList(),
-                clockSample = finalClockSample?.second,
+                clockAnchor = finalClockSample?.second,
             )
         }
 
@@ -1650,7 +2029,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             previousState = previousState,
             loadLogTitle = "Load",
             loadLogLeadEntries = emptyList(),
-            clockSample = finalClockSample?.second,
+            clockAnchor = finalClockSample?.second,
         )
     }
 
@@ -1663,33 +2042,55 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             state = additional.state,
             commandsSent = base.commandsSent + additional.commandsSent,
             linesReceived = base.linesReceived + additional.linesReceived,
+            traceEntries = base.traceEntries + additional.traceEntries,
         )
     }
 
     private fun postLoadClockSample(
         transport: DesktopSerialTransport,
         snapshot: DeviceSnapshot?,
-    ): Pair<DeviceLoadResult, ClockReadSample>? {
+    ): Pair<DeviceLoadResult, ClockDisplayAnchor>? {
         val loadedSnapshot = snapshot ?: return null
         if (!loadedSnapshot.capabilities.supportsScheduling) {
             return null
         }
 
         Thread.sleep(80L)
-        val sample = readClockSample(transport)
-        val updatedState = DeviceSessionWorkflow.ingestReportLines(
-            DeviceSessionState(
-                connectionState = ConnectionState.CONNECTED,
-                snapshot = loadedSnapshot,
-                editableSettings = EditableDeviceSettings.fromDeviceSettings(loadedSnapshot.settings),
-            ),
-            sample.responseLines,
+        val samples = observeClockPhaseSamples(transport, maxSamples = 4)
+        var updatedState = DeviceSessionState(
+            connectionState = ConnectionState.CONNECTED,
+            snapshot = loadedSnapshot,
+            editableSettings = EditableDeviceSettings.fromDeviceSettings(loadedSnapshot.settings),
         )
+        samples.forEach { sample ->
+            updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, sample.responseLines)
+        }
+        val phaseErrorMillis = DesktopInputSupport.estimateClockPhaseErrorMillis(
+            samples.map { sample ->
+                DesktopInputSupport.ClockPhaseSample(
+                    midpointAt = sample.midpointAt,
+                    reportedTimeCompact = sample.reportedTimeCompact,
+                )
+            },
+        )
+        val latestSample = samples.lastOrNull()
         return DeviceLoadResult(
             state = updatedState,
-            commandsSent = listOf("CLK T"),
-            linesReceived = sample.responseLines,
-        ) to sample
+            commandsSent = List(samples.size) { "CLK T" },
+            linesReceived = samples.flatMap { it.responseLines },
+            traceEntries = buildList {
+                samples.forEach { sample ->
+                    add(SerialTraceEntry(sample.sentAtMs, SerialTraceDirection.TX, "CLK T"))
+                    addAll(sample.responseLines.map { line ->
+                        SerialTraceEntry(sample.receivedAtMs, SerialTraceDirection.RX, line)
+                    })
+                }
+            },
+        ) to ClockDisplayAnchor(
+            currentTimeCompact = latestSample?.reportedTimeCompact,
+            referenceTime = latestSample?.midpointAt,
+            phaseErrorMillis = phaseErrorMillis,
+        )
     }
 
     private fun applyLoadedConnection(connection: LoadedConnection) {
@@ -1707,6 +2108,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         connection.result.state.snapshot?.settings?.let { loadedSettings ->
             if (cloneTemplateSettings == null) {
                 rememberCloneTemplateFrom(loadedSettings)
+                updateCloneTemplateLabel(
+                    "Clone template captured from current device.",
+                    Color(0x0B, 0x3D, 0x91),
+                )
+            } else {
+                updateCloneTemplateLabel(
+                    "Clone template locked. Display shows attached device state.",
+                    Color(0x9A, 0x67, 0x11),
+                )
             }
         }
         autoDetectNoDeviceFound = false
@@ -1723,15 +2133,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 summary = "SignalSlinger detected",
                 lastProbedAtMs = System.currentTimeMillis(),
             )
-            connection.clockSample?.let { sample ->
-                updateDeviceClockOffset(
-                    currentTimeCompact = sample.reportedTimeCompact,
-                    referenceTime = sample.midpointAt,
-                )
+            connection.clockAnchor?.let { anchor ->
+                applyClockDisplayAnchor(anchor)
+                updateClockPhaseWarning(anchor.phaseErrorMillis)
             }
             applySnapshotToForm(
                 connection.result.state.snapshot,
-                recalculateClockOffset = connection.clockSample == null,
+                recalculateClockOffset = connection.clockAnchor == null,
             )
             appendLoadLog(
                 title = connection.loadLogTitle,
@@ -1841,6 +2249,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     attempts = syncResult.attempts,
                     latencySamples = syncResult.latencySamples,
                 )
+                updateClockPhaseWarning(finalAttempt.phaseErrorMillis)
                 setStatus(
                     finalAttempt.phaseErrorMillis?.let { phase ->
                         "Device time synchronized. Measured phase error ${DesktopInputSupport.formatSignedDurationMillis(phase)}."
@@ -1946,10 +2355,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val snapshot = loadedSnapshot
         val settings = snapshot?.settings
         val timedSettings = settings
-        val systemNow = java.time.LocalDateTime.now()
-        val displayedDeviceTimeCompact = displayedDeviceTimeCompact(systemNow)
+        val sampledSystemNow = java.time.LocalDateTime.now()
+        val displayNow = sampledSystemNow.withNano(0)
+        val displayedDeviceTimeCompact = displayedDeviceTimeCompact(sampledSystemNow)
 
-        systemTimeField.text = DesktopInputSupport.formatSystemTimestamp(systemNow)
+        systemTimeField.text = DesktopInputSupport.formatSystemTimestamp(displayNow)
         currentTimeField.text = DesktopInputSupport.formatCompactTimestampOrNotSet(displayedDeviceTimeCompact)
         startsInField.text = DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = snapshot?.status?.eventEnabled,
@@ -1969,16 +2379,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             currentTimeCompact = displayedDeviceTimeCompact,
             startTimeCompact = timedSettings?.startTimeCompact,
             finishTimeCompact = timedSettings?.finishTimeCompact,
-            systemNow = systemNow,
+            systemNow = displayNow,
         )
         syncTimeButton.isEnabled =
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED &&
-            loadedSnapshot?.capabilities?.supportsScheduling == true &&
-            DesktopInputSupport.shouldEnableTimeSync(
-                currentTimeCompact = displayedDeviceTimeCompact,
-                systemNow = systemNow,
-            )
+            loadedSnapshot?.capabilities?.supportsScheduling == true
         disableEventButton.isEnabled =
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED &&
@@ -1991,10 +2397,30 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun displayedDeviceTimeCompact(systemNow: java.time.LocalDateTime = java.time.LocalDateTime.now()): String? {
         val settings = loadedSnapshot?.settings
         return when {
-            deviceTimeOffset != null -> DesktopInputSupport.formatRoundedCompactTimestamp(
+            deviceTimeOffset != null -> DesktopInputSupport.formatTruncatedCompactTimestamp(
                 systemNow.plus(requireNotNull(deviceTimeOffset)),
             )
             else -> settings?.currentTimeCompact
+        }
+    }
+
+    private fun scheduleClockDisplayTick() {
+        clockDisplayTimer?.stop()
+        val nowMs = System.currentTimeMillis()
+        val millisPastSecond = nowMs % 1_000L
+        val displayTickOffsetMs = 500L
+        val delayMs = if (millisPastSecond < displayTickOffsetMs) {
+            displayTickOffsetMs - millisPastSecond
+        } else {
+            (1_000L - millisPastSecond) + displayTickOffsetMs
+        }
+        clockDisplayTimer = Timer(delayMs.toInt()) {
+            updateDisplayedClockFields()
+            maybeRefreshDeviceTimeFromDevice()
+            scheduleClockDisplayTick()
+        }.apply {
+            isRepeats = false
+            start()
         }
     }
 
@@ -2015,25 +2441,73 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         runInBackground("Refreshing device time from SignalSlinger...") {
             val transport = requireNotNull(currentTransport)
             val state = requireNotNull(currentState)
+            val clockSamples = observeClockPhaseSamples(transport, maxSamples = 8)
             val responseLines = mutableListOf<String>()
-            transport.sendCommands(listOf("CLK T"))
-            responseLines += transport.readAvailableLines()
+            responseLines += clockSamples.flatMap { it.responseLines }
+            val eventSentAtMs = System.currentTimeMillis()
             transport.sendCommands(listOf("EVT"))
-            responseLines += transport.readAvailableLines()
+            val eventLines = transport.readAvailableLines()
+            val eventReceivedAtMs = System.currentTimeMillis()
+            responseLines += eventLines
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
+            val phaseErrorMillis = DesktopInputSupport.estimateClockPhaseErrorMillis(
+                clockSamples.map { sample ->
+                    DesktopInputSupport.ClockPhaseSample(
+                        midpointAt = sample.midpointAt,
+                        reportedTimeCompact = sample.reportedTimeCompact,
+                    )
+                },
+            )
+            val latestClockSample = clockSamples.lastOrNull()
 
             SwingUtilities.invokeLater {
                 if (responseLines.isNotEmpty()) {
                     consecutiveDeviceTimeCheckNoResponseCount = 0
                     currentState = DeviceSessionWorkflow.ingestReportLines(state, responseLines)
                     loadedSnapshot = currentState?.snapshot
-                    updateDeviceClockOffset(loadedSnapshot?.settings?.currentTimeCompact)
-                    appendLog(
-                        "Device Time Check",
-                        responseLines.map { DesktopLogEntry("RX $it", DesktopLogCategory.SERIAL) },
-                    )
+                    if (phaseErrorMillis != null && kotlin.math.abs(phaseErrorMillis) <= 500L) {
+                        applyClockDisplayAnchor(
+                            ClockDisplayAnchor(
+                                currentTimeCompact = latestClockSample?.reportedTimeCompact,
+                                referenceTime = latestClockSample?.midpointAt,
+                                phaseErrorMillis = phaseErrorMillis,
+                            ),
+                        )
+                    }
+                    updateClockPhaseWarning(phaseErrorMillis)
+                    appendLog("Device Time Check", buildList {
+                        clockSamples.forEach { sample ->
+                            add(DesktopLogEntry("TX CLK T", DesktopLogCategory.SERIAL, sample.sentAtMs))
+                            sample.responseLines.forEach { line ->
+                                add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, sample.receivedAtMs))
+                            }
+                        }
+                        add(DesktopLogEntry("TX EVT", DesktopLogCategory.SERIAL, eventSentAtMs))
+                        eventLines.forEach { line ->
+                            add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, eventReceivedAtMs))
+                        }
+                        add(
+                            DesktopLogEntry(
+                                phaseErrorMillis?.let {
+                                    "Estimated phase error: ${DesktopInputSupport.formatSignedDurationMillis(it)}"
+                                } ?: "Estimated phase error: unavailable",
+                                if (phaseErrorMillis != null && kotlin.math.abs(phaseErrorMillis) > 500L) {
+                                    DesktopLogCategory.DEVICE
+                                } else {
+                                    DesktopLogCategory.APP
+                                },
+                                System.currentTimeMillis(),
+                            ),
+                        )
+                    })
                     updateDisplayedClockFields()
-                    setStatus("Device time checked.")
+                    setStatus(
+                        if (phaseErrorMillis != null && kotlin.math.abs(phaseErrorMillis) > 500L) {
+                            "Device clock appears out of sync with system time."
+                        } else {
+                            "Device time checked."
+                        },
+                    )
                 } else {
                     consecutiveDeviceTimeCheckNoResponseCount += 1
                     val noResponseCount = consecutiveDeviceTimeCheckNoResponseCount
@@ -2089,6 +2563,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setStatus("SignalSlinger stopped responding on ${portPath}.")
         refreshAvailablePorts(silent = true)
         updateDisplayedClockFields()
+    }
+
+    private fun updateClockPhaseWarning(phaseErrorMillis: Long?) {
+        val portPath = currentConnectedPortPath.orEmpty()
+        val shouldWarn = phaseErrorMillis != null && kotlin.math.abs(phaseErrorMillis) > 500L
+        clockPhaseWarningActive = shouldWarn
+        when {
+            shouldWarn -> showConnectionIndicator(
+                ConnectionIndicatorState.SEARCHING,
+                "Connected to SignalSlinger on $portPath. Device clock appears out of sync with system time.",
+            )
+            currentState?.connectionState == ConnectionState.CONNECTED -> showConnectionIndicator(
+                ConnectionIndicatorState.CONNECTED,
+                "Connected to SignalSlinger on $portPath",
+            )
+        }
     }
 
     private fun createDateTimeSpinner(): JSpinner {
@@ -2187,6 +2677,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     ) {
         val deviceTime = currentTimeCompact?.let(DesktopInputSupport::parseCompactTimestamp)
         deviceTimeOffset = deviceTime?.let { java.time.Duration.between(referenceTime, it) }
+    }
+
+    private fun applyClockDisplayAnchor(anchor: ClockDisplayAnchor) {
+        deviceTimeOffset = anchor.phaseErrorMillis?.let { Duration.ofMillis(-it) }
+        if (deviceTimeOffset == null) {
+            updateDeviceClockOffset(
+                currentTimeCompact = anchor.currentTimeCompact,
+                referenceTime = anchor.referenceTime ?: java.time.LocalDateTime.now(),
+            )
+        }
     }
 
     private fun sampleClockReadLatency(
@@ -2374,7 +2874,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val previousState: DeviceSessionState?,
         val loadLogTitle: String,
         val loadLogLeadEntries: List<DesktopLogEntry>,
-        val clockSample: ClockReadSample?,
+        val clockAnchor: ClockDisplayAnchor?,
+    )
+
+    private data class ClockDisplayAnchor(
+        val currentTimeCompact: String?,
+        val referenceTime: java.time.LocalDateTime?,
+        val phaseErrorMillis: Long?,
     )
 
     private data class ClockReadSample(
@@ -2383,6 +2889,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val responseLines: List<String>,
         val reportedTimeCompact: String?,
     ) {
+        val sentAtMs: Long
+            get() = sentAt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+        val receivedAtMs: Long
+            get() = receivedAt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
         val roundTripMillis: Long
             get() = Duration.between(sentAt, receivedAt).toMillis()
 
@@ -2419,5 +2931,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private companion object {
         const val NULLABLE_TIMESTAMP_ACTIVE_KEY = "serialslinger.nullableTimestampActive"
         const val NULLABLE_TIMESTAMP_STATUS_LABEL_KEY = "serialslinger.nullableTimestampStatusLabel"
+        const val AUTO_DETECT_BUTTON_LONG_PRESS_MS = 900
+        const val CLONE_BUTTON_LONG_PRESS_MS = 900
     }
 }

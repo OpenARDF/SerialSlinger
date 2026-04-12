@@ -4,8 +4,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 enum class DesktopLogCategory(
@@ -19,6 +19,7 @@ enum class DesktopLogCategory(
 data class DesktopLogEntry(
     val message: String,
     val category: DesktopLogCategory = DesktopLogCategory.APP,
+    val timestampMs: Long = System.currentTimeMillis(),
 )
 
 class DesktopSessionLog(
@@ -59,27 +60,28 @@ class DesktopSessionLog(
     }
 
     fun appendPlainSection(title: String, lines: List<String>): String {
+        val timestampMs = clock.millis()
         return appendSection(
             title = title,
             entries = lines.map { line ->
-                DesktopLogEntry(line, DesktopLogCategory.APP)
+                DesktopLogEntry(line, DesktopLogCategory.APP, timestampMs)
             },
         )
     }
 
     fun renderSection(title: String, entries: List<DesktopLogEntry>): String {
-        val timestamp = LocalTime.now(clock).format(timeFormatter)
+        val titleTimestampMs = entries.firstOrNull()?.timestampMs ?: clock.millis()
         return buildString {
-            append("[$timestamp] == ")
+            append("[${formatTime(titleTimestampMs)}] == ")
             append(title)
             append(" ==\n")
             if (entries.isEmpty()) {
-                append("[$timestamp] [")
+                append("[${formatTime(titleTimestampMs)}] [")
                 append(DesktopLogCategory.APP.label)
                 append("] <no lines>\n")
             } else {
                 entries.forEach { entry ->
-                    append("[$timestamp] [")
+                    append("[${formatTime(entry.timestampMs)}] [")
                     append(entry.category.label)
                     append("] ")
                     append(entry.message)
@@ -88,6 +90,13 @@ class DesktopSessionLog(
             }
             append('\n')
         }
+    }
+
+    private fun formatTime(timestampMs: Long): String {
+        return Instant.ofEpochMilli(timestampMs)
+            .atZone(clock.zone)
+            .toLocalTime()
+            .format(timeFormatter)
     }
 
     companion object {
