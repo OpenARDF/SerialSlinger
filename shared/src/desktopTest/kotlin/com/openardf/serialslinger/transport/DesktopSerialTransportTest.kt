@@ -2,6 +2,8 @@ package com.openardf.serialslinger.transport
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class DesktopSerialTransportTest {
     @Test
@@ -46,5 +48,13 @@ class DesktopSerialTransportTest {
         assertEquals(true, DesktopSerialTransport.shouldSendWakePreamble(lastWriteAtMs = null, nowMs = 10_000))
         assertEquals(true, DesktopSerialTransport.shouldSendWakePreamble(lastWriteAtMs = 1_000, nowMs = 3_000, wakeAfterIdleMs = 1_500))
         assertEquals(false, DesktopSerialTransport.shouldSendWakePreamble(lastWriteAtMs = 1_000, nowMs = 2_000, wakeAfterIdleMs = 1_500))
+    }
+
+    @Test
+    fun retriesTransientOpenPortErrorCodeTwoOnlyWhileAttemptsRemain() {
+        assertTrue(DesktopSerialTransport.shouldRetryOpenPort(errorCode = 2, attemptIndex = 0, maxAttempts = 4))
+        assertTrue(DesktopSerialTransport.shouldRetryOpenPort(errorCode = 2, attemptIndex = 2, maxAttempts = 4))
+        assertFalse(DesktopSerialTransport.shouldRetryOpenPort(errorCode = 2, attemptIndex = 3, maxAttempts = 4))
+        assertFalse(DesktopSerialTransport.shouldRetryOpenPort(errorCode = 5, attemptIndex = 0, maxAttempts = 4))
     }
 }

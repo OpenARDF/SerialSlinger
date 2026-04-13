@@ -4,6 +4,7 @@ import com.openardf.serialslinger.transport.DesktopSerialPortInfo
 import com.openardf.serialslinger.transport.DeviceTransport
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SignalSlingerPortDiscoveryTest {
@@ -63,9 +64,69 @@ class SignalSlingerPortDiscoveryTest {
             },
         )
 
-        assertEquals(listOf("/dev/tty.usbA", "/dev/tty.usbB"), probedPorts)
+        assertEquals("/dev/tty.usbB", probedPorts.last())
+        assertFalse("/dev/tty.usbC" in probedPorts)
         assertEquals("/dev/tty.usbB", scanResult.detected?.portInfo?.systemPortPath)
         assertTrue(scanResult.probes.last().state == PortProbeState.DETECTED)
+    }
+
+    @Test
+    fun retriesTransientProbeFailures() {
+        assertTrue(
+            SignalSlingerPortDiscovery.shouldRetryProbe(
+                exception = IllegalArgumentException("Failed to open serial port `/dev/cu.test` (error code 2)."),
+                attemptIndex = 0,
+                maxAttempts = 3,
+            ),
+        )
+        assertTrue(
+            SignalSlingerPortDiscovery.shouldRetryProbe(
+                exception = IllegalArgumentException("Failed to write complete payload to `/dev/cu.test`."),
+                attemptIndex = 1,
+                maxAttempts = 3,
+            ),
+        )
+        assertFalse(
+            SignalSlingerPortDiscovery.shouldRetryProbe(
+                exception = IllegalArgumentException("Probe failed for another reason."),
+                attemptIndex = 0,
+                maxAttempts = 3,
+            ),
+        )
+        assertFalse(
+            SignalSlingerPortDiscovery.shouldRetryProbe(
+                exception = IllegalArgumentException("Failed to open serial port `/dev/cu.test` (error code 2)."),
+                attemptIndex = 2,
+                maxAttempts = 3,
+            ),
+        )
+    }
+
+    @Test
+    fun retriesNoReplyOnlyWhenRequested() {
+        val noReply = SignalSlingerPortProbe(
+            portInfo = DesktopSerialPortInfo("tty.usbB", "/dev/tty.usbB", "B", "B"),
+            state = PortProbeState.NOT_DETECTED,
+            summary = "No recognizable reply",
+            evidenceLines = emptyList(),
+        )
+
+        assertTrue(
+            SignalSlingerPortDiscovery.shouldRetryProbeResult(
+                result = noReply,
+                retryOnNoReply = true,
+                attemptIndex = 0,
+                maxAttempts = 3,
+            ),
+        )
+        assertFalse(
+            SignalSlingerPortDiscovery.shouldRetryProbeResult(
+                result = noReply,
+                retryOnNoReply = false,
+                attemptIndex = 0,
+                maxAttempts = 3,
+            ),
+        )
     }
 
     private class FakeProbeTransport(

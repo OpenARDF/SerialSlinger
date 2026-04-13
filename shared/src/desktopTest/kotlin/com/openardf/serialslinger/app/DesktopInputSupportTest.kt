@@ -52,6 +52,20 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun describesFutureEventAsStartsInEvenIfDeviceSummarySaysTimeRemaining() {
+        val label = DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = true,
+            eventStateSummary = "Time remaining: 1d 23h 59m 59s",
+            currentTimeCompact = "260410140000",
+            startTimeCompact = "260410142015",
+            finishTimeCompact = "260411140000",
+            startsInFallback = null,
+        )
+
+        assertEquals("Starts in 20m 15s", label)
+    }
+
+    @Test
     fun describesEventStatusForInProgressEvent() {
         val label = DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = true,
@@ -77,6 +91,20 @@ class DesktopInputSupportTest {
         )
 
         assertEquals("Manually started event in progress", label)
+    }
+
+    @Test
+    fun describesCompletedEventAsCompleted() {
+        val label = DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = true,
+            eventStateSummary = null,
+            currentTimeCompact = "260410170001",
+            startTimeCompact = "260410150000",
+            finishTimeCompact = "260410170000",
+            startsInFallback = null,
+        )
+
+        assertEquals("Completed", label)
     }
 
     @Test
@@ -212,6 +240,13 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun treatsPatternSpeedAsTimedEventSettingOnlyOutsideFoxoring() {
+        assertEquals(true, DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(EventType.CLASSIC))
+        assertEquals(false, DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(EventType.FOXORING))
+        assertEquals(true, DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(EventType.SPRINT))
+    }
+
+    @Test
     fun truncatesScheduleEditorTimesToMinutePrecision() {
         val truncated = DesktopInputSupport.truncateToMinute(
             LocalDateTime.of(2026, 4, 11, 13, 5, 42, 900_000_000),
@@ -225,6 +260,35 @@ class DesktopInputSupportTest {
         assertEquals("Waiting for read", DesktopInputSupport.formatThresholdOrWaiting(null))
         assertEquals("Waiting for read", DesktopInputSupport.formatVoltageOrWaiting(null))
         assertEquals("Waiting for read", DesktopInputSupport.formatTemperatureOrWaiting(null))
+    }
+
+    @Test
+    fun formatsThresholdWithVoltageUnits() {
+        assertEquals("3.8 V", DesktopInputSupport.formatThresholdOrWaiting(3.8))
+    }
+
+    @Test
+    fun formatsCodeSpeedWithWpmUnits() {
+        assertEquals("20 WPM", DesktopInputSupport.formatCodeSpeedWpm(20))
+    }
+
+    @Test
+    fun parsesCodeSpeedWithOrWithoutWpmSuffix() {
+        assertEquals(8, DesktopInputSupport.parseCodeSpeedWpm("8"))
+        assertEquals(8, DesktopInputSupport.parseCodeSpeedWpm("8 WPM"))
+        assertEquals(8, DesktopInputSupport.parseCodeSpeedWpm("8 wpm"))
+    }
+
+    @Test
+    fun formatsTemperatureInRequestedUnit() {
+        assertEquals("20.0 C", DesktopInputSupport.formatTemperatureOrWaiting(20.0, TemperatureDisplayUnit.CELSIUS))
+        assertEquals("68.0 F", DesktopInputSupport.formatTemperatureOrWaiting(20.0, TemperatureDisplayUnit.FAHRENHEIT))
+    }
+
+    @Test
+    fun formatsFrequencyInRequestedUnit() {
+        assertEquals("3520.0 kHz", DesktopInputSupport.formatFrequencyForDisplay(3_520_000L, FrequencyDisplayUnit.KHZ))
+        assertEquals("3.520 MHz", DesktopInputSupport.formatFrequencyForDisplay(3_520_000L, FrequencyDisplayUnit.MHZ))
     }
 
     @Test

@@ -74,11 +74,27 @@ class DesktopAutoDetectPolicyTest {
         val otherPort = DesktopSerialPortInfo("tty.usbB", "/dev/tty.usbB", "B", "B")
 
         assertEquals(
-            listOf("/dev/cu.usbserial-ABSCDL93", "/dev/tty.usbB"),
+            listOf("/dev/cu.usbserial-ABSCDL93", "/dev/tty.usbserial-ABSCDL93", "/dev/tty.usbB"),
             DesktopAutoDetectPolicy.detectionOrder(
                 availablePorts = listOf(ttyPort, cuPort, otherPort),
                 lastWorkingPortPath = "/dev/tty.usbserial-ABSCDL93",
                 connectedPortPath = null,
+            ).map { it.systemPortPath },
+        )
+    }
+
+    @Test
+    fun detectionOrderSkipsBothAliasesOfConnectedPort() {
+        val connectedTty = DesktopSerialPortInfo("tty.usbserial-ABSCDL93", "/dev/tty.usbserial-ABSCDL93", "A", "A")
+        val connectedCu = DesktopSerialPortInfo("cu.usbserial-ABSCDL93", "/dev/cu.usbserial-ABSCDL93", "A", "A")
+        val otherPort = DesktopSerialPortInfo("tty.usbB", "/dev/tty.usbB", "B", "B")
+
+        assertEquals(
+            listOf("/dev/tty.usbB"),
+            DesktopAutoDetectPolicy.detectionOrder(
+                availablePorts = listOf(connectedTty, connectedCu, otherPort),
+                lastWorkingPortPath = null,
+                connectedPortPath = "/dev/cu.usbserial-ABSCDL93",
             ).map { it.systemPortPath },
         )
     }

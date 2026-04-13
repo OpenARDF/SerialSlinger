@@ -37,6 +37,14 @@ class SignalSlingerProtocolCodecTest {
     }
 
     @Test
+    fun parsesFoxoringPatternSpeedReply() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("* FOX-O SPD:8 WPM")
+
+        assertNotNull(update)
+        assertEquals(8, update.settingsPatch?.patternCodeSpeedWpm)
+    }
+
+    @Test
     fun parsesClockRepliesIntoCompactTimestamps() {
         val currentUpdate = SignalSlingerProtocolCodec.parseReportLine("* Time:Fri 10-apr-2026 14:22:33")
         val startUpdate = SignalSlingerProtocolCodec.parseReportLine("* Start:Fri 10-apr-2026 15:00:00")
@@ -174,6 +182,22 @@ class SignalSlingerProtocolCodecTest {
             ),
             commands,
         )
+    }
+
+    @Test
+    fun encodesFoxoringPatternSpeedWithFoxoringCommand() {
+        val original = sampleSettings().copy(
+            eventType = EventType.FOXORING,
+            patternCodeSpeedWpm = 12,
+        )
+        val edited = original.copy(
+            patternCodeSpeedWpm = 8,
+        )
+
+        val writePlan = WritePlanner.create(original, edited)
+        val commands = SignalSlingerProtocolCodec.encodeWritePlan(writePlan, edited)
+
+        assertEquals(listOf("SPD F 8"), commands)
     }
 
     @Test

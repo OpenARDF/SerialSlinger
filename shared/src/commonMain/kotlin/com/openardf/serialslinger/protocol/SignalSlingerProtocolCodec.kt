@@ -95,6 +95,7 @@ object SignalSlingerProtocolCodec {
     private val patternTextPattern = Regex("""^\* PAT:\s*(.*)$""")
     private val idSpeedPattern = Regex("""^\* ID SPD:\s*(\d+)\s+WPM$""")
     private val patternSpeedPattern = Regex("""^\* PAT SPD:\s*(\d+)\s+WPM$""")
+    private val foxoringPatternSpeedPattern = Regex("""^\* FOX-O SPD:\s*(\d+)\s+WPM$""")
     private val currentTimePattern = Regex("""^\*\s*Time:\s*(.+)$""")
     private val startTimePattern = Regex("""^\*\s*Start:\s*(.+)$""")
     private val finishTimePattern = Regex("""^\*\s*Finish:\s*(.+)$""")
@@ -181,6 +182,14 @@ object SignalSlingerProtocolCodec {
         }
 
         patternSpeedPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    patternCodeSpeedWpm = match.groupValues[1].toInt(),
+                ),
+            )
+        }
+
+        foxoringPatternSpeedPattern.matchEntire(trimmed)?.let { match ->
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
                     patternCodeSpeedWpm = match.groupValues[1].toInt(),
@@ -307,7 +316,7 @@ object SignalSlingerProtocolCodec {
                 SettingKey.FOX_ROLE -> editedSettings.foxRole?.let { commands += "FOX ${it.commandToken}" }
                 SettingKey.PATTERN_TEXT -> commands += "PAT ${editedSettings.patternText.orEmpty()}"
                 SettingKey.ID_CODE_SPEED_WPM -> commands += "SPD I ${editedSettings.idCodeSpeedWpm}"
-                SettingKey.PATTERN_CODE_SPEED_WPM -> commands += "SPD P ${editedSettings.patternCodeSpeedWpm}"
+                SettingKey.PATTERN_CODE_SPEED_WPM -> commands += encodePatternSpeedCommand(editedSettings)
                 SettingKey.CURRENT_TIME -> editedSettings.currentTimeCompact?.let { commands += "CLK T $it" }
                 SettingKey.START_TIME -> editedSettings.startTimeCompact?.let { commands += "CLK S $it" }
                 SettingKey.FINISH_TIME -> editedSettings.finishTimeCompact?.let { commands += "CLK F $it" }
@@ -446,6 +455,16 @@ object SignalSlingerProtocolCodec {
             EventType.SPRINT -> "S"
             EventType.NONE -> "N"
         }
+    }
+
+    private fun encodePatternSpeedCommand(editedSettings: DeviceSettings): String {
+        val speed = editedSettings.patternCodeSpeedWpm
+        val command = if (editedSettings.eventType == EventType.FOXORING) {
+            "SPD F"
+        } else {
+            "SPD P"
+        }
+        return "$command $speed"
     }
 
     private fun encodeBatteryControl(editedSettings: DeviceSettings): String {

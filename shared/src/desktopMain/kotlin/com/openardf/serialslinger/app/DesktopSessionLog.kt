@@ -2,6 +2,7 @@ package com.openardf.serialslinger.app
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.time.Clock
 import java.time.Instant
@@ -69,6 +70,33 @@ class DesktopSessionLog(
         )
     }
 
+    fun archiveCurrentLog(): Path? {
+        val file = currentLogFile()
+        if (!Files.exists(file)) {
+            return null
+        }
+
+        val archivedFile = nextArchiveFile(file)
+        Files.move(file, archivedFile, StandardCopyOption.REPLACE_EXISTING)
+        return archivedFile
+    }
+
+    fun deleteAllLogs(): Int {
+        val directory = logDirectory()
+        if (!Files.exists(directory)) {
+            return 0
+        }
+
+        Files.list(directory).use { paths ->
+            val logFiles = paths
+                .filter { Files.isRegularFile(it) && it.fileName.toString().startsWith("serialslinger-") && it.fileName.toString().endsWith(".log") }
+                .toList()
+
+            logFiles.forEach(Files::deleteIfExists)
+            return logFiles.size
+        }
+    }
+
     fun renderSection(title: String, entries: List<DesktopLogEntry>): String {
         val titleTimestampMs = entries.firstOrNull()?.timestampMs ?: clock.millis()
         return buildString {
@@ -97,6 +125,19 @@ class DesktopSessionLog(
             .atZone(clock.zone)
             .toLocalTime()
             .format(timeFormatter)
+    }
+
+    private fun nextArchiveFile(currentFile: Path): Path {
+        val fileName = currentFile.fileName.toString()
+        val stem = fileName.removeSuffix(".log")
+        var index = 1
+        while (true) {
+            val candidate = currentFile.parent.resolve("$stem-$index.log")
+            if (!Files.exists(candidate)) {
+                return candidate
+            }
+            index += 1
+        }
     }
 
     companion object {

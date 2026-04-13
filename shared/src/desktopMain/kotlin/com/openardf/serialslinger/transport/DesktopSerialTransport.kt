@@ -38,7 +38,7 @@ class DesktopSerialTransport(
         )
         port.setComPortTimeouts(SerialPort.TIMEOUT_NONBLOCKING, 0, 0)
 
-        val opened = port.openPort()
+        val opened = openPortWithRetry(port)
         require(opened) {
             "Failed to open serial port `$portDescriptor` (error code ${port.lastErrorCode})."
         }
@@ -110,13 +110,38 @@ class DesktopSerialTransport(
         }
     }
 
+    private fun openPortWithRetry(port: SerialPort): Boolean {
+        repeat(connectOpenRetryCount) { attempt ->
+            if (port.openPort()) {
+                return true
+            }
+            if (!shouldRetryOpenPort(port.lastErrorCode, attempt, connectOpenRetryCount)) {
+                return false
+            }
+            Thread.sleep(connectOpenRetryDelayMs)
+        }
+        return false
+    }
+
     companion object {
+        private const val connectOpenRetryCount = 4
+        private const val connectOpenRetryDelayMs = 150L
+
         internal fun shouldSendWakePreamble(
             lastWriteAtMs: Long?,
             nowMs: Long,
             wakeAfterIdleMs: Long = 1_500,
         ): Boolean {
             return lastWriteAtMs == null || (nowMs - lastWriteAtMs) >= wakeAfterIdleMs
+        }
+
+        internal fun shouldRetryOpenPort(
+            errorCode: Int,
+            attemptIndex: Int,
+            maxAttempts: Int = connectOpenRetryCount,
+        ): Boolean {
+            val hasAttemptsRemaining = attemptIndex < maxAttempts - 1
+            return hasAttemptsRemaining && errorCode == 2
         }
 
         internal fun payloadsForSend(

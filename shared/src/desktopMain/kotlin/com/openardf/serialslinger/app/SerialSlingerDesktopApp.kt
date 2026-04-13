@@ -31,6 +31,8 @@ import java.awt.Dimension
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
 import java.awt.event.MouseAdapter
@@ -42,28 +44,34 @@ import java.util.Date
 import javax.swing.BoundedRangeModel
 import javax.swing.BorderFactory
 import javax.swing.BoxLayout
+import javax.swing.Box
+import javax.swing.ButtonGroup
+import javax.swing.JCheckBoxMenuItem
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JFrame
+import javax.swing.JList
 import javax.swing.JLabel
 import javax.swing.JOptionPane
+import javax.swing.JMenu
+import javax.swing.JMenuBar
+import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JSpinner
 import javax.swing.JFormattedTextField
+import javax.swing.JRadioButtonMenuItem
 import javax.swing.JTextField
 import javax.swing.JTextPane
-import javax.swing.Box
 import javax.swing.SwingUtilities
 import javax.swing.Timer
 import javax.swing.WindowConstants
 import javax.swing.SpinnerDateModel
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
-import javax.swing.JList
 
 fun main() {
     SwingUtilities.invokeLater {
@@ -72,7 +80,7 @@ fun main() {
 }
 
 private object SerialSlingerAppVersion {
-    const val value = "0.1.50"
+    const val value = "0.1.73"
 }
 
 private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerAppVersion.value}") {
@@ -81,11 +89,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val autoDetectButton = JButton("Auto Detect")
     private val submitButton = JButton("Clone")
     private val cloneTemplateLabel = JLabel("Clone template not set")
-    private val toggleLogButton = JButton("Show Log")
-    private val openLogFolderButton = JButton("Open Log Folder")
     private val headlineLabel = JLabel(" ")
     private val statusLabel = JLabel("Idle")
     private val rawCommandField = JTextField()
+    private val rawSerialRowPanel = JPanel(BorderLayout(8, 0)).apply {
+        add(JLabel("Raw Serial"), BorderLayout.WEST)
+        add(rawCommandField, BorderLayout.CENTER)
+    }
     private val logPane = JTextPane()
     private val formScroll by lazy { JScrollPane(buildFormPanel()) }
     private val logScroll by lazy {
@@ -101,7 +111,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val foxRoleCombo = JComboBox<FoxRole>()
     private val patternTextField = JTextField()
     private val idSpeedField = JTextField()
-    private val patternSpeedField = JTextField()
+    private val devicePatternSpeedLabel = JLabel("Pattern Speed")
+    private val devicePatternSpeedField = JTextField()
+    private val timedPatternSpeedLabel = JLabel("Pattern Speed")
+    private val timedPatternSpeedField = JTextField()
     private val currentTimeField = JTextField()
     private val systemTimeField = JTextField()
     private val startTimeSpinner = createDateTimeSpinner()
@@ -154,9 +167,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var suppressNextAutoDetectAction: Boolean = false
     private var cloneButtonLongPressTimer: Timer? = null
     private var suppressNextCloneAction: Boolean = false
+    private var displayPreferences: DesktopDisplayPreferences = PreferencesDesktopDisplayPreferencesStore.load()
     private val knownProbeResults = linkedMapOf<String, SignalSlingerPortProbe>()
     private val portMemory: DesktopPortMemory = PreferencesDesktopPortMemory
+    private val displayPreferencesStore: DesktopDisplayPreferencesStore = PreferencesDesktopDisplayPreferencesStore
     private val sessionLog = DesktopSessionLog()
+    private lateinit var showLogMenuItem: JCheckBoxMenuItem
+    private lateinit var showRawSerialMenuItem: JCheckBoxMenuItem
+    private lateinit var frequencyKhzMenuItem: JRadioButtonMenuItem
+    private lateinit var frequencyMhzMenuItem: JRadioButtonMenuItem
+    private lateinit var temperatureCMenuItem: JRadioButtonMenuItem
+    private lateinit var temperatureFMenuItem: JRadioButtonMenuItem
     private val headerLogStyle = SimpleAttributeSet().apply {
         StyleConstants.setForeground(this, Color(0x11, 0x18, 0x27))
         StyleConstants.setBold(this, true)
@@ -178,6 +199,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         defaultCloseOperation = WindowConstants.EXIT_ON_CLOSE
         minimumSize = Dimension(1200, 780)
         layout = BorderLayout(12, 12)
+        jMenuBar = buildMenuBar()
 
         add(buildHeader(), BorderLayout.NORTH)
         add(configuredContentSplitPane(), BorderLayout.CENTER)
@@ -208,7 +230,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureLogAutoScroll()
         showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "Not Connected")
         appendRenderedLog(sessionLog.loadCurrentLogText())
-        setLogVisible(false)
+        setRawSerialVisible(displayPreferences.rawSerialVisible)
+        setLogVisible(displayPreferences.logVisible)
 
         autoDetectButton.toolTipText = "Click to scan ports. Press and hold to reload the current/selected port as the active device."
         installAutoDetectButtonLongPressHandler()
@@ -230,8 +253,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         syncTimeButton.addActionListener { syncDeviceTimeToSystem() }
         disableEventButton.addActionListener { disableProgrammedEvent() }
-        toggleLogButton.addActionListener { setLogVisible(!logVisible) }
-        openLogFolderButton.addActionListener { openLogFolder() }
         rawCommandField.addActionListener { sendRawSerialCommand() }
         portComboBox.addActionListener {
             if (suppressPortSelectionHandling || backgroundWorkInProgress || updatingForm) {
@@ -297,10 +318,94 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             add(submitButton)
             add(Box.createHorizontalStrut(12))
             add(cloneTemplateLabel)
-            add(Box.createHorizontalStrut(16))
-            add(toggleLogButton)
-            add(Box.createHorizontalStrut(8))
-            add(openLogFolderButton)
+        }
+    }
+
+    private fun buildMenuBar(): JMenuBar {
+        return JMenuBar().apply {
+            add(
+                JMenu("View").apply {
+                    showLogMenuItem = JCheckBoxMenuItem("Show Session Log", displayPreferences.logVisible).apply {
+                        addActionListener { setLogVisible(isSelected) }
+                    }
+                    showRawSerialMenuItem = JCheckBoxMenuItem("Show Raw Serial Entry", displayPreferences.rawSerialVisible).apply {
+                        addActionListener { setRawSerialVisible(isSelected) }
+                    }
+                    add(showLogMenuItem)
+                    add(showRawSerialMenuItem)
+                },
+            )
+            add(
+                JMenu("Settings").apply {
+                    add(
+                        JMenu("Frequency Units").apply {
+                            val group = ButtonGroup()
+                            frequencyKhzMenuItem = JRadioButtonMenuItem(
+                                "kHz",
+                                displayPreferences.frequencyDisplayUnit == FrequencyDisplayUnit.KHZ,
+                            ).apply {
+                                addActionListener { setFrequencyDisplayUnit(FrequencyDisplayUnit.KHZ) }
+                            }
+                            frequencyMhzMenuItem = JRadioButtonMenuItem(
+                                "MHz",
+                                displayPreferences.frequencyDisplayUnit == FrequencyDisplayUnit.MHZ,
+                            ).apply {
+                                addActionListener { setFrequencyDisplayUnit(FrequencyDisplayUnit.MHZ) }
+                            }
+                            group.add(frequencyKhzMenuItem)
+                            group.add(frequencyMhzMenuItem)
+                            add(frequencyKhzMenuItem)
+                            add(frequencyMhzMenuItem)
+                        },
+                    )
+                    add(
+                        JMenu("Temperature Units").apply {
+                            val group = ButtonGroup()
+                            temperatureCMenuItem = JRadioButtonMenuItem(
+                                "Celsius",
+                                displayPreferences.temperatureDisplayUnit == TemperatureDisplayUnit.CELSIUS,
+                            ).apply {
+                                addActionListener { setTemperatureDisplayUnit(TemperatureDisplayUnit.CELSIUS) }
+                            }
+                            temperatureFMenuItem = JRadioButtonMenuItem(
+                                "Fahrenheit",
+                                displayPreferences.temperatureDisplayUnit == TemperatureDisplayUnit.FAHRENHEIT,
+                            ).apply {
+                                addActionListener { setTemperatureDisplayUnit(TemperatureDisplayUnit.FAHRENHEIT) }
+                            }
+                            group.add(temperatureCMenuItem)
+                            group.add(temperatureFMenuItem)
+                            add(temperatureCMenuItem)
+                            add(temperatureFMenuItem)
+                        },
+                    )
+                },
+            )
+            add(
+                JMenu("Tools").apply {
+                    add(
+                        JMenuItem("Open Log Folder").apply {
+                            addActionListener { openLogFolder() }
+                        },
+                    )
+                    add(
+                        JMenuItem("Copy Current Log").apply {
+                            addActionListener { copyCurrentLogToClipboard() }
+                        },
+                    )
+                    addSeparator()
+                    add(
+                        JMenuItem("Clear Current Log...").apply {
+                            addActionListener { confirmAndClearCurrentLog() }
+                        },
+                    )
+                    add(
+                        JMenuItem("Delete All Log Files...").apply {
+                            addActionListener { confirmAndDeleteAllLogs() }
+                        },
+                    )
+                },
+            )
         }
     }
 
@@ -314,13 +419,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun buildFooter(): JPanel {
         return JPanel(BorderLayout(8, 8)).apply {
             border = BorderFactory.createEmptyBorder(0, 12, 12, 12)
-            add(
-                JPanel(BorderLayout(8, 0)).apply {
-                    add(JLabel("Raw Serial"), BorderLayout.WEST)
-                    add(rawCommandField, BorderLayout.CENTER)
-                },
-                BorderLayout.NORTH,
-            )
+            add(rawSerialRowPanel, BorderLayout.NORTH)
             add(statusLabel, BorderLayout.SOUTH)
         }
     }
@@ -356,7 +455,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 var row = 0
                 row = addRow(section, row, "Fox Role", foxRoleCombo)
                 row = addRow(section, row, "Pattern Text", patternTextField)
-                row = addRow(section, row, "Pattern Speed (WPM)", patternSpeedField)
+                row = addRow(section, row, devicePatternSpeedLabel, devicePatternSpeedField)
                 row = addRow(section, row, "Current Time", buildCurrentTimeRow())
                 row = addRow(section, row, "System Time", systemTimeField)
                 row = addRow(section, row, "Current Frequency", currentFrequencyField)
@@ -370,7 +469,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 var row = 0
                 row = addRow(section, row, "Event Type", eventTypeCombo)
                 row = addRow(section, row, "Station ID", stationIdField)
-                row = addRow(section, row, "ID Speed (WPM)", idSpeedField)
+                row = addRow(section, row, "ID Speed", idSpeedField)
+                row = addRow(section, row, timedPatternSpeedLabel, timedPatternSpeedField)
                 row = addRow(section, row, "Start Time", buildDateTimeEditorRow(startTimeSpinner, startTimeStatusLabel))
                 row = addRow(section, row, "Finish Time", buildDateTimeEditorRow(finishTimeSpinner, finishTimeStatusLabel))
                 row = addRow(section, row, "Event Status", buildEventStatusRow())
@@ -391,6 +491,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 addRow(section, row, "Version", versionInfoField)
             })
             add(Box.createVerticalGlue())
+            updatePatternSpeedVisibility(EventType.NONE)
         }
     }
 
@@ -439,7 +540,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         installTextCommitHandler(stationIdField) { applyStationIdChange() }
         installTextCommitHandler(patternTextField) { applyPatternTextChange() }
         installTextCommitHandler(idSpeedField) { applyIdSpeedChange() }
-        installTextCommitHandler(patternSpeedField) { applyPatternSpeedChange() }
+        installTextCommitHandler(devicePatternSpeedField) { applyPatternSpeedChange() }
+        installTextCommitHandler(timedPatternSpeedField) { applyPatternSpeedChange() }
         installTextCommitHandler(daysField) { applyDaysToRunChange() }
         installTextCommitHandler(frequency1Field) { applyFrequency1Change() }
         installTextCommitHandler(frequency2Field) { applyFrequency2Change() }
@@ -534,6 +636,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         freshPorts: List<SignalSlingerPortProbe> = SignalSlingerPortDiscovery.listAvailablePorts(),
         silent: Boolean = false,
     ) {
+        if (connectedPortMissingFrom(freshPorts.map { it.portInfo })) {
+            handleConnectedPortRemoved()
+        }
+
         val selectedPath = selectedProbe()?.portInfo?.systemPortPath
         val connectedAliasGroup = connectedAliasGroupKey()
         knownProbeResults.keys.retainAll(freshPorts.map { it.portInfo.systemPortPath }.toSet())
@@ -581,6 +687,59 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (!silent) {
             setStatus("Found ${merged.size} serial port(s).")
         }
+    }
+
+    private fun connectedPortMissingFrom(availablePorts: List<DesktopSerialPortInfo>): Boolean {
+        val connectedPortPath = currentConnectedPortPath ?: return false
+        val connectedAliasGroup = connectedAliasGroupKey()
+        return availablePorts.none { portInfo ->
+            portInfo.systemPortPath == connectedPortPath ||
+                (
+                    connectedAliasGroup != null &&
+                        DesktopSmartPollingPolicy.aliasGroupKey(portInfo.systemPortPath) == connectedAliasGroup
+                    )
+        }
+    }
+
+    private fun handleConnectedPortRemoved() {
+        val removedPortPath = currentConnectedPortPath ?: return
+        try {
+            currentTransport?.disconnect()
+        } catch (_: Exception) {
+        }
+        currentTransport = null
+        currentConnectedPortPath = null
+        val updatedState = currentState?.let { state ->
+            state.copy(
+                connectionState = ConnectionState.DISCONNECTED,
+                snapshot = state.snapshot?.copy(
+                    status = state.snapshot.status.copy(
+                        connectionState = ConnectionState.DISCONNECTED,
+                        lastCommunicationError = "Connected serial port was removed.",
+                    ),
+                ),
+                lastError = "Connected serial port was removed.",
+            )
+        }
+        currentState = updatedState
+        loadedSnapshot = updatedState?.snapshot
+        consecutiveDeviceTimeCheckNoResponseCount = 0
+        clockPhaseWarningActive = false
+        appendLog(
+            "Port Monitor",
+            listOf(
+                DesktopLogEntry(
+                    "Connected serial port $removedPortPath was removed.",
+                    DesktopLogCategory.DEVICE,
+                ),
+            ),
+        )
+        showConnectionIndicator(
+            ConnectionIndicatorState.DISCONNECTED,
+            "Connected SignalSlinger was removed",
+        )
+        setStatus("Connected serial port was removed.")
+        updateDisplayedClockFields()
     }
 
     private fun maybeSchedulePassiveProbe(availablePorts: List<DesktopSerialPortInfo>) {
@@ -642,6 +801,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     ),
                 )
                 if (currentConnectedPortPath == null) {
+                    val preferredDetectedPath = preferredDetectedPortPath(result.portInfo.systemPortPath)
+                    if (preferredDetectedPath != null) {
+                        selectPort(preferredDetectedPath)
+                    }
                     showConnectionIndicator(
                         ConnectionIndicatorState.SEARCHING,
                         "SignalSlinger detected on ${result.portInfo.systemPortPath}. Select it or run Auto Detect.",
@@ -684,11 +847,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun autoDetectPorts() {
         showConnectionIndicator(ConnectionIndicatorState.SEARCHING, "Searching for SignalSlinger...")
         refreshAvailablePorts(silent = true)
-        val ports = DesktopSmartPollingPolicy.canonicalizePorts(
-            SignalSlingerPortDiscovery.listAvailablePorts().map { it.portInfo },
-        )
+        val ports = SignalSlingerPortDiscovery.listAvailablePorts().map { it.portInfo }
         val lastWorkingPortPath = portMemory.loadLastWorkingPortPath()
-        val connectedPortPath = currentConnectedPortPath
+        val selectedPortPath = selectedProbe()?.portInfo?.systemPortPath
+        val connectedPortPath = currentConnectedPortPath.takeIf {
+            currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
+        }
         val orderedPorts = DesktopAutoDetectPolicy.detectionOrder(
             availablePorts = ports,
             lastWorkingPortPath = lastWorkingPortPath,
@@ -710,8 +874,43 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         runInBackground("Probing serial ports for SignalSlinger...") {
+            val preferredProbeAttempt = attemptAutoDetectPreferredPortRecovery(
+                initialAvailablePorts = ports,
+                selectedPortPath = selectedPortPath,
+                lastWorkingPortPath = lastWorkingPortPath,
+            )
+            val preferredProbeResult = preferredProbeAttempt.probeResult
+            val preferredLoadResult = preferredProbeAttempt.loadResult
+            if (preferredLoadResult != null) {
+                SwingUtilities.invokeLater {
+                    preferredProbeResult?.let { result ->
+                        knownProbeResults[result.portInfo.systemPortPath] = result
+                    }
+                    refreshAvailablePorts(silent = true)
+                    appendLog("Auto Detect", buildList {
+                        add(DesktopLogEntry("Trying remembered SignalSlinger port first.", DesktopLogCategory.APP))
+                        preferredProbeResult?.let { result ->
+                            add(DesktopLogEntry(result.displayLabel, DesktopLogCategory.DEVICE))
+                            result.evidenceLines.take(3).forEach { line ->
+                                add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL))
+                            }
+                        }
+                    })
+                    autoDetectNoDeviceFound = false
+                    selectPort(preferredLoadResult.portPath)
+                    applyLoadedConnection(preferredLoadResult)
+                    setStatus("Detected and loaded SignalSlinger on ${preferredLoadResult.portPath}.")
+                }
+                return@runInBackground
+            }
+
+            val scannedPorts = if (preferredProbeAttempt.probedPath != null) {
+                orderedPorts.filterNot { it.systemPortPath == preferredProbeAttempt.probedPath }
+            } else {
+                orderedPorts
+            }
             val scanResult = SignalSlingerPortDiscovery.findFirstDetectedPort(
-                ports = orderedPorts,
+                ports = scannedPorts,
                 onProbeComplete = { result ->
                     knownProbeResults[result.portInfo.systemPortPath] = result
                     SwingUtilities.invokeLater {
@@ -727,11 +926,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                 },
             )
-
-            val detected = scanResult.detected
-            val loadPortPath = detected?.let { detectedProbe ->
-                DesktopSmartPollingPolicy.preferredPortPath(ports, detectedProbe.portInfo.systemPortPath)
-            }
+            val finalPorts = ports
+            val finalScanResult = scanResult
+            val detected = finalScanResult.detected
+            val loadPortPath = detected?.portInfo?.systemPortPath
             val loadResult = loadPortPath?.let { resolvedPortPath ->
                 loadPort(resolvedPortPath).let { connection ->
                     connection.copy(
@@ -749,14 +947,55 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     )
                 }
             }
+            val connectedPortVerification = connectedPortPath
+                ?.takeIf { path -> finalPorts.any { it.systemPortPath == path } }
+                ?.let { path ->
+                    val preferredPath = DesktopSmartPollingPolicy.preferredPortPath(finalPorts, path) ?: path
+                    SignalSlingerPortDiscovery.probePort(resolvePortInfoFor(preferredPath))
+                }
 
             SwingUtilities.invokeLater {
+                preferredProbeResult?.let { result ->
+                    knownProbeResults[result.portInfo.systemPortPath] = result
+                }
+                connectedPortVerification?.let { result ->
+                    knownProbeResults[result.portInfo.systemPortPath] = result
+                }
                 refreshAvailablePorts(silent = true)
                 appendLog("Auto Detect", buildList {
-                    add(DesktopLogEntry("Scanning ${orderedPorts.size} serial port(s).", DesktopLogCategory.APP))
+                    add(DesktopLogEntry("Scanning ${scannedPorts.size} serial port(s).", DesktopLogCategory.APP))
+                    if (
+                        preferredProbeResult != null &&
+                        finalScanResult.probes.none { it.portInfo.systemPortPath == preferredProbeResult.portInfo.systemPortPath }
+                    ) {
+                        val preferredProbeIntro = if (preferredProbeAttempt.attemptCount > 1) {
+                            "Trying remembered SignalSlinger port first (${preferredProbeAttempt.attemptCount} attempts)."
+                        } else {
+                            "Trying remembered SignalSlinger port first."
+                        }
+                        add(DesktopLogEntry(preferredProbeIntro, DesktopLogCategory.APP))
+                        add(DesktopLogEntry(preferredProbeResult.displayLabel, DesktopLogCategory.DEVICE))
+                        preferredProbeResult.evidenceLines.take(3).forEach { line ->
+                            add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL))
+                        }
+                    }
                     scanResult.probes.forEach { result ->
                         add(DesktopLogEntry(result.displayLabel, DesktopLogCategory.DEVICE))
                         result.evidenceLines.take(3).forEach { line ->
+                            add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL))
+                        }
+                    }
+                    if (
+                        connectedPortVerification != null &&
+                        finalScanResult.probes.none { it.portInfo.systemPortPath == connectedPortVerification.portInfo.systemPortPath }
+                    ) {
+                        add(
+                            DesktopLogEntry(
+                                connectedPortVerification.displayLabel,
+                                DesktopLogCategory.DEVICE,
+                            ),
+                        )
+                        connectedPortVerification.evidenceLines.take(3).forEach { line ->
                             add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL))
                         }
                     }
@@ -770,10 +1009,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     return@invokeLater
                 }
 
-                val connectedPortStillAvailable =
-                    connectedPortPath != null && ports.any { it.systemPortPath == connectedPortPath }
+                val connectedPortStillAvailable = connectedPortVerification?.state == PortProbeState.DETECTED
                 val fallbackPath = DesktopAutoDetectPolicy.defaultSelectionPath(
-                    availablePorts = ports,
+                    availablePorts = finalPorts,
                     currentSelectionPath = connectedPortPath,
                     lastWorkingPortPath = lastWorkingPortPath,
                 )
@@ -809,7 +1047,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     )
                     showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "No Connected SignalSlinger Found")
                     setStatus(
-                        if (lastWorkingPortPath != null && ports.any { it.systemPortPath == lastWorkingPortPath }) {
+                        if (lastWorkingPortPath != null && finalPorts.any { it.systemPortPath == lastWorkingPortPath }) {
                             "No SignalSlinger found. Restored last working port ${lastWorkingPortPath}."
                         } else {
                             "No SignalSlinger found on current serial ports."
@@ -818,6 +1056,137 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
             }
         }
+    }
+
+    private fun preferredAutoDetectProbePath(
+        availablePorts: List<DesktopSerialPortInfo>,
+        selectedPortPath: String?,
+        lastWorkingPortPath: String?,
+    ): String? {
+        val preferredLastWorkingPath = DesktopSmartPollingPolicy.preferredPortPath(availablePorts, lastWorkingPortPath)
+        if (preferredLastWorkingPath != null) {
+            return preferredLastWorkingPath
+        }
+        return DesktopSmartPollingPolicy.preferredPortPath(availablePorts, selectedPortPath)
+    }
+
+    private fun isTransientAutoDetectProbeFailure(result: SignalSlingerPortProbe?): Boolean {
+        val summary = result?.summary?.lowercase().orEmpty()
+        return summary.contains("error code 2") ||
+            summary.contains("failed to write complete payload") ||
+            summary.contains("invalid port descriptor")
+    }
+
+    private fun attemptAutoDetectPreferredPortRecovery(
+        initialAvailablePorts: List<DesktopSerialPortInfo>,
+        selectedPortPath: String?,
+        lastWorkingPortPath: String?,
+    ): PreferredProbeAttempt {
+        var availablePorts = initialAvailablePorts
+        var preferredPath = preferredAutoDetectProbePath(
+            availablePorts = availablePorts,
+            selectedPortPath = selectedPortPath,
+            lastWorkingPortPath = lastWorkingPortPath,
+        )
+        var lastResult: SignalSlingerPortProbe? = null
+        var attemptCount = 0
+
+        repeat(4) { attemptIndex ->
+            if (preferredPath == null) {
+                if (attemptIndex == 3) {
+                    return PreferredProbeAttempt(
+                        probeResult = lastResult,
+                        loadResult = null,
+                        attemptCount = attemptCount,
+                        probedPath = null,
+                    )
+                }
+                Thread.sleep(600L)
+                availablePorts = SignalSlingerPortDiscovery.listAvailablePorts().map { it.portInfo }
+                preferredPath = preferredAutoDetectProbePath(
+                    availablePorts = availablePorts,
+                    selectedPortPath = selectedPortPath,
+                    lastWorkingPortPath = lastWorkingPortPath,
+                )
+                return@repeat
+            }
+
+            val candidatePaths = DesktopSmartPollingPolicy.aliasCandidates(preferredPath)
+            var shouldRetryAfterCandidates = false
+
+            for (candidatePath in candidatePaths) {
+                attemptCount += 1
+                try {
+                    val connection = loadPort(candidatePath)
+                    val probeResult = SignalSlingerPortProbe(
+                        portInfo = resolvePortInfoFor(candidatePath),
+                        state = PortProbeState.DETECTED,
+                        summary = "SignalSlinger detected",
+                        evidenceLines = connection.result.linesReceived.take(3),
+                        lastProbedAtMs = System.currentTimeMillis(),
+                    )
+                    return PreferredProbeAttempt(
+                        probeResult = probeResult,
+                        loadResult = connection.copy(
+                            loadLogTitle = "Auto Detect Load",
+                            loadLogLeadEntries = listOf(
+                                DesktopLogEntry(
+                                    "Tried remembered port $candidatePath first; loading settings from $candidatePath.",
+                                    DesktopLogCategory.APP,
+                                ),
+                                DesktopLogEntry(
+                                    "Loaded ${connection.result.commandsSent.size} command(s) and received ${connection.result.linesReceived.size} line(s).",
+                                    DesktopLogCategory.APP,
+                                ),
+                            ),
+                        ),
+                        attemptCount = attemptCount,
+                        probedPath = candidatePath,
+                    )
+                } catch (exception: Exception) {
+                    val failure = SignalSlingerPortProbe(
+                        portInfo = resolvePortInfoFor(candidatePath),
+                        state = PortProbeState.ERROR,
+                        summary = exception.message ?: "Probe failed",
+                        lastProbedAtMs = System.currentTimeMillis(),
+                    )
+                    lastResult = failure
+                    if (!isTransientAutoDetectProbeFailure(failure)) {
+                        return PreferredProbeAttempt(
+                            probeResult = failure,
+                            loadResult = null,
+                            attemptCount = attemptCount,
+                            probedPath = candidatePath,
+                        )
+                    }
+                    shouldRetryAfterCandidates = true
+                }
+            }
+
+            if (!shouldRetryAfterCandidates || attemptIndex == 3) {
+                return PreferredProbeAttempt(
+                    probeResult = lastResult,
+                    loadResult = null,
+                    attemptCount = attemptCount,
+                    probedPath = preferredPath,
+                )
+            }
+
+            Thread.sleep(600L)
+            availablePorts = SignalSlingerPortDiscovery.listAvailablePorts().map { it.portInfo }
+            preferredPath = preferredAutoDetectProbePath(
+                availablePorts = availablePorts,
+                selectedPortPath = selectedPortPath,
+                lastWorkingPortPath = lastWorkingPortPath,
+            )
+        }
+
+        return PreferredProbeAttempt(
+            probeResult = lastResult,
+            loadResult = null,
+            attemptCount = attemptCount,
+            probedPath = preferredPath,
+        )
     }
 
     private fun installAutoDetectButtonLongPressHandler() {
@@ -858,7 +1227,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun reloadCurrentPortAsDetected() {
-        val selectedPath = selectedProbe()?.portInfo?.systemPortPath ?: currentConnectedPortPath
+        val selectedPath = preferredReloadPortPath()
         if (selectedPath == null) {
             JOptionPane.showMessageDialog(this, "Select or connect a serial port first.")
             return
@@ -890,6 +1259,39 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 setStatus("Reloaded settings from $selectedPath.")
             }
         }
+    }
+
+    private fun preferredReloadPortPath(): String? {
+        val selectedPath = selectedProbe()?.portInfo?.systemPortPath
+        val selectedProbeState = selectedPath?.let { knownProbeResults[it]?.state }
+        if (selectedPath != null && selectedProbeState == PortProbeState.DETECTED) {
+            return preferredDetectedPortPath(selectedPath)
+        }
+
+        val connectedPath = currentConnectedPortPath
+        if (connectedPath != null) {
+            return preferredDetectedPortPath(connectedPath) ?: connectedPath
+        }
+
+        return firstKnownDetectedPortPath()
+            ?: selectedPath
+    }
+
+    private fun firstKnownDetectedPortPath(): String? {
+        val availablePorts = DesktopSmartPollingPolicy.canonicalizePorts(
+            SignalSlingerPortDiscovery.listAvailablePorts().map { it.portInfo },
+        )
+        val detectedPath = availablePorts.firstOrNull { portInfo ->
+            knownProbeResults[portInfo.systemPortPath]?.state == PortProbeState.DETECTED
+        }?.systemPortPath
+        return preferredDetectedPortPath(detectedPath)
+    }
+
+    private fun preferredDetectedPortPath(path: String?): String? {
+        val availablePorts = DesktopSmartPollingPolicy.canonicalizePorts(
+            SignalSlingerPortDiscovery.listAvailablePorts().map { it.portInfo },
+        )
+        return DesktopSmartPollingPolicy.preferredPortPath(availablePorts, path)
     }
 
     private fun connectAndLoadSelectedPort() {
@@ -1084,6 +1486,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             startTimeCompact = SettingsField("startTimeCompact", "Start Time", targetBaseSettings.startTimeCompact, templateSettings.startTimeCompact),
             finishTimeCompact = SettingsField("finishTimeCompact", "Finish Time", targetBaseSettings.finishTimeCompact, templateSettings.finishTimeCompact),
             daysToRun = SettingsField("daysToRun", "Days To Run", targetBaseSettings.daysToRun, templateSettings.daysToRun),
+            patternCodeSpeedWpm = targetBaseSettings.patternCodeSpeedWpm.let { targetPatternSpeed ->
+                SettingsField(
+                    "patternCodeSpeedWpm",
+                    "Pattern Speed",
+                    targetPatternSpeed,
+                    cloneTemplatePatternSpeedFor(templateSettings) ?: targetPatternSpeed,
+                )
+            },
             lowFrequencyHz = SettingsField("lowFrequencyHz", "Frequency 1 (FRE 1)", targetBaseSettings.lowFrequencyHz, templateSettings.lowFrequencyHz),
             mediumFrequencyHz = SettingsField("mediumFrequencyHz", "Frequency 2 (FRE 2)", targetBaseSettings.mediumFrequencyHz, templateSettings.mediumFrequencyHz),
             highFrequencyHz = SettingsField("highFrequencyHz", "Frequency 3 (FRE 3)", targetBaseSettings.highFrequencyHz, templateSettings.highFrequencyHz),
@@ -1092,18 +1502,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun cloneComparedFieldKeys(): List<SettingKey> {
-        return listOf(
-            SettingKey.STATION_ID,
-            SettingKey.EVENT_TYPE,
-            SettingKey.ID_CODE_SPEED_WPM,
-            SettingKey.START_TIME,
-            SettingKey.FINISH_TIME,
-            SettingKey.DAYS_TO_RUN,
-            SettingKey.LOW_FREQUENCY_HZ,
-            SettingKey.MEDIUM_FREQUENCY_HZ,
-            SettingKey.HIGH_FREQUENCY_HZ,
-            SettingKey.BEACON_FREQUENCY_HZ,
-        )
+        return buildList {
+            add(SettingKey.STATION_ID)
+            add(SettingKey.EVENT_TYPE)
+            add(SettingKey.ID_CODE_SPEED_WPM)
+            if (cloneTemplateSettings?.let { DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(it.eventType) } == true) {
+                add(SettingKey.PATTERN_CODE_SPEED_WPM)
+            }
+            add(SettingKey.START_TIME)
+            add(SettingKey.FINISH_TIME)
+            add(SettingKey.DAYS_TO_RUN)
+            add(SettingKey.LOW_FREQUENCY_HZ)
+            add(SettingKey.MEDIUM_FREQUENCY_HZ)
+            add(SettingKey.HIGH_FREQUENCY_HZ)
+            add(SettingKey.BEACON_FREQUENCY_HZ)
+        }
     }
 
     private fun applyImmediateEdit(
@@ -1234,19 +1647,27 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun applyIdSpeedChange() {
         applyImmediateEdit("ID Speed", updatesTimedEventTemplate = true) { base ->
             EditableDeviceSettings.fromDeviceSettings(base).copy(
-                idCodeSpeedWpm = SettingsField("idCodeSpeedWpm", "ID Speed", base.idCodeSpeedWpm, idSpeedField.text.trim().toInt()),
+                idCodeSpeedWpm = SettingsField(
+                    "idCodeSpeedWpm",
+                    "ID Speed",
+                    base.idCodeSpeedWpm,
+                    DesktopInputSupport.parseCodeSpeedWpm(idSpeedField.text),
+                ),
             )
         }
     }
 
     private fun applyPatternSpeedChange() {
-        applyImmediateEdit("Pattern Speed", updatesTimedEventTemplate = false) { base ->
+        val updatesCloneTemplate = DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(
+            currentConnectedTimedSettings().eventType,
+        )
+        applyImmediateEdit("Pattern Speed", updatesTimedEventTemplate = updatesCloneTemplate) { base ->
             EditableDeviceSettings.fromDeviceSettings(base).copy(
                 patternCodeSpeedWpm = SettingsField(
                     "patternCodeSpeedWpm",
                     "Pattern Speed",
                     base.patternCodeSpeedWpm,
-                    patternSpeedField.text.trim().toInt(),
+                    DesktopInputSupport.parseCodeSpeedWpm(currentPatternSpeedField().text),
                 ),
             )
         }
@@ -1394,21 +1815,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 foxRole = settings.foxRole,
                 storedPatternText = settings.patternText,
             )
-            idSpeedField.text = timedSettings.idCodeSpeedWpm.toString()
-            patternSpeedField.text = settings.patternCodeSpeedWpm.toString()
+            idSpeedField.text = DesktopInputSupport.formatCodeSpeedWpm(timedSettings.idCodeSpeedWpm)
+            devicePatternSpeedField.text = DesktopInputSupport.formatCodeSpeedWpm(settings.patternCodeSpeedWpm)
+            timedPatternSpeedField.text = DesktopInputSupport.formatCodeSpeedWpm(settings.patternCodeSpeedWpm)
             setDateTimeEditorValue(startTimeSpinner, startTimeStatusLabel, timedSettings.startTimeCompact)
             setDateTimeEditorValue(finishTimeSpinner, finishTimeStatusLabel, timedSettings.finishTimeCompact)
             applyDateTimeEditorCapability(startTimeSpinner, schedulingSupported)
             applyDateTimeEditorCapability(finishTimeSpinner, schedulingSupported)
             daysField.isEnabled = schedulingSupported
             daysField.text = timedSettings.daysToRun.toString()
-            currentFrequencyField.text = FrequencySupport.formatFrequencyMhz(frequencies.currentFrequencyHz)
+            currentFrequencyField.text = formatFrequencyForDisplay(frequencies.currentFrequencyHz)
             currentBankField.text = frequencies.currentBankId?.label ?: "Unknown"
-            frequency1Field.text = FrequencySupport.formatFrequencyMhz(timedSettings.lowFrequencyHz)
-            frequency2Field.text = FrequencySupport.formatFrequencyMhz(timedSettings.mediumFrequencyHz)
-            frequency3Field.text = FrequencySupport.formatFrequencyMhz(timedSettings.highFrequencyHz)
-            frequencyBField.text = FrequencySupport.formatFrequencyMhz(timedSettings.beaconFrequencyHz)
+            frequency1Field.text = formatFrequencyForDisplay(timedSettings.lowFrequencyHz)
+            frequency2Field.text = formatFrequencyForDisplay(timedSettings.mediumFrequencyHz)
+            frequency3Field.text = formatFrequencyForDisplay(timedSettings.highFrequencyHz)
+            frequencyBField.text = formatFrequencyForDisplay(timedSettings.beaconFrequencyHz)
             updateTimedEventFrequencyVisibility(timedSettings.eventType)
+            updatePatternSpeedVisibility(settings.eventType)
             batteryThresholdField.text = DesktopInputSupport.formatThresholdOrWaiting(settings.lowBatteryThresholdVolts)
             batteryModeCombo.selectedItem = settings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF
             updateTransmissionsField(settings.transmissionsEnabled)
@@ -1418,7 +1841,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             internalBatteryField.text = DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.internalBatteryVolts)
             externalBatteryField.text = DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.externalBatteryVolts)
-            temperatureField.text = DesktopInputSupport.formatTemperatureOrWaiting(snapshot.status.temperatureC)
+            temperatureField.text = DesktopInputSupport.formatTemperatureOrWaiting(
+                snapshot.status.temperatureC,
+                displayPreferences.temperatureDisplayUnit,
+            )
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
             if (recalculateClockOffset) {
                 updateDeviceClockOffset(settings.currentTimeCompact)
@@ -1455,6 +1881,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         repaint()
     }
 
+    private fun updatePatternSpeedVisibility(eventType: EventType) {
+        val timedEventOwned = DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(eventType)
+        devicePatternSpeedLabel.isVisible = !timedEventOwned
+        devicePatternSpeedField.isVisible = !timedEventOwned
+        timedPatternSpeedLabel.isVisible = timedEventOwned
+        timedPatternSpeedField.isVisible = timedEventOwned
+        revalidate()
+        repaint()
+    }
+
     private fun displayedTimedEventSettings(snapshot: DeviceSnapshot): DeviceSettings {
         return snapshot.settings
     }
@@ -1468,6 +1904,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 stationId = sourceSettings.stationId,
                 eventType = sourceSettings.eventType,
                 idCodeSpeedWpm = sourceSettings.idCodeSpeedWpm,
+                patternCodeSpeedWpm = sourceSettings.patternCodeSpeedWpm,
                 startTimeCompact = sourceSettings.startTimeCompact,
                 finishTimeCompact = sourceSettings.finishTimeCompact,
                 daysToRun = sourceSettings.daysToRun,
@@ -1499,6 +1936,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return current.stationId != displayedSettings.stationId ||
             current.eventType != displayedSettings.eventType ||
             current.idCodeSpeedWpm != displayedSettings.idCodeSpeedWpm ||
+            cloneTemplatePatternSpeedFor(current) != cloneTemplatePatternSpeedFor(displayedSettings) ||
             current.startTimeCompact != displayedSettings.startTimeCompact ||
             current.finishTimeCompact != displayedSettings.finishTimeCompact ||
             current.daysToRun != displayedSettings.daysToRun ||
@@ -1625,7 +2063,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             SettingKey.MEDIUM_FREQUENCY_HZ,
             SettingKey.HIGH_FREQUENCY_HZ,
             SettingKey.BEACON_FREQUENCY_HZ,
-            -> FrequencySupport.formatFrequencyMhz(value as? Long)
+            -> formatFrequencyForDisplay(value as? Long)
             SettingKey.LOW_BATTERY_THRESHOLD_VOLTS -> value?.toString() ?: "Not Set"
             SettingKey.EXTERNAL_BATTERY_CONTROL_MODE -> (value as? ExternalBatteryControlMode)?.toString() ?: "Not Set"
             SettingKey.TRANSMISSIONS_ENABLED -> if (value == true) "Enabled" else "Disabled"
@@ -1810,7 +2248,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         appendRenderedLog(rendered)
     }
 
-    private fun runInBackground(status: String, task: () -> Unit) {
+    private fun runInBackground(
+        status: String,
+        showErrorDialog: Boolean = true,
+        task: () -> Unit,
+    ) {
         if (backgroundWorkInProgress) {
             return
         }
@@ -1822,17 +2264,26 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 task()
             } catch (exception: Exception) {
                 SwingUtilities.invokeLater {
-                    JOptionPane.showMessageDialog(this, exception.message ?: exception.toString())
-                    appendLog(
-                        "Error",
-                        listOf(
-                            DesktopLogEntry(
-                                exception.message ?: exception.toString(),
-                                DesktopLogCategory.APP,
+                    if (isTransportCommunicationFailure(exception)) {
+                        handleTransportCommunicationFailure(
+                            message = exception.message ?: exception.toString(),
+                            showDialog = showErrorDialog,
+                        )
+                    } else {
+                        if (showErrorDialog) {
+                            JOptionPane.showMessageDialog(this, exception.message ?: exception.toString())
+                        }
+                        appendLog(
+                            "Error",
+                            listOf(
+                                DesktopLogEntry(
+                                    exception.message ?: exception.toString(),
+                                    DesktopLogCategory.APP,
+                                ),
                             ),
-                        ),
-                    )
-                    setStatus("Error: ${exception.message ?: exception::class.simpleName}")
+                        )
+                        setStatus("Error: ${exception.message ?: exception::class.simpleName}")
+                    }
                 }
             } finally {
                 SwingUtilities.invokeLater {
@@ -1846,10 +2297,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun setBusy(isBusy: Boolean) {
         autoDetectButton.isEnabled = !isBusy
         portComboBox.isEnabled = !isBusy
-        toggleLogButton.isEnabled = true
-        openLogFolderButton.isEnabled = logVisible
         rawCommandField.isEnabled =
             !isBusy &&
+            rawSerialRowPanel.isVisible &&
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED
         updateWritableControlAvailability(isBusy)
@@ -1876,7 +2326,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         foxRoleCombo.isEnabled = writableEnabled
         patternTextField.isEnabled = writableEnabled
         idSpeedField.isEnabled = writableEnabled
-        patternSpeedField.isEnabled = writableEnabled
+        devicePatternSpeedField.isEnabled = writableEnabled
+        timedPatternSpeedField.isEnabled = writableEnabled
         batteryThresholdField.isEnabled = writableEnabled
         batteryModeCombo.isEnabled = writableEnabled
         transmissionsField.isEnabled = true
@@ -1889,6 +2340,77 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         applyDateTimeEditorCapability(startTimeSpinner, writableEnabled && schedulingSupported)
         applyDateTimeEditorCapability(finishTimeSpinner, writableEnabled && schedulingSupported)
+    }
+
+    private fun currentPatternSpeedField(): JTextField {
+        val eventType = loadedSnapshot?.settings?.eventType ?: EventType.NONE
+        return if (DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(eventType)) {
+            timedPatternSpeedField
+        } else {
+            devicePatternSpeedField
+        }
+    }
+
+    private fun setFrequencyDisplayUnit(unit: FrequencyDisplayUnit) {
+        if (displayPreferences.frequencyDisplayUnit == unit) {
+            return
+        }
+        displayPreferences = displayPreferences.copy(frequencyDisplayUnit = unit)
+        persistDisplayPreferences()
+        frequencyKhzMenuItem.isSelected = unit == FrequencyDisplayUnit.KHZ
+        frequencyMhzMenuItem.isSelected = unit == FrequencyDisplayUnit.MHZ
+        applySnapshotToForm(loadedSnapshot, recalculateClockOffset = false)
+    }
+
+    private fun setTemperatureDisplayUnit(unit: TemperatureDisplayUnit) {
+        if (displayPreferences.temperatureDisplayUnit == unit) {
+            return
+        }
+        displayPreferences = displayPreferences.copy(temperatureDisplayUnit = unit)
+        persistDisplayPreferences()
+        temperatureCMenuItem.isSelected = unit == TemperatureDisplayUnit.CELSIUS
+        temperatureFMenuItem.isSelected = unit == TemperatureDisplayUnit.FAHRENHEIT
+        applySnapshotToForm(loadedSnapshot, recalculateClockOffset = false)
+    }
+
+    private fun setRawSerialVisible(isVisible: Boolean) {
+        rawSerialRowPanel.isVisible = isVisible
+        displayPreferences = displayPreferences.copy(rawSerialVisible = isVisible)
+        persistDisplayPreferences()
+        if (::showRawSerialMenuItem.isInitialized) {
+            showRawSerialMenuItem.isSelected = isVisible
+        }
+        rawCommandField.isEnabled =
+            isVisible &&
+            !backgroundWorkInProgress &&
+            currentTransport != null &&
+            currentState?.connectionState == ConnectionState.CONNECTED
+        revalidate()
+        repaint()
+    }
+
+    private fun formatFrequencyForDisplay(frequencyHz: Long?): String {
+        return DesktopInputSupport.formatFrequencyForDisplay(
+            frequencyHz,
+            displayPreferences.frequencyDisplayUnit,
+        )
+    }
+
+    private fun persistDisplayPreferences() {
+        displayPreferencesStore.save(
+            displayPreferences.copy(
+                logVisible = logVisible,
+                rawSerialVisible = rawSerialRowPanel.isVisible,
+            ),
+        )
+    }
+
+    private fun cloneTemplatePatternSpeedFor(settings: DeviceSettings): Int? {
+        return if (DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(settings.eventType)) {
+            settings.patternCodeSpeedWpm
+        } else {
+            null
+        }
     }
 
     private fun setStatus(status: String) {
@@ -2000,6 +2522,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 transport = requireNotNull(currentTransport),
                 startEditing = true,
             )
+            requireLoadResponses(portPath, initialRefresh)
             val finalClockSample = postLoadClockSample(requireNotNull(currentTransport), initialRefresh.state.snapshot)
             val finalResult = mergeLoadResults(initialRefresh, finalClockSample?.first)
             return LoadedConnection(
@@ -2018,6 +2541,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val previousState = currentState
         val transport = DesktopSerialTransport(portPath)
         val initialLoad = DeviceSessionController.connectAndLoad(transport)
+        requireLoadResponses(portPath, initialLoad)
         val finalClockSample = postLoadClockSample(transport, initialLoad.state.snapshot)
         val finalResult = mergeLoadResults(initialLoad, finalClockSample?.first)
 
@@ -2031,6 +2555,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             loadLogLeadEntries = emptyList(),
             clockAnchor = finalClockSample?.second,
         )
+    }
+
+    private fun requireLoadResponses(
+        portPath: String,
+        result: DeviceLoadResult,
+    ) {
+        require(result.linesReceived.isNotEmpty()) {
+            "No response from SignalSlinger on `$portPath` while loading settings."
+        }
     }
 
     private fun mergeLoadResults(
@@ -2177,8 +2710,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun setLogVisible(isVisible: Boolean) {
         logVisible = isVisible
-        toggleLogButton.text = if (isVisible) "Hide Log" else "Show Log"
-        openLogFolderButton.isVisible = isVisible
+        if (::showLogMenuItem.isInitialized) {
+            showLogMenuItem.isSelected = isVisible
+        }
+        displayPreferences = displayPreferences.copy(logVisible = isVisible)
+        persistDisplayPreferences()
         contentSplitPane.rightComponent = if (isVisible) logScroll else JPanel()
         contentSplitPane.dividerSize = if (isVisible) 8 else 0
         if (isVisible) {
@@ -2201,6 +2737,69 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         Desktop.getDesktop().open(logDirectory)
         setStatus("Opened log folder ${logDirectory.absolutePath}.")
+    }
+
+    private fun copyCurrentLogToClipboard() {
+        val currentLogText = sessionLog.loadCurrentLogText()
+        if (currentLogText.isBlank()) {
+            JOptionPane.showMessageDialog(this, "There is no current log content to copy yet.")
+            return
+        }
+
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(
+            StringSelection(currentLogText),
+            null,
+        )
+        setStatus("Copied current log to the clipboard.")
+    }
+
+    private fun confirmAndClearCurrentLog() {
+        val confirmation = JOptionPane.showConfirmDialog(
+            this,
+            "Archive the current log and start a fresh empty log file?",
+            "Clear Current Log",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (confirmation != JOptionPane.OK_OPTION) {
+            return
+        }
+
+        val archivedFile = sessionLog.archiveCurrentLog()
+        refreshDisplayedLogFromDisk()
+        if (archivedFile != null) {
+            setStatus("Archived current log to ${archivedFile.fileName}.")
+        } else {
+            setStatus("Current log was already empty.")
+        }
+    }
+
+    private fun confirmAndDeleteAllLogs() {
+        val confirmation = JOptionPane.showConfirmDialog(
+            this,
+            "Delete all SerialSlinger log files in ${sessionLog.logDirectory()}?",
+            "Delete All Log Files",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (confirmation != JOptionPane.OK_OPTION) {
+            return
+        }
+
+        val deletedCount = sessionLog.deleteAllLogs()
+        refreshDisplayedLogFromDisk()
+        setStatus(
+            if (deletedCount == 1) {
+                "Deleted 1 log file."
+            } else {
+                "Deleted $deletedCount log files."
+            },
+        )
+    }
+
+    private fun refreshDisplayedLogFromDisk() {
+        logPane.text = ""
+        appendRenderedLog(sessionLog.loadCurrentLogText())
     }
 
     private fun appendRenderedLog(rendered: String) {
@@ -2438,7 +3037,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
-        runInBackground("Refreshing device time from SignalSlinger...") {
+        runInBackground(
+            "Refreshing device time from SignalSlinger...",
+            showErrorDialog = false,
+        ) {
             val transport = requireNotNull(currentTransport)
             val state = requireNotNull(currentState)
             val clockSamples = observeClockPhaseSamples(transport, maxSamples = 8)
@@ -2532,6 +3134,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun markConnectedPortAsUnresponsive(reason: String) {
         val portPath = currentConnectedPortPath ?: return
+        try {
+            currentTransport?.disconnect()
+        } catch (_: Exception) {
+        }
+        currentTransport = null
+        currentConnectedPortPath = null
         val updatedState = currentState?.let { state ->
             state.copy(
                 connectionState = ConnectionState.DISCONNECTED,
@@ -2561,8 +3169,49 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "SignalSlinger is not responding on ${portPath}",
         )
         setStatus("SignalSlinger stopped responding on ${portPath}.")
+        consecutiveDeviceTimeCheckNoResponseCount = 0
+        clockPhaseWarningActive = false
         refreshAvailablePorts(silent = true)
         updateDisplayedClockFields()
+    }
+
+    private fun isTransportCommunicationFailure(exception: Exception): Boolean {
+        val message = exception.message.orEmpty().lowercase()
+        return message.contains("failed to write complete payload") ||
+            message.contains("failed to open serial port") ||
+            message.contains("no response from signalslinger") ||
+            (message.contains("serial port `") && message.contains("is not connected"))
+    }
+
+    private fun handleTransportCommunicationFailure(
+        message: String,
+        showDialog: Boolean,
+    ) {
+        appendLog(
+            "Communication Error",
+            listOf(
+                DesktopLogEntry(
+                    message,
+                    DesktopLogCategory.APP,
+                ),
+            ),
+        )
+        if (currentConnectedPortPath != null && currentState?.connectionState == ConnectionState.CONNECTED) {
+            markConnectedPortAsUnresponsive(message)
+        } else {
+            try {
+                currentTransport?.disconnect()
+            } catch (_: Exception) {
+            }
+            currentTransport = null
+            setStatus("Communication error: $message")
+        }
+        if (showDialog) {
+            JOptionPane.showMessageDialog(
+                this,
+                "$message\n\nThe connection has been marked disconnected. You can reconnect or run Auto Detect again.",
+            )
+        }
     }
 
     private fun updateClockPhaseWarning(phaseErrorMillis: Long?) {
@@ -2875,6 +3524,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val loadLogTitle: String,
         val loadLogLeadEntries: List<DesktopLogEntry>,
         val clockAnchor: ClockDisplayAnchor?,
+    )
+
+    private data class PreferredProbeAttempt(
+        val probeResult: SignalSlingerPortProbe?,
+        val loadResult: LoadedConnection?,
+        val attemptCount: Int,
+        val probedPath: String?,
     )
 
     private data class ClockDisplayAnchor(

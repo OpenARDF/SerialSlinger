@@ -28,14 +28,12 @@ class DeviceSessionControllerTest {
                 "PAT" to listOf("* PAT:TEST"),
                 "SPD I" to listOf("* ID SPD:8 WPM"),
                 "SPD P" to listOf("* PAT SPD:12 WPM"),
-                "CLK T" to listOf(
+                "CLK" to listOf(
                     "* Time:Fri 10-apr-2026 14:22:33",
                     "* Start:Fri 10-apr-2026 15:00:00",
                     "* Finish:Fri 10-apr-2026 17:00:00",
                     "* Days to run: 3",
                 ),
-                "CLK S" to listOf("* Start:Fri 10-apr-2026 15:00:00"),
-                "CLK F" to listOf("* Finish:Fri 10-apr-2026 17:00:00"),
                 "FRE" to listOf("* FRE=3550.0 kHz"),
                 "FRE 1" to listOf("* FRE 1=3510.0 kHz"),
                 "FRE 2" to listOf("* FRE 2=3550.0 kHz"),
@@ -76,7 +74,7 @@ class DeviceSessionControllerTest {
                 "CLK D 3" to listOf("* Days to run: 3"),
                 "FRE B 3580000" to listOf("* FRE B=3580.0 kHz"),
                 "ID" to listOf("* ID: W1FOX"),
-                "CLK D" to listOf("* Days to run: 3"),
+                "CLK" to listOf("* Days to run: 3"),
                 "EVT" to listOf("* Event:Classic"),
                 "FRE B" to listOf("* FRE B=3580.0 kHz"),
             ),
@@ -95,9 +93,9 @@ class DeviceSessionControllerTest {
             listOf("ID W1FOX", "CLK D 3", "FRE B 3580000"),
             result.commandsSent,
         )
-        assertEquals(listOf("ID", "CLK D", "EVT", "FRE B"), result.readbackCommandsSent)
+        assertEquals(listOf("ID", "CLK", "EVT", "FRE B"), result.readbackCommandsSent)
         assertEquals(
-            listOf("ID W1FOX", "CLK D 3", "FRE B 3580000", "ID", "CLK D", "EVT", "FRE B"),
+            listOf("ID W1FOX", "CLK D 3", "FRE B 3580000", "ID", "CLK", "EVT", "FRE B"),
             transport.sentCommands,
         )
         assertEquals("W1FOX", result.state.snapshot?.settings?.stationId)
@@ -152,7 +150,7 @@ class DeviceSessionControllerTest {
             scriptedResponses = mapOf(
                 "FOX 2" to listOf("""* Fox:Foxoring "Medium Freq" Fox"""),
                 "FOX" to listOf("""* Fox:Foxoring "Medium Freq" Fox"""),
-                "SPD P" to listOf("* PAT SPD:8 WPM"),
+                "SPD F" to listOf("* FOX-O SPD:8 WPM"),
                 "FRE" to listOf("* FRE=3540.0 kHz"),
             ),
         )
@@ -173,13 +171,73 @@ class DeviceSessionControllerTest {
         val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
 
         assertEquals(listOf("FOX 2"), result.commandsSent)
-        assertEquals(listOf("FOX", "SPD P", "FRE"), result.readbackCommandsSent)
+        assertEquals(listOf("FOX", "SPD F", "FRE"), result.readbackCommandsSent)
         assertEquals(FoxRole.FOXORING_2, result.state.snapshot?.settings?.foxRole)
         assertEquals(3_540_000L, result.state.snapshot?.settings?.defaultFrequencyHz)
         assertEquals(
-            listOf("FOX 2", "FOX", "SPD P", "FRE"),
+            listOf("FOX 2", "FOX", "SPD F", "FRE"),
             transport.sentCommands,
         )
+    }
+
+    @Test
+    fun connectAndLoadUsesFoxoringPatternSpeedReadCommand() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "VER" to listOf("* SW Ver: 1.2.3 HW Build: 3.5"),
+                "ID" to listOf("* ID: W1FOX"),
+                "EVT" to listOf("* Event:Foxoring"),
+                "FOX" to listOf("""* Fox:Foxoring "High Freq" Fox"""),
+                "PAT" to listOf("* PAT:MOH"),
+                "SPD I" to listOf("* ID SPD:20 WPM"),
+                "SPD F" to listOf("* FOX-O SPD:8 WPM"),
+                "CLK" to listOf(
+                    "* Start:not set",
+                    "* Finish:not set",
+                ),
+                "FRE" to listOf("* FRE=3560.0 kHz"),
+                "FRE 1" to listOf("* FRE 1=3520.0 kHz"),
+                "FRE 2" to listOf("* FRE 2=3540.0 kHz"),
+                "FRE 3" to listOf("* FRE 3=3560.0 kHz"),
+                "FRE B" to listOf("* FRE B=3600.0 kHz"),
+                "BAT" to listOf("* thresh   = 3.8 Volts"),
+                "TMP" to listOf("* Temp: 20.9C"),
+            ),
+        )
+
+        val result = DeviceSessionController.connectAndLoad(transport)
+
+        assertTrue("SPD F" in result.commandsSent)
+        assertFalse("SPD P" in result.commandsSent)
+        assertEquals(8, result.state.snapshot?.settings?.patternCodeSpeedWpm)
+    }
+
+    @Test
+    fun submitEditsUsesFoxoringPatternSpeedWriteAndReadbackCommands() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "SPD F 8" to listOf("* FOX-O SPD:8 WPM"),
+                "SPD F" to listOf("* FOX-O SPD:8 WPM"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                eventType = EventType.FOXORING,
+                patternCodeSpeedWpm = 12,
+            ),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            patternCodeSpeedWpm = SettingsField("patternCodeSpeedWpm", "Pattern Speed", 12, 8),
+        )
+
+        val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
+
+        assertEquals(listOf("SPD F 8"), result.commandsSent)
+        assertEquals(listOf("SPD F"), result.readbackCommandsSent)
+        assertEquals(listOf("SPD F 8", "SPD F"), transport.sentCommands)
+        assertTrue(result.verifications.all { it.observedInReadback && it.verified })
     }
 
     @Test

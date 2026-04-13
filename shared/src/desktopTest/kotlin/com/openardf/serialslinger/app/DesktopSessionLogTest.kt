@@ -6,6 +6,8 @@ import java.time.Instant
 import java.time.ZoneId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopSessionLogTest {
@@ -78,5 +80,53 @@ class DesktopSessionLogTest {
         assertTrue(rendered.contains("[14:22:31] == Clone =="))
         assertTrue(rendered.contains("[14:22:31] [SERIAL] TX EVT S"))
         assertTrue(rendered.contains("[14:22:32] [SERIAL] RX * Event:Sprint"))
+    }
+
+    @Test
+    fun archivesCurrentLogToNextIndexedSuffix() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC"))
+        val log = DesktopSessionLog(rootDirectory = tempDirectory, clock = clock)
+        val currentFile = log.currentLogFile()
+        Files.createDirectories(currentFile.parent)
+        Files.writeString(currentFile, "current")
+        Files.writeString(currentFile.parent.resolve("serialslinger-2026-04-10-1.log"), "older")
+
+        val archived = log.archiveCurrentLog()
+
+        assertEquals(currentFile.parent.resolve("serialslinger-2026-04-10-2.log"), archived)
+        assertFalse(Files.exists(currentFile))
+        assertEquals("current", Files.readString(archived))
+    }
+
+    @Test
+    fun archiveCurrentLogReturnsNullWhenCurrentFileDoesNotExist() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val log = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+        )
+
+        assertNull(log.archiveCurrentLog())
+    }
+
+    @Test
+    fun deletesAllSerialSlingerLogFiles() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val log = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+        )
+        val directory = log.logDirectory()
+        Files.writeString(directory.resolve("serialslinger-2026-04-10.log"), "a")
+        Files.writeString(directory.resolve("serialslinger-2026-04-10-1.log"), "b")
+        Files.writeString(directory.resolve("notes.txt"), "keep")
+
+        val deletedCount = log.deleteAllLogs()
+
+        assertEquals(2, deletedCount)
+        assertFalse(Files.exists(directory.resolve("serialslinger-2026-04-10.log")))
+        assertFalse(Files.exists(directory.resolve("serialslinger-2026-04-10-1.log")))
+        assertTrue(Files.exists(directory.resolve("notes.txt")))
     }
 }

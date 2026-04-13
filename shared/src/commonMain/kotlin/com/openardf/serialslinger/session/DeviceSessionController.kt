@@ -4,6 +4,7 @@ import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.EditableDeviceSettings
+import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.protocol.DeviceReportUpdate
@@ -92,12 +93,16 @@ object DeviceSessionController {
             snapshot = updatedState.snapshot?.copy(capabilities = firmwareProfile.capabilities),
         )
         for (command in firmwareProfile.loadCommandsAfterVersion) {
+            val resolvedCommand = resolvePatternSpeedReadCommand(
+                command = command,
+                eventType = updatedState.snapshot?.settings?.eventType,
+            )
             val sentAtMs = System.currentTimeMillis()
-            transport.sendCommands(listOf(command))
-            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+            transport.sendCommands(listOf(resolvedCommand))
+            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, resolvedCommand)
             val responseLines = transport.readAvailableLines()
             val receivedAtMs = System.currentTimeMillis()
-            commands += command
+            commands += resolvedCommand
             lines += responseLines
             traceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
@@ -157,7 +162,11 @@ object DeviceSessionController {
         val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
             submission.state.snapshot.info.softwareVersion,
         )
-        val readbackCommands = buildVerificationReadbackCommands(submission.writePlan, firmwareProfile)
+        val readbackCommands = buildVerificationReadbackCommands(
+            writePlan = submission.writePlan,
+            expectedSettings = validatedSettings,
+            firmwareProfile = firmwareProfile,
+        )
         val readbackLines = mutableListOf<String>()
         val readbackTraceEntries = mutableListOf<SerialTraceEntry>()
         val observedReadbackKeys = linkedSetOf<SettingKey>()
@@ -218,6 +227,7 @@ object DeviceSessionController {
 
     private fun buildVerificationReadbackCommands(
         writePlan: WritePlan,
+        expectedSettings: DeviceSettings,
         firmwareProfile: com.openardf.serialslinger.protocol.SignalSlingerFirmwareProfile,
     ): List<String> {
         val commands = linkedSetOf<String>()
@@ -227,7 +237,11 @@ object DeviceSessionController {
                 continue
             }
 
-            commands += verificationCommandsFor(change.fieldKey, firmwareProfile)
+            commands += verificationCommandsFor(
+                fieldKey = change.fieldKey,
+                expectedSettings = expectedSettings,
+                firmwareProfile = firmwareProfile,
+            )
         }
 
         return commands.toList()
@@ -235,9 +249,24 @@ object DeviceSessionController {
 
     private fun verificationCommandsFor(
         fieldKey: SettingKey,
+        expectedSettings: DeviceSettings,
         firmwareProfile: com.openardf.serialslinger.protocol.SignalSlingerFirmwareProfile,
     ): List<String> {
-        return firmwareProfile.verificationReadbackCommands[fieldKey].orEmpty()
+        val commands = firmwareProfile.verificationReadbackCommands[fieldKey].orEmpty()
+        return commands.map { command ->
+            resolvePatternSpeedReadCommand(command, expectedSettings.eventType)
+        }
+    }
+
+    private fun resolvePatternSpeedReadCommand(
+        command: String,
+        eventType: EventType?,
+    ): String {
+        return if (command == "SPD P" && eventType == EventType.FOXORING) {
+            "SPD F"
+        } else {
+            command
+        }
     }
 
     private fun extractObservedSettingKeys(lines: List<String>): Set<SettingKey> {

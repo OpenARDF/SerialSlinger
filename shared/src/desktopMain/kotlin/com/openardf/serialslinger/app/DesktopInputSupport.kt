@@ -121,6 +121,10 @@ object DesktopInputSupport {
         }
     }
 
+    fun patternSpeedBelongsToTimedEventSettings(eventType: EventType): Boolean {
+        return eventType != EventType.FOXORING
+    }
+
     fun timedEventFrequencyVisibility(eventType: EventType): TimedEventFrequencyVisibility {
         return when (eventType) {
             EventType.CLASSIC -> TimedEventFrequencyVisibility(
@@ -221,12 +225,43 @@ object DesktopInputSupport {
         return value?.let { "$it V" } ?: waitingForReadPlaceholder
     }
 
-    fun formatTemperatureOrWaiting(value: Double?): String {
-        return value?.let { "$it C" } ?: waitingForReadPlaceholder
+    fun formatTemperatureOrWaiting(
+        value: Double?,
+        unit: TemperatureDisplayUnit = TemperatureDisplayUnit.CELSIUS,
+    ): String {
+        return value?.let {
+            when (unit) {
+                TemperatureDisplayUnit.CELSIUS -> "${"%.1f".format(it)} C"
+                TemperatureDisplayUnit.FAHRENHEIT -> "${"%.1f".format((it * 9.0 / 5.0) + 32.0)} F"
+            }
+        } ?: waitingForReadPlaceholder
     }
 
     fun formatThresholdOrWaiting(value: Double?): String {
-        return value?.toString() ?: waitingForReadPlaceholder
+        return value?.let { "$it V" } ?: waitingForReadPlaceholder
+    }
+
+    fun formatCodeSpeedWpm(value: Int): String {
+        return "$value WPM"
+    }
+
+    fun parseCodeSpeedWpm(value: String): Int {
+        val normalized = value.trim().removeSuffix("WPM").trim().removeSuffix("wpm").trim()
+        require(normalized.isNotEmpty()) {
+            "Code speed must not be blank."
+        }
+        return normalized.toInt()
+    }
+
+    fun formatFrequencyForDisplay(
+        frequencyHz: Long?,
+        unit: FrequencyDisplayUnit = FrequencyDisplayUnit.MHZ,
+    ): String {
+        val value = frequencyHz ?: return ""
+        return when (unit) {
+            FrequencyDisplayUnit.KHZ -> "${"%.1f".format(value / 1_000.0)} kHz"
+            FrequencyDisplayUnit.MHZ -> "${"%.3f".format(value / 1_000_000.0)} MHz"
+        }
     }
 
     fun formatDurationCompact(duration: Duration): String {
@@ -271,16 +306,26 @@ object DesktopInputSupport {
         if (isManualEventStateSummary(normalizedSummary)) {
             return "Manually started event in progress"
         }
-        if (summaryLower.startsWith("time remaining:")) {
-            if (current != null && finish != null && current < finish) {
+
+        if (current != null && start != null) {
+            if (start == finish) {
+                return "Disabled"
+            }
+            if (current < start) {
+                return "Starts in ${formatDurationCompact(Duration.between(current, start))}"
+            }
+            if (finish != null && current < finish) {
                 return "Time remaining: ${formatDurationCompact(Duration.between(current, finish))}"
             }
+            if (finish != null && !current.isBefore(finish)) {
+                return "Completed"
+            }
+        }
+
+        if (summaryLower.startsWith("time remaining:")) {
             return normalizedSummary
         }
         if (summaryLower == "in progress" || summaryLower.contains("on the air")) {
-            if (current != null && finish != null && current < finish) {
-                return "Time remaining: ${formatDurationCompact(Duration.between(current, finish))}"
-            }
             return "Event in progress"
         }
         if (deviceReportedEventEnabled == false) {
@@ -294,12 +339,7 @@ object DesktopInputSupport {
             return "Disabled"
         }
 
-        return when {
-            start == finish -> "Disabled"
-            current < start -> "Starts in ${formatDurationCompact(Duration.between(current, start))}"
-            finish != null && current < finish -> "Time remaining: ${formatDurationCompact(Duration.between(current, finish))}"
-            else -> "Disabled"
-        }
+        return if (start == finish) "Disabled" else "Not Available"
     }
 
     fun describeEventDuration(

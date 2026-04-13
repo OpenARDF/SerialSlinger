@@ -14,7 +14,10 @@ class SignalSlingerFirmwareSupportTest {
         assertTrue(profile.capabilities.supportsScheduling)
         assertTrue("TMP" in profile.fullLoadCommands)
         assertTrue("FOX" in profile.fullLoadCommands)
+        assertTrue("CLK" in profile.fullLoadCommands)
         assertFalse("CLK T" in profile.fullLoadCommands)
+        assertFalse("CLK S" in profile.fullLoadCommands)
+        assertFalse("CLK F" in profile.fullLoadCommands)
     }
 
     @Test
@@ -41,6 +44,28 @@ class SignalSlingerFirmwareSupportTest {
         assertEquals(
             listOf("FOX", "SPD P", "FRE"),
             profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.FOX_ROLE],
+        )
+    }
+
+    @Test
+    fun scheduleVerificationReadbackUsesCombinedClockReport() {
+        val profile = SignalSlingerFirmwareSupport.resolve("1.2s")
+
+        assertEquals(
+            listOf("CLK", "EVT"),
+            profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.CURRENT_TIME],
+        )
+        assertEquals(
+            listOf("CLK", "EVT"),
+            profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.START_TIME],
+        )
+        assertEquals(
+            listOf("CLK", "EVT"),
+            profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.FINISH_TIME],
+        )
+        assertEquals(
+            listOf("CLK", "EVT"),
+            profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.DAYS_TO_RUN],
         )
     }
 }

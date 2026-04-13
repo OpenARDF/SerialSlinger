@@ -32,6 +32,8 @@ data class SignalSlingerPortProbe(
 
 object SignalSlingerPortDiscovery {
     private val probeCommands = listOf("EVT", "FOX", "FRE")
+    private const val probeRetryCount = 3
+    private const val probeRetryDelayMs = 200L
 
     data class AutoDetectScanResult(
         val probes: List<SignalSlingerPortProbe>,
@@ -51,24 +53,43 @@ object SignalSlingerPortDiscovery {
 
     fun probePort(
         portInfo: DesktopSerialPortInfo,
+        retryOnNoReply: Boolean = false,
         transportFactory: (DesktopSerialPortInfo) -> DeviceTransport = ::defaultTransportFor,
     ): SignalSlingerPortProbe {
-        return try {
-            val transport = transportFactory(portInfo)
-            transport.connect()
+        repeat(probeRetryCount) { attempt ->
             try {
-                probeWithConnectedTransport(portInfo, transport)
-            } finally {
-                transport.disconnect()
+                val transport = transportFactory(portInfo)
+                transport.connect()
+                try {
+                    val result = probeWithConnectedTransport(portInfo, transport)
+                    if (result.state == PortProbeState.DETECTED) {
+                        return result
+                    }
+                    if (!shouldRetryProbeResult(result, retryOnNoReply, attempt, probeRetryCount)) {
+                        return result
+                    }
+                } finally {
+                    transport.disconnect()
+                }
+            } catch (exception: Exception) {
+                if (!shouldRetryProbe(exception, attempt, probeRetryCount)) {
+                    return SignalSlingerPortProbe(
+                        portInfo = portInfo,
+                        state = PortProbeState.ERROR,
+                        summary = exception.message ?: "Probe failed",
+                        lastProbedAtMs = System.currentTimeMillis(),
+                    )
+                }
             }
-        } catch (exception: Exception) {
-            SignalSlingerPortProbe(
-                portInfo = portInfo,
-                state = PortProbeState.ERROR,
-                summary = exception.message ?: "Probe failed",
-                lastProbedAtMs = System.currentTimeMillis(),
-            )
+            Thread.sleep(probeRetryDelayMs)
         }
+
+        return SignalSlingerPortProbe(
+            portInfo = portInfo,
+            state = PortProbeState.NOT_DETECTED,
+            summary = "No recognizable reply",
+            lastProbedAtMs = System.currentTimeMillis(),
+        )
     }
 
     fun probeWithConnectedTransport(
@@ -100,7 +121,7 @@ object SignalSlingerPortDiscovery {
         ports: List<DesktopSerialPortInfo> = DesktopSerialTransport.listAvailablePorts(),
         transportFactory: (DesktopSerialPortInfo) -> DeviceTransport = ::defaultTransportFor,
     ): List<SignalSlingerPortProbe> {
-        return ports.map { portInfo -> probePort(portInfo, transportFactory) }
+        return ports.map { portInfo -> probePort(portInfo, transportFactory = transportFactory) }
     }
 
     fun findFirstDetectedPort(
@@ -111,7 +132,7 @@ object SignalSlingerPortDiscovery {
         val probes = mutableListOf<SignalSlingerPortProbe>()
 
         for (portInfo in ports) {
-            val result = probePort(portInfo, transportFactory)
+            val result = probePort(portInfo, transportFactory = transportFactory)
             probes += result
             onProbeComplete?.invoke(result)
             if (result.state == PortProbeState.DETECTED) {
@@ -150,6 +171,30 @@ object SignalSlingerPortDiscovery {
             PortProbeState.ERROR -> "Probe failed"
             PortProbeState.UNCHECKED -> "Not checked"
         }
+    }
+
+    internal fun shouldRetryProbeResult(
+        result: SignalSlingerPortProbe,
+        retryOnNoReply: Boolean,
+        attemptIndex: Int,
+        maxAttempts: Int = probeRetryCount,
+    ): Boolean {
+        val hasAttemptsRemaining = attemptIndex < maxAttempts - 1
+        return hasAttemptsRemaining &&
+            retryOnNoReply &&
+            result.state == PortProbeState.NOT_DETECTED &&
+            result.evidenceLines.isEmpty()
+    }
+
+    internal fun shouldRetryProbe(
+        exception: Exception,
+        attemptIndex: Int,
+        maxAttempts: Int = probeRetryCount,
+    ): Boolean {
+        val hasAttemptsRemaining = attemptIndex < maxAttempts - 1
+        val message = exception.message.orEmpty().lowercase()
+        return hasAttemptsRemaining &&
+            (message.contains("error code 2") || message.contains("failed to write complete payload"))
     }
 
     private fun defaultTransportFor(portInfo: DesktopSerialPortInfo): DeviceTransport {

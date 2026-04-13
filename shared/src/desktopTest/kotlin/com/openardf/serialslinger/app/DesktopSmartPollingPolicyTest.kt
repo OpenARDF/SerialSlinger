@@ -30,6 +30,18 @@ class DesktopSmartPollingPolicyTest {
     }
 
     @Test
+    fun preferredPortPathFallsBackToTtyAliasWhenCuAliasIsUnavailable() {
+        val ttyPort = DesktopSerialPortInfo("tty.usbserial-ABSCDL93", "/dev/tty.usbserial-ABSCDL93", "A", "A")
+
+        val preferred = DesktopSmartPollingPolicy.preferredPortPath(
+            availablePorts = listOf(ttyPort),
+            requestedPath = "/dev/cu.usbserial-ABSCDL93",
+        )
+
+        assertEquals("/dev/tty.usbserial-ABSCDL93", preferred)
+    }
+
+    @Test
     fun canonicalizePortsLeavesLinuxAndWindowsPortsUnchanged() {
         val linuxPort = DesktopSerialPortInfo("ttyUSB0", "/dev/ttyUSB0", "USB", "USB")
         val windowsPort = DesktopSerialPortInfo("COM3", "COM3", "COM3", "COM3")
@@ -141,5 +153,17 @@ class DesktopSmartPollingPolicyTest {
     fun aliasGroupKeyIgnoresNonMacosPortNames() {
         assertNull(DesktopSmartPollingPolicy.aliasGroupKey("/dev/ttyUSB0"))
         assertNull(DesktopSmartPollingPolicy.aliasGroupKey("COM3"))
+    }
+
+    @Test
+    fun aliasCandidatesIncludeBothMacAliases() {
+        assertEquals(
+            listOf("/dev/cu.usbserial-ABSCDL93", "/dev/tty.usbserial-ABSCDL93"),
+            DesktopSmartPollingPolicy.aliasCandidates("/dev/cu.usbserial-ABSCDL93"),
+        )
+        assertEquals(
+            listOf("/dev/tty.usbserial-ABSCDL93", "/dev/cu.usbserial-ABSCDL93"),
+            DesktopSmartPollingPolicy.aliasCandidates("/dev/tty.usbserial-ABSCDL93"),
+        )
     }
 }

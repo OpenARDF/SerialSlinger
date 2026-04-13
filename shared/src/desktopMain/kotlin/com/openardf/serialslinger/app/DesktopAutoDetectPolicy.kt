@@ -28,15 +28,43 @@ object DesktopAutoDetectPolicy {
         val canonicalPorts = DesktopSmartPollingPolicy.canonicalizePorts(availablePorts)
         val preferredConnectedPath = DesktopSmartPollingPolicy.preferredPortPath(canonicalPorts, connectedPortPath)
         val preferredLastWorkingPath = DesktopSmartPollingPolicy.preferredPortPath(canonicalPorts, lastWorkingPortPath)
-        val portsToSearch = canonicalPorts.filterNot { it.systemPortPath == preferredConnectedPath }
-        val rememberedPort = portsToSearch.firstOrNull { it.systemPortPath == preferredLastWorkingPath }
-        val others = portsToSearch.filterNot { it.systemPortPath == preferredLastWorkingPath }
+        val connectedAliasGroup = DesktopSmartPollingPolicy.aliasGroupKey(preferredConnectedPath ?: connectedPortPath.orEmpty())
+        val rememberedAliasGroup = DesktopSmartPollingPolicy.aliasGroupKey(preferredLastWorkingPath ?: lastWorkingPortPath.orEmpty())
 
-        return buildList {
-            if (rememberedPort != null) {
-                add(rememberedPort)
+        return availablePorts
+            .filterNot { portInfo ->
+                portInfo.systemPortPath == preferredConnectedPath ||
+                    (
+                        connectedAliasGroup != null &&
+                            DesktopSmartPollingPolicy.aliasGroupKey(portInfo.systemPortPath) == connectedAliasGroup
+                        )
             }
-            addAll(others)
+            .sortedWith(
+                compareBy<DesktopSerialPortInfo>(
+                    { rememberPriority(portInfo = it, preferredPath = preferredLastWorkingPath, aliasGroup = rememberedAliasGroup) },
+                    { aliasPriority(it.systemPortPath) },
+                    { it.systemPortPath },
+                ),
+            )
+    }
+
+    private fun rememberPriority(
+        portInfo: DesktopSerialPortInfo,
+        preferredPath: String?,
+        aliasGroup: String?,
+    ): Int {
+        return when {
+            preferredPath != null && portInfo.systemPortPath == preferredPath -> 0
+            aliasGroup != null && DesktopSmartPollingPolicy.aliasGroupKey(portInfo.systemPortPath) == aliasGroup -> 1
+            else -> 2
+        }
+    }
+
+    private fun aliasPriority(systemPortPath: String): Int {
+        return when {
+            systemPortPath.startsWith("/dev/cu.") -> 0
+            systemPortPath.startsWith("/dev/tty.") -> 1
+            else -> 0
         }
     }
 }

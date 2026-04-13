@@ -32,6 +32,9 @@ object DesktopSmartPollingPolicy {
             availablePorts.firstOrNull {
                 aliasGroupKey(it.systemPortPath) == aliasGroup && it.systemPortPath.startsWith("/dev/cu.")
             }?.let { return it.systemPortPath }
+            availablePorts.firstOrNull {
+                aliasGroupKey(it.systemPortPath) == aliasGroup
+            }?.let { return it.systemPortPath }
         }
 
         return requested?.systemPortPath ?: requestedPath.takeIf { path ->
@@ -102,6 +105,27 @@ object DesktopSmartPollingPolicy {
             deviceName.startsWith("tty.") -> deviceName.removePrefix("tty.")
             else -> null
         }
+    }
+
+    fun aliasCandidates(systemPortPath: String?): List<String> {
+        systemPortPath ?: return emptyList()
+        val devicePrefix = "/dev/"
+        if (!systemPortPath.startsWith(devicePrefix)) {
+            return listOf(systemPortPath)
+        }
+
+        val deviceName = systemPortPath.removePrefix(devicePrefix)
+        return when {
+            deviceName.startsWith("cu.") -> listOf(
+                systemPortPath,
+                "$devicePrefix" + "tty." + deviceName.removePrefix("cu."),
+            )
+            deviceName.startsWith("tty.") -> listOf(
+                systemPortPath,
+                "$devicePrefix" + "cu." + deviceName.removePrefix("tty."),
+            )
+            else -> listOf(systemPortPath)
+        }.distinct()
     }
 
     private data class Candidate(
