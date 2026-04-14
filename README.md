@@ -4,11 +4,6 @@ SerialSlinger is a desktop app for configuring SignalSlinger devices through a g
 
 Download the latest build: [Install SerialSlinger](https://www.jdeploy.com/gh/OpenARDF/SerialSlinger)
 
-## Download
-
-- [Install SerialSlinger](https://www.jdeploy.com/gh/OpenARDF/SerialSlinger)
-- [GitHub releases](https://github.com/OpenARDF/SerialSlinger/releases)
-
 ## What It Does
 
 When a SignalSlinger is connected, SerialSlinger is intended to:
@@ -26,7 +21,6 @@ The goal is to make SignalSlinger setup practical without memorizing serial comm
 - macOS is the currently verified desktop path
 - Windows and Linux remain target platforms, but should still be treated as early-stage
 - Android is a planned target
-- iOS is currently out of scope for direct USB or serial support
 
 ## Project Status
 
@@ -38,6 +32,7 @@ The project currently includes:
 
 ## More Information
 
+- [SignalSlinger Partner Project](https://github.com/OpenARDF/SignalSlinger)
 - [Developer Guide](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/developer-guide.md)
 - [Packaging And Release](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/packaging-and-release.md)
 - [Design Goals](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/design-goals.md)

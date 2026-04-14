@@ -165,6 +165,18 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun estimatesCoarseClockErrorFromSingleSample() {
+        val phaseError = DesktopInputSupport.estimateCoarseClockErrorMillis(
+            DesktopInputSupport.ClockPhaseSample(
+                midpointAt = LocalDateTime.of(2026, 4, 11, 12, 0, 5, 700_000_000),
+                reportedTimeCompact = "260411120005",
+            ),
+        )
+
+        assertEquals(200L, phaseError)
+    }
+
+    @Test
     fun picksNextWholeSecondAfterRequestedLeadTime() {
         val target = DesktopInputSupport.nextSyncTargetTime(
             systemNow = LocalDateTime.of(2026, 4, 11, 12, 0, 5, 600_000_000),

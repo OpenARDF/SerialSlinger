@@ -77,6 +77,9 @@ import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
 
 fun main() {
+    System.setProperty("apple.laf.useScreenMenuBar", "true")
+    System.setProperty("apple.awt.application.name", "SerialSlinger")
+    System.setProperty("com.apple.mrj.application.apple.menu.about.name", "SerialSlinger")
     SwingUtilities.invokeLater {
         SerialSlingerDesktopFrame().isVisible = true
     }
@@ -3342,7 +3345,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (loadedSnapshot?.capabilities?.supportsScheduling != true) {
             return
         }
-        if ((System.currentTimeMillis() - lastDeviceTimeCheckAtMs) < 600_000L) {
+        if ((System.currentTimeMillis() - lastDeviceTimeCheckAtMs) < PERIODIC_DEVICE_TIME_CHECK_INTERVAL_MS) {
             return
         }
 
@@ -3352,24 +3355,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         ) {
             val transport = requireNotNull(currentTransport)
             val state = requireNotNull(currentState)
-            val clockSamples = observeClockPhaseSamples(transport, maxSamples = 8)
-            val responseLines = mutableListOf<String>()
-            responseLines += clockSamples.flatMap { it.responseLines }
-            val eventSentAtMs = System.currentTimeMillis()
-            transport.sendCommands(listOf("EVT"))
-            val eventLines = transport.readAvailableLines()
-            val eventReceivedAtMs = System.currentTimeMillis()
-            responseLines += eventLines
+            val clockSample = readClockSample(transport)
+            val responseLines = clockSample.responseLines.toMutableList()
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
-            val phaseErrorMillis = DesktopInputSupport.estimateClockPhaseErrorMillis(
-                clockSamples.map { sample ->
-                    DesktopInputSupport.ClockPhaseSample(
-                        midpointAt = sample.midpointAt,
-                        reportedTimeCompact = sample.reportedTimeCompact,
-                    )
-                },
+            val phaseErrorMillis = DesktopInputSupport.estimateCoarseClockErrorMillis(
+                DesktopInputSupport.ClockPhaseSample(
+                    midpointAt = clockSample.midpointAt,
+                    reportedTimeCompact = clockSample.reportedTimeCompact,
+                ),
             )
-            val latestClockSample = clockSamples.lastOrNull()
+            val latestClockSample = clockSample
 
             SwingUtilities.invokeLater {
                 if (responseLines.isNotEmpty()) {
@@ -3379,23 +3374,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     if (phaseErrorMillis != null && kotlin.math.abs(phaseErrorMillis) <= 500L) {
                         applyClockDisplayAnchor(
                             ClockDisplayAnchor(
-                                currentTimeCompact = latestClockSample?.reportedTimeCompact,
-                                referenceTime = latestClockSample?.midpointAt,
+                                currentTimeCompact = latestClockSample.reportedTimeCompact,
+                                referenceTime = latestClockSample.midpointAt,
                                 phaseErrorMillis = phaseErrorMillis,
                             ),
                         )
                     }
                     updateClockPhaseWarning(phaseErrorMillis)
                     appendLog("Device Time Check", buildList {
-                        clockSamples.forEach { sample ->
-                            add(DesktopLogEntry("TX CLK T", DesktopLogCategory.SERIAL, sample.sentAtMs))
-                            sample.responseLines.forEach { line ->
-                                add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, sample.receivedAtMs))
-                            }
-                        }
-                        add(DesktopLogEntry("TX EVT", DesktopLogCategory.SERIAL, eventSentAtMs))
-                        eventLines.forEach { line ->
-                            add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, eventReceivedAtMs))
+                        add(DesktopLogEntry("TX CLK T", DesktopLogCategory.SERIAL, clockSample.sentAtMs))
+                        clockSample.responseLines.forEach { line ->
+                            add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, clockSample.receivedAtMs))
                         }
                         add(
                             DesktopLogEntry(
@@ -3941,5 +3930,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         const val NULLABLE_TIMESTAMP_STATUS_LABEL_KEY = "serialslinger.nullableTimestampStatusLabel"
         const val AUTO_DETECT_BUTTON_LONG_PRESS_MS = 900
         const val CLONE_BUTTON_LONG_PRESS_MS = 900
+        const val PERIODIC_DEVICE_TIME_CHECK_INTERVAL_MS = 1_800_000L
     }
 }

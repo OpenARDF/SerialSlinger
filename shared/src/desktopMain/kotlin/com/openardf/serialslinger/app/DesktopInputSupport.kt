@@ -494,6 +494,11 @@ object DesktopInputSupport {
         return null
     }
 
+    fun estimateCoarseClockErrorMillis(sample: ClockPhaseSample): Long? {
+        val reportedTime = sample.reportedTimeCompact?.let(::parseCompactTimestamp) ?: return null
+        return Duration.between(reportedTime, sample.midpointAt).toMillis() - 500L
+    }
+
     fun foxRoleOptions(eventType: EventType): List<FoxRole> {
         return when (eventType) {
             EventType.CLASSIC -> listOf(
