@@ -9,7 +9,7 @@ When a SignalSlinger is connected to a serial port, SerialSlinger should:
 1. connect to the device
 2. read the device's current settings
 3. present those settings to the user in a graphical table
-4. let the user edit the settings in that table
+4. let the user edit those settings in that table
 5. write the requested changes back to the device when the user clicks Submit
 
 The user should not need to memorize or understand raw SignalSlinger serial commands.
@@ -104,6 +104,13 @@ For local prerelease testing before the first real jDeploy publish, prefer `npm 
 `npm run jdeploy:verify-install` runs jDeploy's installation verification against the current local `package.json`.
 `npm run jdeploy:pack-preview` shows the exact npm/jDeploy package payload without publishing anything, using the generated `jdeploy-bundle/` layout that jDeploy publishes.
 The repository also includes a macOS-focused GitHub Actions workflow at [.github/workflows/jdeploy-release.yml](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/.github/workflows/jdeploy-release.yml). It publishes jDeploy release artifacts for tags beginning with `v`, which keeps routine branch pushes from creating unwanted public installer releases.
+For the first public GitHub-hosted jDeploy release, the intended flow is:
+
+- merge the desired release state to `main`
+- create and push a tag like `v0.1.85`
+- let the GitHub Actions workflow publish the macOS jDeploy release artifacts for that tag
+
+The workflow is pinned to the GitHub release target rather than npm publishing, so it matches the near-term goal of offering a GitHub-based installation path first.
 
 The repository now also includes a baseline [package.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/package.json) for jDeploy that points at that generated jar and uses the baseline app icon.
 

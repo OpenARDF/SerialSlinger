@@ -43,3 +43,5 @@ jobs:
         uses: shannah/jdeploy@master
         with:
           github_token: ${{ github.token }}
+          deploy_target: github
+          jdeploy_version: "6.1.3"
