@@ -74,10 +74,40 @@ From the repository root:
 - `./gradlew desktopSmokeRun --args="list"`
 - `./gradlew desktopAppRun`
 
+## jDeploy Groundwork
+
+From the repository root:
+
+- `./gradlew prepareDesktopJdeployBundle`
+- `./gradlew verifyDesktopJdeployBundle`
+- `jdeploy package`
+- `npm run jdeploy:local`
+
+These tasks prepare the executable desktop jar layout that jDeploy expects under:
+
+- `shared/build/jdeploy`
+
+The generated jar is:
+
+- `shared/build/jdeploy/SerialSlinger-jdeploy.jar`
+
+Running `jdeploy package` on a machine with Node, npm, Java, and the `jdeploy` CLI installed creates a local `jdeploy-bundle/` directory for install/publish preparation. That directory is generated output and is ignored by git.
+Running `jdeploy install` also creates a local `jdeploy/` working directory while preparing the installer metadata. That directory is also generated output and is ignored by git.
+For local prerelease testing before the first real jDeploy publish, prefer `jdeploy run --install`. Launching the installed app bundle directly may try to check remote package metadata that does not exist yet, and mixing both launch paths can result in multiple local app instances during testing.
+`npm run jdeploy:local` is the repeatable local smoke-test command. It prepares the jDeploy desktop bundle, verifies it, and then launches via `jdeploy run --install`.
+
+The repository now also includes a baseline [package.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/package.json) for jDeploy that points at that generated jar and uses the baseline app icon.
+
+Before the first real jDeploy publish, review the package name in `package.json` and confirm it is the public identity you want to claim for npm and jDeploy.
+That reminder is now enforced by [scripts/check-jdeploy-publish.mjs](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/scripts/check-jdeploy-publish.mjs) through `package.json`'s `prepublishOnly` hook. A real publish will stop until you intentionally set `SERIALSLINGER_ALLOW_JDEPLOY_PUBLISH=1`.
+
+This jDeploy path is additive. It does not replace the existing `jpackage`-based native packaging flow.
+
 ## macOS Packaging
 
 From the repository root on macOS:
 
+- `./gradlew verifyDesktopPackagingEnvironment`
 - `./gradlew desktopAppImage`
 - `./gradlew desktopDmg`
 
@@ -87,12 +117,14 @@ The generated packaging artifacts are written under:
 
 `desktopDmg` currently produces an unsigned `.dmg` for local drag-and-drop testing. Apple signing and notarization can be added later for normal end-user distribution.
 
-Note: the packaged macOS installer version uses a `1.x.y` format because `jpackage` does not accept an app-package version beginning with `0`. The in-app SerialSlinger version shown in the log and window title remains on the project’s `0.1.x` development track.
+Note: the packaged macOS installer version uses a `1.x.y` format because `jpackage` does not accept an app-package version beginning with `0`. The in-app SerialSlinger version shown in the log and window title remains on the project’s `0.1.x` development track, and both values now come from the same version declaration in `build.gradle.kts`.
+The packaging preflight task checks that the active JDK actually includes `jpackage` before you try to build an app image or installer.
 
 ## Windows Packaging
 
 From the repository root on Windows:
 
+- `gradlew.bat verifyDesktopPackagingEnvironment`
 - `gradlew.bat desktopExe`
 - `gradlew.bat desktopMsi`
 
@@ -104,4 +136,4 @@ Notes:
 
 - `desktopExe` is the simplest Windows installer target to start with.
 - `desktopMsi` may require Windows packaging tooling such as WiX depending on the local JDK/jpackage setup.
-- Windows installers use the same `1.x.y` package-version track as macOS packaging, while the in-app SerialSlinger version remains on the `0.1.x` development track.
+- Windows installers use the same `1.x.y` package-version track as macOS packaging, while the in-app SerialSlinger version remains on the `0.1.x` development track from the same root version declaration.

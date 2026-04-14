@@ -31,6 +31,7 @@ import java.awt.Dimension
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
+import java.awt.Taskbar
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.FocusAdapter
@@ -41,6 +42,7 @@ import java.time.Duration
 import java.time.ZoneId
 import java.util.Calendar
 import java.util.Date
+import javax.imageio.ImageIO
 import javax.swing.BoundedRangeModel
 import javax.swing.BorderFactory
 import javax.swing.BoxLayout
@@ -80,7 +82,26 @@ fun main() {
 }
 
 private object SerialSlingerAppVersion {
-    const val value = "0.1.73"
+    const val value = SerialSlingerVersion.displayVersion
+}
+
+private object SerialSlingerAppIcon {
+    private const val resourcePath = "/icons/serialslinger-icon-256.png"
+
+    val image by lazy {
+        SerialSlingerAppIcon::class.java.getResourceAsStream(resourcePath)?.use(ImageIO::read)
+    }
+
+    fun install(frame: JFrame) {
+        val loadedImage = image ?: return
+        frame.iconImage = loadedImage
+
+        runCatching {
+            if (Taskbar.isTaskbarSupported()) {
+                Taskbar.getTaskbar().iconImage = loadedImage
+            }
+        }
+    }
 }
 
 private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerAppVersion.value}") {

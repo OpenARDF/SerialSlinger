@@ -3,5 +3,7 @@
 .kotlin/
 build/
 **/build/
+jdeploy-bundle/
+jdeploy/
 .DS_Store
 *.iml
