@@ -40,6 +40,18 @@ object DesktopInputSupport {
         return value.withSecond(0).withNano(0)
     }
 
+    fun truncateToSecond(value: LocalDateTime): LocalDateTime {
+        return value.withNano(0)
+    }
+
+    fun roundToSecond(value: LocalDateTime): LocalDateTime {
+        return if (value.nano >= 500_000_000) {
+            value.plusSeconds(1)
+        } else {
+            value
+        }.withNano(0)
+    }
+
     fun isManualEventStateSummary(eventStateSummary: String?): Boolean {
         val summaryLower = eventStateSummary?.trim()?.lowercase().orEmpty()
         return summaryLower.contains("user launched") || summaryLower.contains("running forever")
@@ -123,6 +135,10 @@ object DesktopInputSupport {
 
     fun patternSpeedBelongsToTimedEventSettings(eventType: EventType): Boolean {
         return eventType != EventType.FOXORING
+    }
+
+    fun patternTextIsEditable(eventType: EventType): Boolean {
+        return eventType == EventType.FOXORING
     }
 
     fun timedEventFrequencyVisibility(eventType: EventType): TimedEventFrequencyVisibility {
@@ -259,7 +275,7 @@ object DesktopInputSupport {
     ): String {
         val value = frequencyHz ?: return ""
         return when (unit) {
-            FrequencyDisplayUnit.KHZ -> "${"%.1f".format(value / 1_000.0)} kHz"
+            FrequencyDisplayUnit.KHZ -> "${value / 1_000} kHz"
             FrequencyDisplayUnit.MHZ -> "${"%.3f".format(value / 1_000_000.0)} MHz"
         }
     }
@@ -371,11 +387,7 @@ object DesktopInputSupport {
     }
 
     fun formatRoundedCompactTimestamp(timestamp: LocalDateTime): String {
-        val rounded = if (timestamp.nano >= 500_000_000) {
-            timestamp.plusSeconds(1)
-        } else {
-            timestamp
-        }.withNano(0)
+        val rounded = roundToSecond(timestamp)
         return formatCompactTimestamp(rounded)
     }
 

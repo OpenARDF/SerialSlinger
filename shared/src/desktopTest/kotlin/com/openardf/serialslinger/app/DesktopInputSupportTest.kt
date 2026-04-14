@@ -175,6 +175,15 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun roundsManualSetTargetsToNearestSecond() {
+        val rounded = DesktopInputSupport.roundToSecond(
+            LocalDateTime.of(2026, 4, 11, 12, 0, 6, 700_000_000),
+        )
+
+        assertEquals(LocalDateTime.of(2026, 4, 11, 12, 0, 7), rounded)
+    }
+
+    @Test
     fun acceptsStartTimeAtOrAfterFirmwareMinimumEpoch() {
         val validated = DesktopInputSupport.validateStartTimeForWrite("210101000000")
 
@@ -240,6 +249,13 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun patternTextIsEditableOnlyForFoxoring() {
+        assertEquals(false, DesktopInputSupport.patternTextIsEditable(EventType.CLASSIC))
+        assertEquals(true, DesktopInputSupport.patternTextIsEditable(EventType.FOXORING))
+        assertEquals(false, DesktopInputSupport.patternTextIsEditable(EventType.SPRINT))
+    }
+
+    @Test
     fun treatsPatternSpeedAsTimedEventSettingOnlyOutsideFoxoring() {
         assertEquals(true, DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(EventType.CLASSIC))
         assertEquals(false, DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(EventType.FOXORING))
@@ -287,7 +303,7 @@ class DesktopInputSupportTest {
 
     @Test
     fun formatsFrequencyInRequestedUnit() {
-        assertEquals("3520.0 kHz", DesktopInputSupport.formatFrequencyForDisplay(3_520_000L, FrequencyDisplayUnit.KHZ))
+        assertEquals("3520 kHz", DesktopInputSupport.formatFrequencyForDisplay(3_520_000L, FrequencyDisplayUnit.KHZ))
         assertEquals("3.520 MHz", DesktopInputSupport.formatFrequencyForDisplay(3_520_000L, FrequencyDisplayUnit.MHZ))
     }
 

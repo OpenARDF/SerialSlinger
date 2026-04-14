@@ -12,11 +12,17 @@ enum class TemperatureDisplayUnit {
     FAHRENHEIT,
 }
 
+enum class TimeSetMode {
+    MANUAL,
+    SYSTEM_CLOCK,
+}
+
 data class DesktopDisplayPreferences(
     val frequencyDisplayUnit: FrequencyDisplayUnit = FrequencyDisplayUnit.MHZ,
     val temperatureDisplayUnit: TemperatureDisplayUnit = TemperatureDisplayUnit.CELSIUS,
     val logVisible: Boolean = false,
     val rawSerialVisible: Boolean = true,
+    val timeSetMode: TimeSetMode = TimeSetMode.SYSTEM_CLOCK,
 )
 
 interface DesktopDisplayPreferencesStore {
@@ -31,6 +37,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
     private const val keyTemperatureDisplayUnit = "temperatureDisplayUnit"
     private const val keyLogVisible = "logVisible"
     private const val keyRawSerialVisible = "rawSerialVisible"
+    private const val keyTimeSetMode = "timeSetMode"
     private val preferences: Preferences = Preferences.userRoot().node(nodePath)
 
     override fun load(): DesktopDisplayPreferences {
@@ -45,6 +52,10 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
             ),
             logVisible = preferences.getBoolean(keyLogVisible, false),
             rawSerialVisible = preferences.getBoolean(keyRawSerialVisible, true),
+            timeSetMode = loadEnum(
+                key = keyTimeSetMode,
+                defaultValue = TimeSetMode.SYSTEM_CLOCK,
+            ),
         )
     }
 
@@ -53,6 +64,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
         this.preferences.put(keyTemperatureDisplayUnit, preferences.temperatureDisplayUnit.name)
         this.preferences.putBoolean(keyLogVisible, preferences.logVisible)
         this.preferences.putBoolean(keyRawSerialVisible, preferences.rawSerialVisible)
+        this.preferences.put(keyTimeSetMode, preferences.timeSetMode.name)
         this.preferences.flush()
     }
 
