@@ -103,6 +103,7 @@ For local prerelease testing before the first real jDeploy publish, prefer `npm 
 `npm run jdeploy:local` is the repeatable local smoke-test command. It uses the project-local `jdeploy run --install` path and automatically prepares the generated bundle first.
 `npm run jdeploy:verify-install` runs jDeploy's installation verification against the current local `package.json`.
 `npm run jdeploy:pack-preview` shows the exact npm/jDeploy package payload without publishing anything, using the generated `jdeploy-bundle/` layout that jDeploy publishes.
+The repository also includes a macOS-focused GitHub Actions workflow at [.github/workflows/jdeploy-release.yml](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/.github/workflows/jdeploy-release.yml). It publishes jDeploy release artifacts for tags beginning with `v`, which keeps routine branch pushes from creating unwanted public installer releases.
 
 The repository now also includes a baseline [package.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/package.json) for jDeploy that points at that generated jar and uses the baseline app icon.
 
