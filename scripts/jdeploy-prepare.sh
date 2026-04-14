@@ -11,4 +11,3 @@ export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 cd "$REPO_ROOT"
 
 ./gradlew prepareDesktopJdeployBundle verifyDesktopJdeployBundle
-npx --no-install jdeploy run --install
