@@ -25,9 +25,8 @@
     "jdeploy:install-local": "npx --no-install jdeploy install -y",
     "jdeploy:verify-install": "npx --no-install jdeploy verify-installation --package-json=package.json --verbose",
     "jdeploy:local": "npx --no-install jdeploy run --install",
-    "jdeploy:pack-preview": "npm pack --dry-run",
+    "jdeploy:pack-preview": "npm run jdeploy:package && npm pack --dry-run --ignore-scripts",
     "jdeploy:release-preflight": "node ./scripts/check-jdeploy-release-ready.mjs",
-    "prepack": "npm run jdeploy:package",
     "prepublishOnly": "node ./scripts/check-jdeploy-publish.mjs"
   },
   "dependencies": {
