@@ -85,6 +85,7 @@ From the repository root:
 - `npm run jdeploy:verify-install`
 - `npm run jdeploy:local`
 - `npm run jdeploy:pack-preview`
+- `npm run jdeploy:release-preflight`
 
 These tasks prepare and use the executable desktop jar layout that jDeploy expects under:
 
@@ -103,9 +104,11 @@ For local prerelease testing before the first real jDeploy publish, prefer `npm 
 `npm run jdeploy:local` is the repeatable local smoke-test command. It uses the project-local `jdeploy run --install` path and automatically prepares the generated bundle first.
 `npm run jdeploy:verify-install` runs jDeploy's installation verification against the current local `package.json`.
 `npm run jdeploy:pack-preview` shows the exact npm/jDeploy package payload without publishing anything, using the generated `jdeploy-bundle/` layout that jDeploy publishes.
+`npm run jdeploy:release-preflight` checks that the Gradle version, npm version, jDeploy workflow, and intended `v*` release tag are aligned before the first real public release tag is pushed.
 The repository also includes a macOS-focused GitHub Actions workflow at [.github/workflows/jdeploy-release.yml](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/.github/workflows/jdeploy-release.yml). It publishes jDeploy release artifacts for tags beginning with `v`, which keeps routine branch pushes from creating unwanted public installer releases.
 For the first public GitHub-hosted jDeploy release, the intended flow is:
 
+- run `npm run jdeploy:release-preflight`
 - merge the desired release state to `main`
 - create and push a tag like `v1.0.85`
 - let the GitHub Actions workflow publish the macOS jDeploy release artifacts for that tag
