@@ -17,6 +17,9 @@
     "serialslinger": "jdeploy-bundle/jdeploy.js"
   },
   "scripts": {
+    "jdeploy:package": "npx --no-install jdeploy package",
+    "jdeploy:install-local": "npx --no-install jdeploy install -y",
+    "jdeploy:verify-install": "npx --no-install jdeploy verify-installation --package-json=package.json --verbose",
     "jdeploy:local": "./scripts/jdeploy-local-smoke.sh",
     "jdeploy:pack-preview": "npm pack --dry-run",
     "prepublishOnly": "node ./scripts/check-jdeploy-publish.mjs"
