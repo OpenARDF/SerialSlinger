@@ -112,10 +112,9 @@ For the first public GitHub-hosted jDeploy release, the intended flow is:
 
 The workflow is pinned to the GitHub release target rather than npm publishing, so it matches the near-term goal of offering a GitHub-based installation path first.
 
-The repository now also includes a baseline [package.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/package.json) for jDeploy that points at that generated jar and uses the baseline app icon.
+The repository now also includes a baseline [package.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/package.json) for jDeploy that points at that generated jar and uses the baseline app icon. The chosen public package identity is `serialslinger`.
 
-Before the first real jDeploy publish, review the package name in `package.json` and confirm it is the public identity you want to claim for npm and jDeploy.
-That reminder is now enforced by [scripts/check-jdeploy-publish.mjs](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/scripts/check-jdeploy-publish.mjs) through `package.json`'s `prepublishOnly` hook. A real publish will stop until you intentionally set `SERIALSLINGER_ALLOW_JDEPLOY_PUBLISH=1`.
+The publish guard is still enforced by [scripts/check-jdeploy-publish.mjs](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/scripts/check-jdeploy-publish.mjs) through `package.json`'s `prepublishOnly` hook. A real publish will stop until you intentionally set `SERIALSLINGER_ALLOW_JDEPLOY_PUBLISH=1` and confirm that the generated jDeploy artifacts are the ones you want to ship.
 
 This jDeploy path is additive. It does not replace the existing `jpackage`-based native packaging flow.
 
