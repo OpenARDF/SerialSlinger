@@ -22,6 +22,7 @@ for tool in gh iconutil sips tar; do
 done
 
 tmp_dir="$(mktemp -d)"
+launcher_name="SerialSlinger"
 cleanup() {
   rm -rf "$tmp_dir"
 }
@@ -66,6 +67,10 @@ patch_installer_asset() {
   fi
 
   cp "$tmp_dir/icon.icns" "$app_dir/Contents/Resources/icon.icns"
+  if [[ -f "$app_dir/Contents/MacOS/Client4JLauncher" ]]; then
+    mv "$app_dir/Contents/MacOS/Client4JLauncher" "$app_dir/Contents/MacOS/$launcher_name"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $launcher_name" "$app_dir/Contents/Info.plist"
+  fi
   (
     cd "$unpack_dir"
     tar -czf "$asset_dir/patched.tgz" "$(basename "$top_dir")"

@@ -38,6 +38,7 @@ import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.io.File
 import java.time.Duration
 import java.time.ZoneId
 import java.util.Calendar
@@ -77,12 +78,33 @@ import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
 
 fun main() {
-    System.setProperty("apple.laf.useScreenMenuBar", "true")
+    System.setProperty("apple.laf.useScreenMenuBar", shouldUseMacScreenMenuBar().toString())
     System.setProperty("apple.awt.application.name", "SerialSlinger")
     System.setProperty("com.apple.mrj.application.apple.menu.about.name", "SerialSlinger")
     SwingUtilities.invokeLater {
         SerialSlingerDesktopFrame().isVisible = true
     }
+}
+
+private fun shouldUseMacScreenMenuBar(): Boolean {
+    if (!System.getProperty("os.name").contains("mac", ignoreCase = true)) {
+        return false
+    }
+    return !isRunningFromJdeployMacBundle()
+}
+
+private fun isRunningFromJdeployMacBundle(): Boolean {
+    val executablePath = runCatching {
+        ProcessHandle.current().info().command().orElse(null)
+    }.getOrNull() ?: return false
+    val executableFile = File(executablePath)
+    val infoPlist = executableFile.parentFile?.parentFile?.resolve("Info.plist") ?: return false
+    if (!infoPlist.isFile) {
+        return false
+    }
+
+    val plistText = runCatching { infoPlist.readText() }.getOrNull() ?: return false
+    return "ca.weblite.jdeploy.apps." in plistText
 }
 
 private object SerialSlingerAppVersion {
