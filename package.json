@@ -18,6 +18,7 @@
   },
   "scripts": {
     "jdeploy:local": "./scripts/jdeploy-local-smoke.sh",
+    "jdeploy:pack-preview": "npm pack --dry-run",
     "prepublishOnly": "node ./scripts/check-jdeploy-publish.mjs"
   },
   "dependencies": {
