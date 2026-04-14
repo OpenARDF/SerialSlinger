@@ -107,12 +107,12 @@ The repository also includes a macOS-focused GitHub Actions workflow at [.github
 For the first public GitHub-hosted jDeploy release, the intended flow is:
 
 - merge the desired release state to `main`
-- create and push a tag like `v0.1.85`
+- create and push a tag like `v1.0.85`
 - let the GitHub Actions workflow publish the macOS jDeploy release artifacts for that tag
 
 The workflow is pinned to the GitHub release target rather than npm publishing, so it matches the near-term goal of offering a GitHub-based installation path first.
 
-The repository now also includes a baseline [package.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/package.json) for jDeploy that points at that generated jar and uses the baseline app icon. The chosen public package identity is `serialslinger`.
+The repository now also includes a baseline [package.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/package.json) for jDeploy that points at that generated jar and uses the baseline app icon. The chosen public package identity is `serialslinger`, and the shared public/app version line is `1.0.85`.
 
 The publish guard is still enforced by [scripts/check-jdeploy-publish.mjs](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/scripts/check-jdeploy-publish.mjs) through `package.json`'s `prepublishOnly` hook. A real publish will stop until you intentionally set `SERIALSLINGER_ALLOW_JDEPLOY_PUBLISH=1` and confirm that the generated jDeploy artifacts are the ones you want to ship.
 
@@ -132,7 +132,7 @@ The generated packaging artifacts are written under:
 
 `desktopDmg` currently produces an unsigned `.dmg` for local drag-and-drop testing. Apple signing and notarization can be added later for normal end-user distribution.
 
-Note: the packaged macOS installer version uses a `1.x.y` format because `jpackage` does not accept an app-package version beginning with `0`. The in-app SerialSlinger version shown in the log and window title remains on the project’s `0.1.x` development track, and both values now come from the same version declaration in `build.gradle.kts`.
+Note: the packaged macOS installer version, the in-app SerialSlinger version shown in the log and window title, and the jDeploy/npm version now all come from the same version declaration in `build.gradle.kts`.
 The packaging preflight task checks that the active JDK actually includes `jpackage` before you try to build an app image or installer.
 
 ## Windows Packaging
@@ -151,4 +151,4 @@ Notes:
 
 - `desktopExe` is the simplest Windows installer target to start with.
 - `desktopMsi` may require Windows packaging tooling such as WiX depending on the local JDK/jpackage setup.
-- Windows installers use the same `1.x.y` package-version track as macOS packaging, while the in-app SerialSlinger version remains on the `0.1.x` development track from the same root version declaration.
+- Windows installers use the same shared `1.x.y` version line as macOS packaging, the in-app SerialSlinger version, and the jDeploy/npm package.
