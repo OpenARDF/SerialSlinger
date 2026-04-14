@@ -24,6 +24,9 @@
   "dependencies": {
     "shelljs": "^0.8.4"
   },
+  "devDependencies": {
+    "jdeploy": "6.1.3"
+  },
   "jdeploy": {
     "jar": "shared/build/jdeploy/SerialSlinger-jdeploy.jar",
     "title": "SerialSlinger",

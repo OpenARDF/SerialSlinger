@@ -78,6 +78,7 @@ From the repository root:
 
 From the repository root:
 
+- `npm install`
 - `./gradlew prepareDesktopJdeployBundle`
 - `./gradlew verifyDesktopJdeployBundle`
 - `jdeploy package`
@@ -92,10 +93,11 @@ The generated jar is:
 
 - `shared/build/jdeploy/SerialSlinger-jdeploy.jar`
 
+Running `npm install` pulls in the project-local `jdeploy` CLI used by the smoke-test workflow.
 Running `jdeploy package` on a machine with Node, npm, Java, and the `jdeploy` CLI installed creates a local `jdeploy-bundle/` directory for install/publish preparation. That directory is generated output and is ignored by git.
 Running `jdeploy install` also creates a local `jdeploy/` working directory while preparing the installer metadata. That directory is also generated output and is ignored by git.
 For local prerelease testing before the first real jDeploy publish, prefer `jdeploy run --install`. Launching the installed app bundle directly may try to check remote package metadata that does not exist yet, and mixing both launch paths can result in multiple local app instances during testing.
-`npm run jdeploy:local` is the repeatable local smoke-test command. It prepares the jDeploy desktop bundle, verifies it, and then launches via `jdeploy run --install`.
+`npm run jdeploy:local` is the repeatable local smoke-test command. It prepares the jDeploy desktop bundle, verifies it, and then launches via the project-local `jdeploy run --install`.
 `npm run jdeploy:pack-preview` shows the exact npm/jDeploy package payload without publishing anything.
 
 The repository now also includes a baseline [package.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/package.json) for jDeploy that points at that generated jar and uses the baseline app icon.
