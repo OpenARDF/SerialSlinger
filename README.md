@@ -106,6 +106,7 @@ For local prerelease testing before the first real jDeploy publish, prefer `npm 
 `npm run jdeploy:pack-preview` shows the exact npm/jDeploy package payload without publishing anything, using the generated `jdeploy-bundle/` layout that jDeploy publishes.
 `npm run jdeploy:release-preflight` checks that the Gradle version, npm version, jDeploy workflow, and intended `v*` release tag are aligned before the first real public release tag is pushed.
 The repository also includes a macOS-focused GitHub Actions workflow at [.github/workflows/jdeploy-release.yml](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/.github/workflows/jdeploy-release.yml). It publishes jDeploy release artifacts for tags beginning with `v`, which keeps routine branch pushes from creating unwanted public installer releases.
+That workflow also refreshes the `jdeploy` release icon asset and repairs the macOS installer wrapper icon after publish so the public download path stays branded with the project icon.
 For the first public GitHub-hosted jDeploy release, the intended flow is:
 
 - run `npm run jdeploy:release-preflight`
