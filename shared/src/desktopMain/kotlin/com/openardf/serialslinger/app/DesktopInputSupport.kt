@@ -7,6 +7,7 @@ import com.openardf.serialslinger.model.FrequencySupport
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlin.math.roundToLong
 
 object DesktopInputSupport {
     private val displayTimestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -14,6 +15,8 @@ object DesktopInputSupport {
     private const val syncLeadSeconds = 2L
     private val minimumValidTimestamp = LocalDateTime.of(2021, 1, 1, 0, 0, 0)
     private const val waitingForReadPlaceholder = "Waiting for read"
+    private const val minimumSupportedFrequencyHz = 3_501_000L
+    private const val maximumSupportedFrequencyHz = 3_700_000L
 
     data class ClockPhaseSample(
         val midpointAt: LocalDateTime,
@@ -42,6 +45,27 @@ object DesktopInputSupport {
 
     fun truncateToSecond(value: LocalDateTime): LocalDateTime {
         return value.withNano(0)
+    }
+
+    fun stepDateTimeByMinuteInterval(
+        value: LocalDateTime,
+        stepMinutes: Int,
+        forward: Boolean,
+    ): LocalDateTime {
+        require(stepMinutes > 0) { "stepMinutes must be positive." }
+        val truncated = truncateToMinute(value)
+        if (stepMinutes == 1) {
+            return truncated.plusMinutes(if (forward) 1 else -1)
+        }
+
+        val minute = truncated.minute
+        val remainder = minute % stepMinutes
+        val deltaMinutes = if (forward) {
+            if (remainder == 0) stepMinutes else stepMinutes - remainder
+        } else {
+            if (remainder == 0) -stepMinutes else -remainder
+        }
+        return truncated.plusMinutes(deltaMinutes.toLong())
     }
 
     fun roundToSecond(value: LocalDateTime): LocalDateTime {
@@ -189,12 +213,30 @@ object DesktopInputSupport {
     }
 
     fun validateCurrentTimeForWrite(currentTimeCompact: String?): String? {
-        val current = requireValidTimestampForWrite("Current Time", currentTimeCompact) ?: return null
+        val current = requireValidTimestampForWrite("Device Time", currentTimeCompact) ?: return null
         return formatCompactTimestamp(current)
     }
 
     fun validateStartTimeForWrite(startTimeCompact: String?): String? {
         val start = requireValidTimestampForWrite("Start Time", startTimeCompact) ?: return null
+        return formatCompactTimestamp(start)
+    }
+
+    fun validateFinishTimeForWrite(finishTimeCompact: String?): String? {
+        val finish = requireValidTimestampForWrite("Finish Time", finishTimeCompact) ?: return null
+        return formatCompactTimestamp(finish)
+    }
+
+    fun resolveStartTimeForChange(
+        startTimeCompact: String?,
+        currentTimeCompact: String?,
+    ): String? {
+        val current = requireValidTimestampForWrite("Device Time", currentTimeCompact)
+            ?: error("Set Device Time first before changing Start Time.")
+        val start = requireValidTimestampForWrite("Start Time", startTimeCompact) ?: return null
+        require(!start.isBefore(current)) {
+            "Start Time must not be earlier than Device Time."
+        }
         return formatCompactTimestamp(start)
     }
 
@@ -209,19 +251,48 @@ object DesktopInputSupport {
                 startTimeCompact = start?.let(::formatCompactTimestamp),
                 finishTimeCompact = null,
             )
-        val current = currentTimeCompact?.let(::parseCompactTimestamp)
+        val current = requireValidTimestampForWrite("Device Time", currentTimeCompact)
+            ?: error("Set Device Time first before changing Finish Time.")
 
         require(start == null || !finish.isBefore(start)) {
             "Finish Time must not be earlier than Start Time."
         }
-        require(current == null || !finish.isBefore(current)) {
-            "Finish Time must not be earlier than Current Time."
+        require(!finish.isBefore(current)) {
+            "Finish Time must not be earlier than Device Time."
         }
 
         return ValidatedScheduleTimes(
             startTimeCompact = start?.let(::formatCompactTimestamp),
             finishTimeCompact = formatCompactTimestamp(finish),
         )
+    }
+
+    fun minimumStartTimeBoundary(
+        currentTimeCompact: String,
+        stepMinutes: Int = 5,
+    ): LocalDateTime {
+        require(stepMinutes > 0) { "stepMinutes must be positive." }
+        val current = parseCompactTimestamp(currentTimeCompact)
+        var minimum = truncateToMinute(current)
+        if (current.second > 0 || current.nano > 0) {
+            minimum = minimum.plusMinutes(1)
+        }
+        val remainder = minimum.minute % stepMinutes
+        if (remainder != 0) {
+            minimum = minimum.plusMinutes((stepMinutes - remainder).toLong())
+        }
+        return minimum
+    }
+
+    fun minimumFinishTimeBoundary(
+        currentTimeCompact: String,
+        startTimeCompact: String?,
+    ): LocalDateTime {
+        val current = parseCompactTimestamp(currentTimeCompact)
+        val start = startTimeCompact
+            ?.let(::validateStartTimeForWrite)
+            ?.let(::parseCompactTimestamp)
+        return listOfNotNull(current, start).maxOrNull() ?: current
     }
 
     fun normalizeCurrentTimeCompactForDisplay(value: String?): String? {
@@ -287,6 +358,35 @@ object DesktopInputSupport {
             FrequencyDisplayUnit.KHZ -> "${value / 1_000} kHz"
             FrequencyDisplayUnit.MHZ -> "${"%.3f".format(value / 1_000_000.0)} MHz"
         }
+    }
+
+    fun defaultFrequencySpinnerValue(unit: FrequencyDisplayUnit): Number {
+        return frequencySpinnerValue(minimumSupportedFrequencyHz, unit)
+    }
+
+    fun frequencySpinnerValue(
+        frequencyHz: Long,
+        unit: FrequencyDisplayUnit,
+    ): Number {
+        val clamped = frequencyHz.coerceIn(minimumSupportedFrequencyHz, maximumSupportedFrequencyHz)
+        return when (unit) {
+            FrequencyDisplayUnit.KHZ -> (clamped / 1_000L).toInt()
+            FrequencyDisplayUnit.MHZ -> clamped / 1_000_000.0
+        }
+    }
+
+    fun frequencyHzFromSpinnerValue(
+        value: Number,
+        unit: FrequencyDisplayUnit,
+    ): Long {
+        val frequencyHz = when (unit) {
+            FrequencyDisplayUnit.KHZ -> value.toLong() * 1_000L
+            FrequencyDisplayUnit.MHZ -> (value.toDouble() * 1_000_000.0).roundToLong()
+        }
+        require(frequencyHz in minimumSupportedFrequencyHz..maximumSupportedFrequencyHz) {
+            "Frequency must be between 3501 kHz and 3700 kHz."
+        }
+        return frequencyHz
     }
 
     fun formatDurationCompact(duration: Duration): String {
@@ -426,17 +526,21 @@ object DesktopInputSupport {
         finishTimeCompact: String?,
         systemNow: LocalDateTime = LocalDateTime.now(),
     ): String {
+        val start = startTimeCompact?.let(::parseCompactTimestamp)
+        val finish = finishTimeCompact?.let(::parseCompactTimestamp)
+
+        if (start != null && finish != null && start == finish) {
+            return "Disabled"
+        }
+
         if (deviceReportedEventEnabled != null) {
             return if (deviceReportedEventEnabled) "Enabled" else "Disabled"
         }
 
         val current = normalizeCurrentTimeCompactForDisplay(currentTimeCompact)?.let(::parseCompactTimestamp) ?: return "Disabled"
-        val start = startTimeCompact?.let(::parseCompactTimestamp) ?: return "Disabled"
-        val finish = finishTimeCompact?.let(::parseCompactTimestamp) ?: return "Disabled"
+        val resolvedStart = start ?: return "Disabled"
+        val resolvedFinish = finish ?: return "Disabled"
 
-        if (start == finish) {
-            return "Disabled"
-        }
         if (Duration.between(current, systemNow).toMinutes() > 30) {
             return "Disabled"
         }

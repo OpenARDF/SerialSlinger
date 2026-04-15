@@ -50,9 +50,9 @@ enum class FoxRole(
 enum class ExternalBatteryControlMode(
     val uiLabel: String,
 ) {
-    OFF("Disabled"),
-    CHARGE_AND_TRANSMIT("Enabled"),
-    CHARGE_ONLY("Enabled (Tx Disabled)"),
+    OFF("Ext Battery Control Disabled"),
+    CHARGE_AND_TRANSMIT("Ext Battery Control Enabled"),
+    CHARGE_ONLY("Ext Device Control (Tx Disabled)"),
     ;
 
     override fun toString(): String = uiLabel

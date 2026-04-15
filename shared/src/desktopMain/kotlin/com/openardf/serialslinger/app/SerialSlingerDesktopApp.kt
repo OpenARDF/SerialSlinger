@@ -30,7 +30,10 @@ import java.awt.Component
 import java.awt.Dimension
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
+import java.awt.Graphics
+import java.awt.Graphics2D
 import java.awt.Insets
+import java.awt.RenderingHints
 import java.awt.Taskbar
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -40,6 +43,7 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
 import java.time.Duration
+import java.time.LocalDateTime
 import java.time.ZoneId
 import java.util.Calendar
 import java.util.Date
@@ -68,12 +72,14 @@ import javax.swing.JSplitPane
 import javax.swing.JSpinner
 import javax.swing.JFormattedTextField
 import javax.swing.JRadioButtonMenuItem
+import javax.swing.SpinnerNumberModel
 import javax.swing.JTextField
 import javax.swing.JTextPane
 import javax.swing.SwingUtilities
 import javax.swing.Timer
 import javax.swing.WindowConstants
 import javax.swing.SpinnerDateModel
+import javax.swing.border.TitledBorder
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
 
@@ -130,11 +136,47 @@ private object SerialSlingerAppIcon {
     }
 }
 
+private class FieldAwareSpinnerDateModel(
+    initialValue: Date,
+    private val defaultCalendarField: Int,
+    private val selectedCalendarFieldProvider: () -> Int,
+    private val steppingProvider: (LocalDateTime, Int, Boolean) -> LocalDateTime?,
+) : SpinnerDateModel(initialValue, null, null, defaultCalendarField) {
+    override fun getNextValue(): Any {
+        return steppedValue(forward = true)
+    }
+
+    override fun getPreviousValue(): Any {
+        return steppedValue(forward = false)
+    }
+
+    private fun steppedValue(forward: Boolean): Date {
+        val currentDate = value as? Date ?: return initialDate()
+        val currentDateTime = currentDate.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime()
+        val stepped = steppingProvider(
+            currentDateTime,
+            selectedCalendarFieldProvider(),
+            forward,
+        ) ?: currentDateTime
+        return Date.from(stepped.atZone(ZoneId.systemDefault()).toInstant())
+    }
+
+    private fun initialDate(): Date {
+        val now = LocalDateTime.now()
+        return Date.from(DesktopInputSupport.truncateToMinute(now).atZone(ZoneId.systemDefault()).toInstant())
+    }
+}
+
 private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerAppVersion.value}") {
+    private val cloneAccentColor = Color(0x1E, 0x40, 0xAF)
+    private val cloneAccentBorderColor = Color(0x93, 0xC5, 0xFD)
+    private val cloneAccentBackground = Color(0xEF, 0xF6, 0xFF)
+    private val unreadFieldForeground = Color(0x6B, 0x72, 0x80)
+    private val alertForeground = Color(0xB9, 0x1C, 0x1C)
     private val portModel = DefaultComboBoxModel<SignalSlingerPortProbe>()
     private val portComboBox = JComboBox(portModel)
     private val autoDetectButton = JButton("Auto Detect")
-    private val submitButton = JButton("Clone")
+    private val submitButton = createAccentButton("Clone")
     private val cloneTemplateLabel = JLabel("Clone template not set")
     private val headlineLabel = JLabel(" ")
     private val statusLabel = JLabel("Idle")
@@ -152,39 +194,47 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
     private val contentSplitPane by lazy { JSplitPane(JSplitPane.HORIZONTAL_SPLIT, formScroll, JPanel()) }
 
+    private fun codeSpeedOptions(): List<String> = (5..20).map { DesktopInputSupport.formatCodeSpeedWpm(it) }
+
+    private fun batteryThresholdOptions(): List<String> = (35..41).map { "%.1f V".format(it / 10.0) }
+
     private val stationIdField = JTextField()
     private val eventTypeCombo =
         JComboBox(DefaultComboBoxModel(DesktopInputSupport.selectableEventTypes().toTypedArray()))
     private val foxRoleCombo = JComboBox<FoxRole>()
     private val patternTextField = JTextField()
-    private val idSpeedField = JTextField()
+    private val idSpeedField = JComboBox(DefaultComboBoxModel(codeSpeedOptions().toTypedArray()))
     private val devicePatternSpeedLabel = JLabel("Pattern Speed")
-    private val devicePatternSpeedField = JTextField()
+    private val devicePatternSpeedField = JComboBox(DefaultComboBoxModel(codeSpeedOptions().toTypedArray()))
     private val timedPatternSpeedLabel = JLabel("Pattern Speed")
-    private val timedPatternSpeedField = JTextField()
+    private val timedPatternSpeedField = JComboBox(DefaultComboBoxModel(codeSpeedOptions().toTypedArray()))
     private val currentTimeField = JTextField()
     private val systemTimeField = JTextField()
     private val manualTimeSpinner = createDateTimeSpinner(pattern = "yyyy-MM-dd HH:mm:ss", calendarField = Calendar.SECOND)
-    private val startTimeSpinner = createDateTimeSpinner()
+    private val startTimeSpinner = createFieldAwareDateTimeSpinner { current, field, forward ->
+        stepStartTimeSelection(current, field, forward)
+    }
     private val startTimeStatusLabel = JLabel(" ")
-    private val finishTimeSpinner = createDateTimeSpinner()
+    private val finishTimeSpinner = createFieldAwareDateTimeSpinner { current, field, forward ->
+        stepFinishTimeSelection(current, field, forward)
+    }
     private val finishTimeStatusLabel = JLabel(" ")
-    private val daysField = JTextField()
+    private val daysField = JSpinner(SpinnerNumberModel(1, 1, 255, 1))
     private val startsInField = JTextField()
     private val lastsField = JTextField()
     private val eventEnabledField = JTextField()
     private val disableEventButton = JButton("Disable Event")
     private val currentFrequencyField = JTextField()
     private val currentBankField = JTextField()
-    private val frequency1Field = JTextField()
-    private val frequency2Field = JTextField()
-    private val frequency3Field = JTextField()
-    private val frequencyBField = JTextField()
+    private val frequency1Field = createFrequencySpinner()
+    private val frequency2Field = createFrequencySpinner()
+    private val frequency3Field = createFrequencySpinner()
+    private val frequencyBField = createFrequencySpinner()
     private val frequency1Label = JLabel("Frequency 1")
     private val frequency2Label = JLabel("Frequency 2")
     private val frequency3Label = JLabel("Frequency 3")
     private val frequencyBLabel = JLabel("Frequency B")
-    private val batteryThresholdField = JTextField()
+    private val batteryThresholdField = JComboBox(DefaultComboBoxModel(batteryThresholdOptions().toTypedArray()))
     private val batteryModeCombo = JComboBox(DefaultComboBoxModel(ExternalBatteryControlMode.entries.toTypedArray()))
     private val transmissionsField = JTextField()
     private val versionInfoField = JTextField()
@@ -193,9 +243,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val temperatureField = JTextField()
     private val syncTimeButton = JButton("Sync")
     private val setTimeButton = JButton("Set Time")
-    private val currentTimeRowLabel = JLabel("Current Time")
+    private val currentTimeRowLabel = JLabel("Device Time")
     private val systemTimeRowLabel = JLabel("System Time")
     private val manualTimeRowLabel = JLabel("Set Device Time")
+    private val currentFrequencyRowLabel = JLabel("Frequency")
+    private val currentBankRowLabel = JLabel("Memory Bank")
+    private val transmissionsRowLabel = JLabel("External device being controlled")
     private val currentTimeRowPanel by lazy { buildCurrentTimeRow() }
     private val manualTimeRowPanel by lazy { buildManualTimeRow() }
     private val currentTimeRowSpacer = Box.createHorizontalStrut(8)
@@ -254,6 +307,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val editableTextFieldBackground = patternTextField.background
     private val editableTextFieldBorder: Border = patternTextField.border
     private val informationalTextFieldBorder: Border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
+    private val defaultInformationalFieldForeground = currentTimeField.foreground
 
     init {
         defaultCloseOperation = WindowConstants.EXIT_ON_CLOSE
@@ -303,13 +357,35 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
         installTrimmedComboRenderer(eventTypeCombo)
         installTrimmedComboRenderer(foxRoleCombo)
+        installTrimmedComboRenderer(idSpeedField)
+        installTrimmedComboRenderer(devicePatternSpeedField)
+        installTrimmedComboRenderer(timedPatternSpeedField)
+        installTrimmedComboRenderer(batteryThresholdField)
         installTrimmedComboRenderer(batteryModeCombo)
+        spinnerEditorTextField(daysField).horizontalAlignment = JFormattedTextField.LEFT
+        configureFrequencySpinner(frequency1Field)
+        configureFrequencySpinner(frequency2Field)
+        configureFrequencySpinner(frequency3Field)
+        configureFrequencySpinner(frequencyBField)
         configureLogAutoScroll()
         showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "Not Connected")
         appendRenderedLog(sessionLog.loadCurrentLogText())
         setRawSerialVisible(displayPreferences.rawSerialVisible)
         setLogVisible(displayPreferences.logVisible)
         applyTimeSetMode(displayPreferences.timeSetMode)
+        clearFormForUnread()
+        submitButton.margin = Insets(
+            autoDetectButton.margin.top,
+            14,
+            autoDetectButton.margin.bottom,
+            14,
+        )
+        val autoDetectPreferredSize = autoDetectButton.preferredSize
+        val clonePreferredSize = submitButton.preferredSize
+        val matchedCloneSize = Dimension(clonePreferredSize.width, autoDetectPreferredSize.height)
+        submitButton.preferredSize = matchedCloneSize
+        submitButton.minimumSize = matchedCloneSize
+        submitButton.maximumSize = matchedCloneSize
 
         autoDetectButton.toolTipText = "Click to scan ports. Press and hold to reload the current/selected port as the active device."
         installAutoDetectButtonLongPressHandler()
@@ -409,9 +485,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return JMenuBar().apply {
             add(
                 JMenu("View").apply {
-                    showLogMenuItem = JCheckBoxMenuItem("Show Session Log", displayPreferences.logVisible).apply {
-                        addActionListener { setLogVisible(isSelected) }
-                    }
                     showRawSerialMenuItem = JCheckBoxMenuItem("Show Raw Serial Entry", displayPreferences.rawSerialVisible).apply {
                         addActionListener { setRawSerialVisible(isSelected) }
                     }
@@ -429,7 +502,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                             )
                         }
                     }
-                    add(showLogMenuItem)
                     add(showRawSerialMenuItem)
                     addSeparator()
                     add(timeSetManualMenuItem)
@@ -483,6 +555,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             add(
                 JMenu("Tools").apply {
+                    showLogMenuItem = JCheckBoxMenuItem("Show Session Log", displayPreferences.logVisible).apply {
+                        addActionListener { setLogVisible(isSelected) }
+                    }
+                    add(showLogMenuItem)
+                    addSeparator()
                     add(
                         JMenuItem("Open Log Folder").apply {
                             addActionListener { openLogFolder() }
@@ -559,30 +636,40 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 row = addRow(section, row, currentTimeRowLabel, currentTimeRowPanel)
                 row = addRow(section, row, systemTimeRowLabel, systemTimeField)
                 row = addRow(section, row, manualTimeRowLabel, manualTimeRowPanel)
-                row = addRow(section, row, "Current Frequency", currentFrequencyField)
-                row = addRow(section, row, "Current Bank", currentBankField)
-                row = addRow(section, row, "Battery Mode", batteryModeCombo)
-                row = addRow(section, row, "Transmissions", transmissionsField)
+                row = addRow(section, row, currentFrequencyRowLabel, currentFrequencyField)
+                row = addRow(section, row, currentBankRowLabel, currentBankField)
+                row = addRow(section, row, "Ext. Bat. Ctrl", batteryModeCombo)
+                row = addRow(section, row, transmissionsRowLabel, transmissionsField)
                 addRow(section, row, "Low Battery Threshold", batteryThresholdField)
             })
             add(Box.createVerticalStrut(12))
-            add(buildSectionPanel("Timed Event Settings") { section ->
-                var row = 0
-                row = addRow(section, row, "Event Type", eventTypeCombo)
-                row = addRow(section, row, "Station ID", stationIdField)
-                row = addRow(section, row, "ID Speed", idSpeedField)
-                row = addRow(section, row, timedPatternSpeedLabel, timedPatternSpeedField)
-                row = addRow(section, row, "Start Time", buildDateTimeEditorRow(startTimeSpinner, startTimeStatusLabel))
-                row = addRow(section, row, "Finish Time", buildDateTimeEditorRow(finishTimeSpinner, finishTimeStatusLabel))
-                row = addRow(section, row, "Event Status", buildEventStatusRow())
-                row = addRow(section, row, "Lasts", lastsField)
-                row = addRow(section, row, "Days To Run", daysField)
-                row = addRow(section, row, frequency1Label, frequency1Field)
-                row = addRow(section, row, frequency2Label, frequency2Field)
-                row = addRow(section, row, frequency3Label, frequency3Field)
-                row = addRow(section, row, frequencyBLabel, frequencyBField)
-                addRow(section, row, "Event Enabled", eventEnabledField)
-            })
+            add(
+                buildSectionPanel(
+                    title = "Timed Event Settings",
+                    titleColor = cloneAccentColor,
+                    borderColor = cloneAccentBorderColor,
+                    helperText = "These settings are written to the connected device when Clone is used.",
+                    helperForeground = cloneAccentColor,
+                    helperBackground = cloneAccentBackground,
+                ) { section ->
+                    var row = 0
+                    row = addSectionNote(section, row)
+                    row = addRow(section, row, "Event Type", eventTypeCombo)
+                    row = addRow(section, row, "Station ID", stationIdField)
+                    row = addRow(section, row, "ID Speed", idSpeedField)
+                    row = addRow(section, row, timedPatternSpeedLabel, timedPatternSpeedField)
+                    row = addRow(section, row, "Start Time", buildDateTimeEditorRow(startTimeSpinner, startTimeStatusLabel))
+                    row = addRow(section, row, "Finish Time", buildDateTimeEditorRow(finishTimeSpinner, finishTimeStatusLabel))
+                    row = addRow(section, row, "Event Status", buildEventStatusRow())
+                    row = addRow(section, row, "Lasts", lastsField)
+                    row = addRow(section, row, "Days To Run", daysField)
+                    row = addRow(section, row, frequency1Label, frequency1Field)
+                    row = addRow(section, row, frequency2Label, frequency2Field)
+                    row = addRow(section, row, frequency3Label, frequency3Field)
+                    row = addRow(section, row, frequencyBLabel, frequencyBField)
+                    addRow(section, row, "Event Enabled", eventEnabledField)
+                },
+            )
             add(Box.createVerticalStrut(12))
             add(buildSectionPanel("Device Data") { section ->
                 var row = 0
@@ -596,11 +683,105 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun buildSectionPanel(title: String, buildRows: (JPanel) -> Unit): JPanel {
+    private fun buildSectionPanel(
+        title: String,
+        titleColor: Color? = null,
+        borderColor: Color? = null,
+        helperText: String? = null,
+        helperForeground: Color? = null,
+        helperBackground: Color? = null,
+        buildRows: (JPanel) -> Unit,
+    ): JPanel {
         return JPanel(GridBagLayout()).apply {
             alignmentX = Component.LEFT_ALIGNMENT
-            border = BorderFactory.createTitledBorder(title)
+            border = BorderFactory.createTitledBorder(
+                borderColor?.let(BorderFactory::createLineBorder),
+                title,
+            ).apply {
+                titleColor?.let { this.titleColor = it }
+            }
+            helperText?.let {
+                putClientProperty("sectionHelperText", it)
+                putClientProperty("sectionHelperForeground", helperForeground)
+                putClientProperty("sectionHelperBackground", helperBackground)
+            }
             buildRows(this)
+        }
+    }
+
+    private fun addSectionNote(panel: JPanel, row: Int): Int {
+        val helperText = panel.getClientProperty("sectionHelperText") as? String ?: return row
+        val helperForeground = panel.getClientProperty("sectionHelperForeground") as? Color ?: Color(0x1F, 0x29, 0x37)
+        val helperBackground = panel.getClientProperty("sectionHelperBackground") as? Color ?: Color(0xF3, 0xF4, 0xF6)
+        val helperLabel = JLabel(helperText).apply {
+            foreground = helperForeground
+            border = BorderFactory.createEmptyBorder(6, 8, 6, 8)
+        }
+        val helperPanel = JPanel(BorderLayout()).apply {
+            isOpaque = true
+            background = helperBackground
+            border = BorderFactory.createLineBorder(helperBackground.darker())
+            add(helperLabel, BorderLayout.CENTER)
+        }
+        val helperConstraints = GridBagConstraints().apply {
+            gridx = 0
+            gridy = row
+            gridwidth = 2
+            weightx = 1.0
+            fill = GridBagConstraints.HORIZONTAL
+            insets = Insets(4, 8, 8, 8)
+        }
+        panel.add(helperPanel, helperConstraints)
+        return row + 1
+    }
+
+    private fun createAccentButton(title: String): JButton {
+        return object : JButton(title) {
+            override fun paintComponent(graphics: Graphics) {
+                val graphics2d = graphics.create() as Graphics2D
+                try {
+                    graphics2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    val referenceInsets = autoDetectButton.border.getBorderInsets(autoDetectButton)
+                    val topInset = referenceInsets.top.coerceAtLeast(2)
+                    val bottomInset = referenceInsets.bottom.coerceAtLeast(2)
+                    val fillY = topInset
+                    val fillHeight = (height - topInset - bottomInset).coerceAtLeast(10)
+                    val fillColor = when {
+                        !isEnabled -> Color(0xD1, 0xD5, 0xDB)
+                        model.isPressed -> cloneAccentColor.darker()
+                        model.isRollover -> Color(0x1D, 0x4E, 0xD8)
+                        else -> cloneAccentColor
+                    }
+                    graphics2d.color = fillColor
+                    graphics2d.fillRoundRect(1, fillY, width - 2, fillHeight, 12, 12)
+                } finally {
+                    graphics2d.dispose()
+                }
+                super.paintComponent(graphics)
+            }
+
+            override fun paintBorder(graphics: Graphics) {
+                val graphics2d = graphics.create() as Graphics2D
+                try {
+                    graphics2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    val referenceInsets = autoDetectButton.border.getBorderInsets(autoDetectButton)
+                    val topInset = referenceInsets.top.coerceAtLeast(2)
+                    val bottomInset = referenceInsets.bottom.coerceAtLeast(2)
+                    val borderY = topInset
+                    val borderHeight = (height - topInset - bottomInset).coerceAtLeast(10)
+                    graphics2d.color = if (isEnabled) cloneAccentColor.darker() else Color(0x9C, 0xA3, 0xAF)
+                    graphics2d.drawRoundRect(1, borderY, width - 3, borderHeight - 1, 12, 12)
+                } finally {
+                    graphics2d.dispose()
+                }
+            }
+        }.apply {
+            foreground = Color.WHITE
+            isOpaque = false
+            isContentAreaFilled = false
+            isBorderPainted = false
+            isFocusPainted = false
+            isRolloverEnabled = true
         }
     }
 
@@ -647,15 +828,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun installImmediateApplyHandlers() {
         installTextCommitHandler(stationIdField) { applyStationIdChange() }
         installTextCommitHandler(patternTextField) { applyPatternTextChange() }
-        installTextCommitHandler(idSpeedField) { applyIdSpeedChange() }
-        installTextCommitHandler(devicePatternSpeedField) { applyPatternSpeedChange() }
-        installTextCommitHandler(timedPatternSpeedField) { applyPatternSpeedChange() }
-        installTextCommitHandler(daysField) { applyDaysToRunChange() }
-        installTextCommitHandler(frequency1Field) { applyFrequency1Change() }
-        installTextCommitHandler(frequency2Field) { applyFrequency2Change() }
-        installTextCommitHandler(frequency3Field) { applyFrequency3Change() }
-        installTextCommitHandler(frequencyBField) { applyFrequencyBChange() }
-        installTextCommitHandler(batteryThresholdField) { applyBatteryThresholdChange() }
+        installComboCommitHandler(idSpeedField) { applyIdSpeedChange() }
+        installComboCommitHandler(devicePatternSpeedField) { applyPatternSpeedChange() }
+        installComboCommitHandler(timedPatternSpeedField) { applyPatternSpeedChange() }
+        installComboCommitHandler(batteryThresholdField) { applyBatteryThresholdChange() }
+        installSpinnerCommitHandler(daysField) { applyDaysToRunChange() }
+        installSpinnerCommitHandler(frequency1Field) { applyFrequency1Change() }
+        installSpinnerCommitHandler(frequency2Field) { applyFrequency2Change() }
+        installSpinnerCommitHandler(frequency3Field) { applyFrequency3Change() }
+        installSpinnerCommitHandler(frequencyBField) { applyFrequencyBChange() }
 
         eventTypeCombo.addActionListener {
             if (!updatingForm) {
@@ -693,17 +874,43 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
     }
 
-    private fun installDateTimeCommitHandler(spinner: JSpinner, onCommit: () -> Unit) {
+    private fun installComboCommitHandler(comboBox: JComboBox<*>, onCommit: () -> Unit) {
+        comboBox.addActionListener {
+            if (!updatingForm && comboBox.isEnabled) {
+                onCommit()
+            }
+        }
+    }
+
+    private fun installSpinnerCommitHandler(spinner: JSpinner, onCommit: () -> Unit) {
         val textField = spinnerEditorTextField(spinner)
         textField.addActionListener {
-            if (!updatingForm) {
+            if (!updatingForm && spinner.isEnabled) {
                 onCommit()
             }
         }
         textField.addFocusListener(
             object : FocusAdapter() {
                 override fun focusLost(event: FocusEvent?) {
-                    if (!updatingForm) {
+                    if (!updatingForm && spinner.isEnabled) {
+                        onCommit()
+                    }
+                }
+            },
+        )
+    }
+
+    private fun installDateTimeCommitHandler(spinner: JSpinner, onCommit: () -> Unit) {
+        val textField = spinnerEditorTextField(spinner)
+        textField.addActionListener {
+            if (!updatingForm && !isDateTimeCommitSuppressed(spinner)) {
+                onCommit()
+            }
+        }
+        textField.addFocusListener(
+            object : FocusAdapter() {
+                override fun focusLost(event: FocusEvent?) {
+                    if (!updatingForm && !isDateTimeCommitSuppressed(spinner)) {
                         onCommit()
                     }
                 }
@@ -1690,17 +1897,31 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val refreshClockSample = refreshed?.let { postLoadClockSample(transport, it.state.snapshot) }
             val refreshedWithClock = refreshed?.let { mergeLoadResults(it, refreshClockSample?.first) }
             val finalState = refreshedWithClock?.state ?: result.state
-            currentState = finalState
-            loadedSnapshot = finalState.snapshot
+            val finalSnapshot = if (changeSucceeded) {
+                mergeSnapshotWithVerifiedWrite(
+                    snapshot = finalState.snapshot,
+                    expectedSettings = validatedSettings,
+                    writePlan = writePlan,
+                )
+            } else {
+                finalState.snapshot
+            }
+            val renderedState = if (finalSnapshot != finalState.snapshot) {
+                finalState.copy(snapshot = finalSnapshot)
+            } else {
+                finalState
+            }
+            currentState = renderedState
+            loadedSnapshot = renderedState.snapshot
 
             if (updatesTimedEventTemplate && changeSucceeded) {
-                finalState.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+                renderedState.snapshot?.settings?.let(::rememberCloneTemplateFrom)
             }
 
             SwingUtilities.invokeLater {
                 refreshClockSample?.second?.let(::applyClockDisplayAnchor)
                 applySnapshotToForm(
-                    finalState.snapshot,
+                    renderedState.snapshot,
                     recalculateClockOffset = refreshClockSample == null,
                 )
                 if (updatesTimedEventTemplate && changeSucceeded) {
@@ -1725,6 +1946,101 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
             }
         }
+    }
+
+    private fun mergeSnapshotWithVerifiedWrite(
+        snapshot: DeviceSnapshot?,
+        expectedSettings: DeviceSettings,
+        writePlan: WritePlan,
+    ): DeviceSnapshot? {
+        if (snapshot == null || writePlan.changes.isEmpty()) {
+            return snapshot
+        }
+
+        val changedKeys = writePlan.changes.mapTo(linkedSetOf()) { it.fieldKey }
+        val mergedSettings = mergeExpectedSettings(snapshot.settings, expectedSettings, changedKeys)
+        val mergedStatus = when {
+            SettingKey.START_TIME in changedKeys || SettingKey.FINISH_TIME in changedKeys -> {
+                val eventDisabled = mergedSettings.startTimeCompact != null &&
+                    mergedSettings.startTimeCompact == mergedSettings.finishTimeCompact
+                if (eventDisabled) {
+                    snapshot.status.copy(
+                        eventEnabled = false,
+                        eventStateSummary = "Disabled",
+                        eventStartsInSummary = null,
+                        eventDurationSummary = "Disabled",
+                    )
+                } else {
+                    snapshot.status
+                }
+            }
+
+            else -> snapshot.status
+        }
+
+        return snapshot.copy(
+            status = mergedStatus,
+            settings = mergedSettings,
+        )
+    }
+
+    private fun mergeExpectedSettings(
+        current: DeviceSettings,
+        expected: DeviceSettings,
+        changedKeys: Set<SettingKey>,
+    ): DeviceSettings {
+        return current.copy(
+            stationId = if (SettingKey.STATION_ID in changedKeys) expected.stationId else current.stationId,
+            eventType = if (SettingKey.EVENT_TYPE in changedKeys) expected.eventType else current.eventType,
+            foxRole = if (SettingKey.FOX_ROLE in changedKeys) expected.foxRole else current.foxRole,
+            patternText = if (SettingKey.PATTERN_TEXT in changedKeys) expected.patternText else current.patternText,
+            idCodeSpeedWpm = if (SettingKey.ID_CODE_SPEED_WPM in changedKeys) expected.idCodeSpeedWpm else current.idCodeSpeedWpm,
+            patternCodeSpeedWpm = if (SettingKey.PATTERN_CODE_SPEED_WPM in changedKeys) {
+                expected.patternCodeSpeedWpm
+            } else {
+                current.patternCodeSpeedWpm
+            },
+            currentTimeCompact = if (SettingKey.CURRENT_TIME in changedKeys) {
+                expected.currentTimeCompact
+            } else {
+                current.currentTimeCompact
+            },
+            startTimeCompact = if (SettingKey.START_TIME in changedKeys) expected.startTimeCompact else current.startTimeCompact,
+            finishTimeCompact = if (SettingKey.FINISH_TIME in changedKeys) expected.finishTimeCompact else current.finishTimeCompact,
+            daysToRun = if (SettingKey.DAYS_TO_RUN in changedKeys) expected.daysToRun else current.daysToRun,
+            defaultFrequencyHz = if (SettingKey.DEFAULT_FREQUENCY_HZ in changedKeys) {
+                expected.defaultFrequencyHz
+            } else {
+                current.defaultFrequencyHz
+            },
+            lowFrequencyHz = if (SettingKey.LOW_FREQUENCY_HZ in changedKeys) expected.lowFrequencyHz else current.lowFrequencyHz,
+            mediumFrequencyHz = if (SettingKey.MEDIUM_FREQUENCY_HZ in changedKeys) {
+                expected.mediumFrequencyHz
+            } else {
+                current.mediumFrequencyHz
+            },
+            highFrequencyHz = if (SettingKey.HIGH_FREQUENCY_HZ in changedKeys) expected.highFrequencyHz else current.highFrequencyHz,
+            beaconFrequencyHz = if (SettingKey.BEACON_FREQUENCY_HZ in changedKeys) {
+                expected.beaconFrequencyHz
+            } else {
+                current.beaconFrequencyHz
+            },
+            lowBatteryThresholdVolts = if (SettingKey.LOW_BATTERY_THRESHOLD_VOLTS in changedKeys) {
+                expected.lowBatteryThresholdVolts
+            } else {
+                current.lowBatteryThresholdVolts
+            },
+            externalBatteryControlMode = if (SettingKey.EXTERNAL_BATTERY_CONTROL_MODE in changedKeys) {
+                expected.externalBatteryControlMode
+            } else {
+                current.externalBatteryControlMode
+            },
+            transmissionsEnabled = if (SettingKey.TRANSMISSIONS_ENABLED in changedKeys) {
+                expected.transmissionsEnabled
+            } else {
+                current.transmissionsEnabled
+            },
+        )
     }
 
     private fun applyStationIdChange() {
@@ -1775,7 +2091,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "idCodeSpeedWpm",
                     "ID Speed",
                     base.idCodeSpeedWpm,
-                    DesktopInputSupport.parseCodeSpeedWpm(idSpeedField.text),
+                    DesktopInputSupport.parseCodeSpeedWpm(idSpeedField.selectedItem as String),
                 ),
             )
         }
@@ -1791,7 +2107,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "patternCodeSpeedWpm",
                     "Pattern Speed",
                     base.patternCodeSpeedWpm,
-                    DesktopInputSupport.parseCodeSpeedWpm(currentPatternSpeedField().text),
+                    DesktopInputSupport.parseCodeSpeedWpm(currentPatternSpeedField().selectedItem as String),
                 ),
             )
         }
@@ -1799,15 +2115,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun applyStartTimeChange() {
         val connectedTimedSettings = currentConnectedTimedSettings()
+        val normalizedStartTime = normalizedStartTimeSelectionForCommit(connectedTimedSettings.startTimeCompact) ?: return
         applyImmediateEdit("Start Time", updatesTimedEventTemplate = true) { base ->
             EditableDeviceSettings.fromDeviceSettings(base).copy(
                 startTimeCompact = SettingsField(
                     "startTimeCompact",
                     "Start Time",
                     base.startTimeCompact,
-                    DesktopInputSupport.validateStartTimeForWrite(
-                        selectedDateTimeCompact(startTimeSpinner, connectedTimedSettings.startTimeCompact),
-                    ),
+                    normalizedStartTime,
                 ),
             )
         }
@@ -1815,10 +2130,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun applyFinishTimeChange() {
         val connectedTimedSettings = currentConnectedTimedSettings()
+        val normalizedFinishTime = normalizedFinishTimeSelectionForCommit(
+            originalStartTimeCompact = connectedTimedSettings.startTimeCompact,
+            originalFinishTimeCompact = connectedTimedSettings.finishTimeCompact,
+        ) ?: return
         applyImmediateEdit("Finish Time", updatesTimedEventTemplate = true) { base ->
             val validatedSchedule = DesktopInputSupport.resolveScheduleForFinishTimeChange(
-                startTimeCompact = connectedTimedSettings.startTimeCompact,
-                finishTimeCompact = selectedDateTimeCompact(finishTimeSpinner, connectedTimedSettings.finishTimeCompact),
+                startTimeCompact = normalizedStartTimeSelectionForCommit(connectedTimedSettings.startTimeCompact),
+                finishTimeCompact = normalizedFinishTime,
                 currentTimeCompact = displayedDeviceTimeCompact(),
             )
             EditableDeviceSettings.fromDeviceSettings(base).copy(
@@ -1832,10 +2151,84 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun normalizedStartTimeSelectionForCommit(originalStartTimeCompact: String?): String? {
+        val selectedCompact = takePendingDateTimeCompact(startTimeSpinner)
+            ?: selectedDateTimeCompact(startTimeSpinner, originalStartTimeCompact)
+        val validatedSelected = try {
+            DesktopInputSupport.validateStartTimeForWrite(selectedCompact)
+        } catch (exception: Exception) {
+            JOptionPane.showMessageDialog(this, exception.message ?: "Invalid Start Time.")
+            return null
+        } ?: return null
+
+        val validatedDeviceTime = try {
+            DesktopInputSupport.validateCurrentTimeForWrite(displayedDeviceTimeCompact())
+        } catch (exception: Exception) {
+            JOptionPane.showMessageDialog(this, exception.message ?: "Set Device Time first before changing Start Time.")
+            return null
+        }
+        if (validatedDeviceTime == null) {
+            JOptionPane.showMessageDialog(this, "Set Device Time first before changing Start Time.")
+            return null
+        }
+
+        val minimumStart = DesktopInputSupport.minimumStartTimeBoundary(validatedDeviceTime, stepMinutes = 5)
+        val selectedStart = DesktopInputSupport.parseCompactTimestamp(validatedSelected)
+        return if (selectedStart.isBefore(minimumStart)) {
+            JOptionPane.showMessageDialog(this, "Start Time can't be set earlier than Device Time.")
+            setDateTimeSpinnerValue(startTimeSpinner, minimumStart)
+            DesktopInputSupport.formatCompactTimestamp(minimumStart)
+        } else {
+            validatedSelected
+        }
+    }
+
+    private fun normalizedFinishTimeSelectionForCommit(
+        originalStartTimeCompact: String?,
+        originalFinishTimeCompact: String?,
+    ): String? {
+        val validatedDeviceTime = try {
+            DesktopInputSupport.validateCurrentTimeForWrite(displayedDeviceTimeCompact())
+        } catch (exception: Exception) {
+            JOptionPane.showMessageDialog(this, exception.message ?: "Set Device Time first before changing Finish Time.")
+            return null
+        }
+        if (validatedDeviceTime == null) {
+            JOptionPane.showMessageDialog(this, "Set Device Time first before changing Finish Time.")
+            return null
+        }
+
+        val normalizedStart = normalizedStartTimeSelectionForCommit(originalStartTimeCompact) ?: return null
+        val selectedCompact = takePendingDateTimeCompact(finishTimeSpinner)
+            ?: selectedDateTimeCompact(finishTimeSpinner, originalFinishTimeCompact)
+        val validatedSelected = try {
+            DesktopInputSupport.validateFinishTimeForWrite(selectedCompact)
+        } catch (exception: Exception) {
+            JOptionPane.showMessageDialog(this, exception.message ?: "Invalid Finish Time.")
+            return null
+        } ?: return null
+
+        val minimumFinish = DesktopInputSupport.minimumFinishTimeBoundary(
+            currentTimeCompact = validatedDeviceTime,
+            startTimeCompact = normalizedStart,
+        )
+        val selectedFinish = DesktopInputSupport.parseCompactTimestamp(validatedSelected)
+        return if (selectedFinish.isBefore(minimumFinish)) {
+            JOptionPane.showMessageDialog(this, finishTimeLowerBoundMessage(
+                deviceTime = DesktopInputSupport.parseCompactTimestamp(validatedDeviceTime),
+                startTime = normalizedStart.let(DesktopInputSupport::parseCompactTimestamp),
+            ))
+            setDateTimeSpinnerValue(finishTimeSpinner, minimumFinish)
+            DesktopInputSupport.formatCompactTimestamp(minimumFinish)
+        } else {
+            validatedSelected
+        }
+    }
+
     private fun applyDaysToRunChange() {
         applyImmediateEdit("Days To Run", updatesTimedEventTemplate = true) { base ->
             EditableDeviceSettings.fromDeviceSettings(base).copy(
-                daysToRun = SettingsField("daysToRun", "Days To Run", base.daysToRun, daysField.text.trim().toInt()),
+                daysToRun = SettingsField("daysToRun", "Days To Run", base.daysToRun, daysField.value as Int),
             )
         }
     }
@@ -1847,7 +2240,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "lowFrequencyHz",
                     "Frequency 1 (FRE 1)",
                     base.lowFrequencyHz,
-                    DesktopInputSupport.parseOptionalFrequencyAssignment(frequency1Field.text.trim()),
+                    selectedFrequencyHz(frequency1Field),
                 ),
             )
         }
@@ -1860,7 +2253,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "mediumFrequencyHz",
                     "Frequency 2 (FRE 2)",
                     base.mediumFrequencyHz,
-                    DesktopInputSupport.parseOptionalFrequencyAssignment(frequency2Field.text.trim()),
+                    selectedFrequencyHz(frequency2Field),
                 ),
             )
         }
@@ -1873,7 +2266,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "highFrequencyHz",
                     "Frequency 3 (FRE 3)",
                     base.highFrequencyHz,
-                    DesktopInputSupport.parseOptionalFrequencyAssignment(frequency3Field.text.trim()),
+                    selectedFrequencyHz(frequency3Field),
                 ),
             )
         }
@@ -1886,7 +2279,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "beaconFrequencyHz",
                     "Frequency B (FRE B)",
                     base.beaconFrequencyHz,
-                    DesktopInputSupport.parseOptionalFrequencyAssignment(frequencyBField.text.trim()),
+                    selectedFrequencyHz(frequencyBField),
                 ),
             )
         }
@@ -1899,7 +2292,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "lowBatteryThresholdVolts",
                     "Low Battery Threshold",
                     base.lowBatteryThresholdVolts,
-                    DesktopInputSupport.parseOptionalDouble(batteryThresholdField.text.trim()),
+                    (batteryThresholdField.selectedItem as? String)
+                        ?.removeSuffix("V")
+                        ?.trim()
+                        ?.toDouble(),
                 ),
             )
         }
@@ -1920,6 +2316,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun applySnapshotToForm(snapshot: DeviceSnapshot?, recalculateClockOffset: Boolean = true) {
         if (snapshot == null) {
+            clearFormForUnread()
             return
         }
 
@@ -1940,36 +2337,36 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 storedPatternText = settings.patternText,
             )
             updatePatternTextEditability(settings.eventType, !backgroundWorkInProgress)
-            idSpeedField.text = DesktopInputSupport.formatCodeSpeedWpm(timedSettings.idCodeSpeedWpm)
-            devicePatternSpeedField.text = DesktopInputSupport.formatCodeSpeedWpm(settings.patternCodeSpeedWpm)
-            timedPatternSpeedField.text = DesktopInputSupport.formatCodeSpeedWpm(settings.patternCodeSpeedWpm)
+            idSpeedField.selectedItem = DesktopInputSupport.formatCodeSpeedWpm(timedSettings.idCodeSpeedWpm)
+            devicePatternSpeedField.selectedItem = DesktopInputSupport.formatCodeSpeedWpm(settings.patternCodeSpeedWpm)
+            timedPatternSpeedField.selectedItem = DesktopInputSupport.formatCodeSpeedWpm(settings.patternCodeSpeedWpm)
             setDateTimeEditorValue(startTimeSpinner, startTimeStatusLabel, timedSettings.startTimeCompact)
             setDateTimeEditorValue(finishTimeSpinner, finishTimeStatusLabel, timedSettings.finishTimeCompact)
             applyDateTimeEditorCapability(startTimeSpinner, schedulingSupported)
             applyDateTimeEditorCapability(finishTimeSpinner, schedulingSupported)
             daysField.isEnabled = schedulingSupported
-            daysField.text = timedSettings.daysToRun.toString()
-            currentFrequencyField.text = formatFrequencyForDisplay(frequencies.currentFrequencyHz)
-            currentBankField.text = frequencies.currentBankId?.label ?: "Unknown"
-            frequency1Field.text = formatFrequencyForDisplay(timedSettings.lowFrequencyHz)
-            frequency2Field.text = formatFrequencyForDisplay(timedSettings.mediumFrequencyHz)
-            frequency3Field.text = formatFrequencyForDisplay(timedSettings.highFrequencyHz)
-            frequencyBField.text = formatFrequencyForDisplay(timedSettings.beaconFrequencyHz)
+            daysField.value = timedSettings.daysToRun
+            setInformationalFieldText(currentFrequencyField, formatFrequencyForDisplay(frequencies.currentFrequencyHz), unreadPlaceholder = false)
+            setInformationalFieldText(currentBankField, frequencies.currentBankId?.label ?: "Unknown", unreadPlaceholder = false)
+            setFrequencySpinnerValue(frequency1Field, timedSettings.lowFrequencyHz)
+            setFrequencySpinnerValue(frequency2Field, timedSettings.mediumFrequencyHz)
+            setFrequencySpinnerValue(frequency3Field, timedSettings.highFrequencyHz)
+            setFrequencySpinnerValue(frequencyBField, timedSettings.beaconFrequencyHz)
             updateTimedEventFrequencyVisibility(timedSettings.eventType)
             updatePatternSpeedVisibility(settings.eventType)
-            batteryThresholdField.text = DesktopInputSupport.formatThresholdOrWaiting(settings.lowBatteryThresholdVolts)
+            batteryThresholdField.selectedItem = settings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) }
             batteryModeCombo.selectedItem = settings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF
             updateTransmissionsField(settings.transmissionsEnabled)
-            versionInfoField.text = DesktopInputSupport.formatReportedVersion(
+            setInformationalFieldText(versionInfoField, DesktopInputSupport.formatReportedVersion(
                 softwareVersion = snapshot.info.softwareVersion,
                 hardwareBuild = snapshot.info.hardwareBuild,
-            )
-            internalBatteryField.text = DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.internalBatteryVolts)
-            externalBatteryField.text = DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.externalBatteryVolts)
-            temperatureField.text = DesktopInputSupport.formatTemperatureOrWaiting(
+            ), unreadPlaceholder = false)
+            setInformationalFieldText(internalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.internalBatteryVolts), unreadPlaceholder = false)
+            setInformationalFieldText(externalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.externalBatteryVolts), unreadPlaceholder = false)
+            setInformationalFieldText(temperatureField, DesktopInputSupport.formatTemperatureOrWaiting(
                 snapshot.status.temperatureC,
                 displayPreferences.temperatureDisplayUnit,
-            )
+            ), unreadPlaceholder = false)
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
             if (recalculateClockOffset) {
                 updateDeviceClockOffset(settings.currentTimeCompact)
@@ -1982,7 +2379,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun updateTransmissionsField(isEnabled: Boolean) {
-        transmissionsField.text = if (isEnabled) "Enabled" else "Disabled"
+        val showWarning = !isEnabled
+        transmissionsRowLabel.isVisible = showWarning
+        transmissionsField.isVisible = showWarning
+        transmissionsRowLabel.foreground = if (showWarning) alertForeground else defaultInformationalFieldForeground
+        setInformationalFieldText(
+            transmissionsField,
+            if (showWarning) "Transmissions disabled" else "",
+            unreadPlaceholder = false,
+            alert = showWarning,
+        )
     }
 
     private fun syncFoxRoleOptions(eventType: EventType, selectedRole: FoxRole?) {
@@ -2157,11 +2563,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             SettingKey.PATTERN_TEXT -> "Pattern Text"
             SettingKey.ID_CODE_SPEED_WPM -> "ID Speed"
             SettingKey.PATTERN_CODE_SPEED_WPM -> "Pattern Speed"
-            SettingKey.CURRENT_TIME -> "Current Time"
+            SettingKey.CURRENT_TIME -> "Device Time"
             SettingKey.START_TIME -> "Start Time"
             SettingKey.FINISH_TIME -> "Finish Time"
             SettingKey.DAYS_TO_RUN -> "Days To Run"
-            SettingKey.DEFAULT_FREQUENCY_HZ -> "Current Frequency"
+            SettingKey.DEFAULT_FREQUENCY_HZ -> "Frequency"
             SettingKey.LOW_FREQUENCY_HZ -> "Frequency 1"
             SettingKey.MEDIUM_FREQUENCY_HZ -> "Frequency 2"
             SettingKey.HIGH_FREQUENCY_HZ -> "Frequency 3"
@@ -2347,6 +2753,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         goLines: List<String>,
         finishMirrorCommands: List<String>,
         finishMirrorLines: List<String>,
+        clockRefreshCommands: List<String>,
+        clockRefreshLines: List<String>,
     ) {
         val entries = mutableListOf<DesktopLogEntry>()
         goCommands.forEach { command ->
@@ -2359,6 +2767,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             entries += DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL)
         }
         finishMirrorLines.forEach { line ->
+            entries += DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL)
+        }
+        clockRefreshCommands.forEach { command ->
+            entries += DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL)
+        }
+        clockRefreshLines.forEach { line ->
             entries += DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL)
         }
         entries += DesktopLogEntry(
@@ -2482,7 +2896,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             currentState?.connectionState == ConnectionState.CONNECTED
     }
 
-    private fun currentPatternSpeedField(): JTextField {
+    private fun currentPatternSpeedField(): JComboBox<String> {
         val eventType = loadedSnapshot?.settings?.eventType ?: EventType.NONE
         return if (DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(eventType)) {
             timedPatternSpeedField
@@ -2515,6 +2929,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         field.border = informationalTextFieldBorder
         field.background = editableTextFieldBackground
         field.isOpaque = false
+        field.disabledTextColor = field.foreground
+    }
+
+    private fun setInformationalFieldText(
+        field: JTextField,
+        value: String?,
+        unreadPlaceholder: Boolean = true,
+        alert: Boolean = false,
+    ) {
+        val displayText = value.orEmpty().ifBlank { if (unreadPlaceholder) "Not read" else "" }
+        field.text = displayText
+        field.foreground = when {
+            alert -> alertForeground
+            unreadPlaceholder && displayText == "Not read" -> unreadFieldForeground
+            else -> defaultInformationalFieldForeground
+        }
         field.disabledTextColor = field.foreground
     }
 
@@ -2587,6 +3017,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun formatFrequencyForDisplay(frequencyHz: Long?): String {
         return DesktopInputSupport.formatFrequencyForDisplay(
             frequencyHz,
+            displayPreferences.frequencyDisplayUnit,
+        )
+    }
+
+    private fun selectedFrequencyHz(spinner: JSpinner): Long {
+        spinner.commitEdit()
+        val selectedValue = spinner.value as? Number
+            ?: error("Frequency selection is unavailable.")
+        return DesktopInputSupport.frequencyHzFromSpinnerValue(
+            selectedValue,
             displayPreferences.frequencyDisplayUnit,
         )
     }
@@ -3265,13 +3705,50 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 nextState = DeviceSessionWorkflow.ingestReportLines(nextState, finishMirrorLines)
             }
 
+            val clockRefreshCommands = if (currentSnapshot.capabilities.supportsScheduling) listOf("CLK T") else emptyList()
+            val clockRefreshLines = mutableListOf<String>()
+            val clockRefreshAnchor = if (clockRefreshCommands.isNotEmpty()) {
+                val clockSample = readClockSample(transport)
+                clockRefreshLines += clockSample.responseLines
+                if (clockRefreshLines.isNotEmpty()) {
+                    nextState = DeviceSessionWorkflow.ingestReportLines(nextState, clockRefreshLines)
+                }
+                ClockDisplayAnchor(
+                    currentTimeCompact = clockSample.reportedTimeCompact,
+                    referenceTime = clockSample.midpointAt,
+                    phaseErrorMillis = DesktopInputSupport.estimateCoarseClockErrorMillis(
+                        DesktopInputSupport.ClockPhaseSample(
+                            midpointAt = clockSample.midpointAt,
+                            reportedTimeCompact = clockSample.reportedTimeCompact,
+                        ),
+                    ),
+                )
+            } else {
+                null
+            }
+
             currentState = nextState
             loadedSnapshot = nextState.snapshot
             nextState.snapshot?.settings?.let(::rememberCloneTemplateFrom)
 
             SwingUtilities.invokeLater {
-                applySnapshotToForm(nextState.snapshot)
-                appendDisableEventLog(goCommands, goLines, finishMirrorCommands, finishMirrorLines)
+                if (clockRefreshLines.isNotEmpty()) {
+                    lastDeviceTimeCheckAtMs = System.currentTimeMillis()
+                    clockRefreshAnchor?.let(::applyClockDisplayAnchor)
+                    updateClockPhaseWarning(clockRefreshAnchor?.phaseErrorMillis)
+                }
+                applySnapshotToForm(
+                    nextState.snapshot,
+                    recalculateClockOffset = clockRefreshLines.isEmpty(),
+                )
+                appendDisableEventLog(
+                    goCommands = goCommands,
+                    goLines = goLines,
+                    finishMirrorCommands = finishMirrorCommands,
+                    finishMirrorLines = finishMirrorLines,
+                    clockRefreshCommands = clockRefreshCommands,
+                    clockRefreshLines = clockRefreshLines,
+                )
                 setStatus("Event disabled.")
             }
         }
@@ -3279,34 +3756,43 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun updateDisplayedClockFields() {
         val snapshot = loadedSnapshot
-        val settings = snapshot?.settings
-        val timedSettings = settings
         val sampledSystemNow = java.time.LocalDateTime.now()
         val displayNow = sampledSystemNow.withNano(0)
+        if (snapshot == null) {
+            systemTimeField.text = DesktopInputSupport.formatSystemTimestamp(displayNow)
+            setInformationalFieldText(currentTimeField, "Not read")
+            setInformationalFieldText(startsInField, "Not read")
+            setInformationalFieldText(lastsField, "Not read")
+            setInformationalFieldText(eventEnabledField, "Not read")
+            disableEventButton.isEnabled = false
+            syncTimeButton.isEnabled = false
+            return
+        }
+        val timedSettings = snapshot.settings
         val displayedDeviceTimeCompact = displayedDeviceTimeCompact(sampledSystemNow)
 
         systemTimeField.text = DesktopInputSupport.formatSystemTimestamp(displayNow)
-        currentTimeField.text = DesktopInputSupport.formatCompactTimestampOrNotSet(displayedDeviceTimeCompact)
-        startsInField.text = DesktopInputSupport.describeEventStatus(
-            deviceReportedEventEnabled = snapshot?.status?.eventEnabled,
-            eventStateSummary = snapshot?.status?.eventStateSummary,
+        setInformationalFieldText(currentTimeField, DesktopInputSupport.formatCompactTimestampOrNotSet(displayedDeviceTimeCompact), unreadPlaceholder = false)
+        setInformationalFieldText(startsInField, DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = snapshot.status.eventEnabled,
+            eventStateSummary = snapshot.status.eventStateSummary,
             currentTimeCompact = displayedDeviceTimeCompact,
-            startTimeCompact = timedSettings?.startTimeCompact,
-            finishTimeCompact = timedSettings?.finishTimeCompact,
-            startsInFallback = snapshot?.status?.eventStartsInSummary,
-        )
-        lastsField.text = DesktopInputSupport.describeEventDuration(
-            startTimeCompact = timedSettings?.startTimeCompact,
-            finishTimeCompact = timedSettings?.finishTimeCompact,
-            fallback = snapshot?.status?.eventDurationSummary,
-        )
-        eventEnabledField.text = DesktopInputSupport.eventEnabledLabel(
-            deviceReportedEventEnabled = snapshot?.status?.eventEnabled,
+            startTimeCompact = timedSettings.startTimeCompact,
+            finishTimeCompact = timedSettings.finishTimeCompact,
+            startsInFallback = snapshot.status.eventStartsInSummary,
+        ), unreadPlaceholder = false)
+        setInformationalFieldText(lastsField, DesktopInputSupport.describeEventDuration(
+            startTimeCompact = timedSettings.startTimeCompact,
+            finishTimeCompact = timedSettings.finishTimeCompact,
+            fallback = snapshot.status.eventDurationSummary,
+        ), unreadPlaceholder = false)
+        setInformationalFieldText(eventEnabledField, DesktopInputSupport.eventEnabledLabel(
+            deviceReportedEventEnabled = snapshot.status.eventEnabled,
             currentTimeCompact = displayedDeviceTimeCompact,
-            startTimeCompact = timedSettings?.startTimeCompact,
-            finishTimeCompact = timedSettings?.finishTimeCompact,
+            startTimeCompact = timedSettings.startTimeCompact,
+            finishTimeCompact = timedSettings.finishTimeCompact,
             systemNow = displayNow,
-        )
+        ), unreadPlaceholder = false)
         syncTimeButton.isEnabled =
             displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK &&
             currentTransport != null &&
@@ -3319,6 +3805,37 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 loadedSnapshot?.status?.eventEnabled != false ||
                     DesktopInputSupport.isManualEventStateSummary(loadedSnapshot?.status?.eventStateSummary)
                 )
+    }
+
+    private fun clearFormForUnread() {
+        loadedSnapshot = null
+        deviceTimeOffset = null
+        stationIdField.text = ""
+        eventTypeCombo.selectedItem = null
+        syncFoxRoleOptions(EventType.NONE, null)
+        foxRoleCombo.selectedItem = null
+        patternTextField.text = ""
+        idSpeedField.selectedItem = null
+        devicePatternSpeedField.selectedItem = null
+        timedPatternSpeedField.selectedItem = null
+        setDateTimeEditorValue(startTimeSpinner, startTimeStatusLabel, null)
+        setDateTimeEditorValue(finishTimeSpinner, finishTimeStatusLabel, null)
+        daysField.value = 1
+        setInformationalFieldText(currentFrequencyField, "Not read")
+        setInformationalFieldText(currentBankField, "Not read")
+        clearFrequencySpinner(frequency1Field)
+        clearFrequencySpinner(frequency2Field)
+        clearFrequencySpinner(frequency3Field)
+        clearFrequencySpinner(frequencyBField)
+        batteryThresholdField.selectedItem = null
+        batteryModeCombo.selectedItem = null
+        updateTransmissionsField(isEnabled = true)
+        setInformationalFieldText(versionInfoField, "Not read")
+        setInformationalFieldText(internalBatteryField, "Not read")
+        setInformationalFieldText(externalBatteryField, "Not read")
+        setInformationalFieldText(temperatureField, "Not read")
+        updateDisplayedClockFields()
+        updateWritableControlAvailability(backgroundWorkInProgress)
     }
 
     private fun displayedDeviceTimeCompact(systemNow: java.time.LocalDateTime = java.time.LocalDateTime.now()): String? {
@@ -3569,6 +4086,228 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun createFrequencySpinner(): JSpinner {
+        return JSpinner()
+    }
+
+    private fun createFieldAwareDateTimeSpinner(
+        pattern: String = "yyyy-MM-dd HH:mm",
+        steppingProvider: (LocalDateTime, Int, Boolean) -> LocalDateTime?,
+    ): JSpinner {
+        lateinit var spinner: JSpinner
+        spinner = JSpinner(
+            FieldAwareSpinnerDateModel(
+                initialValue = Date(),
+                defaultCalendarField = Calendar.MINUTE,
+                selectedCalendarFieldProvider = { selectedDateTimeEditorCalendarField(spinner) },
+                steppingProvider = steppingProvider,
+            ),
+        ).apply {
+            editor = JSpinner.DateEditor(this, pattern)
+        }
+        return spinner
+    }
+
+    private fun configureFrequencySpinner(spinner: JSpinner, frequencyHz: Long? = null) {
+        when (displayPreferences.frequencyDisplayUnit) {
+            FrequencyDisplayUnit.KHZ -> {
+                val displayValue = (frequencyHz?.let {
+                    DesktopInputSupport.frequencySpinnerValue(it, FrequencyDisplayUnit.KHZ)
+                } ?: DesktopInputSupport.defaultFrequencySpinnerValue(FrequencyDisplayUnit.KHZ)).toInt()
+                spinner.model = SpinnerNumberModel(displayValue, 3501, 3700, 1)
+                spinner.editor = JSpinner.NumberEditor(spinner, "0' kHz'")
+            }
+            FrequencyDisplayUnit.MHZ -> {
+                val displayValue = (frequencyHz?.let {
+                    DesktopInputSupport.frequencySpinnerValue(it, FrequencyDisplayUnit.MHZ)
+                } ?: DesktopInputSupport.defaultFrequencySpinnerValue(FrequencyDisplayUnit.MHZ)).toDouble()
+                spinner.model = SpinnerNumberModel(displayValue, 3.501, 3.700, 0.001)
+                spinner.editor = JSpinner.NumberEditor(spinner, "0.000' MHz'")
+            }
+        }
+        spinnerEditorTextField(spinner).horizontalAlignment = JFormattedTextField.LEFT
+        if (frequencyHz == null) {
+            spinnerEditorTextField(spinner).text = ""
+        }
+    }
+
+    private fun setFrequencySpinnerValue(spinner: JSpinner, frequencyHz: Long?) {
+        configureFrequencySpinner(spinner, frequencyHz)
+    }
+
+    private fun clearFrequencySpinner(spinner: JSpinner) {
+        configureFrequencySpinner(spinner, null)
+    }
+
+    private fun selectedDateTimeEditorCalendarField(
+        spinner: JSpinner,
+        defaultCalendarField: Int = Calendar.MINUTE,
+    ): Int {
+        val rememberedField = spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int
+        if (rememberedField != null) {
+            return rememberedField
+        }
+        val textField = spinnerEditorTextField(spinner)
+        val anchor = if (textField.selectionStart == textField.selectionEnd) {
+            textField.caretPosition
+        } else {
+            textField.selectionStart
+        }
+        return when (anchor) {
+            in 0..3 -> Calendar.YEAR
+            in 5..6 -> Calendar.MONTH
+            in 8..9 -> Calendar.DAY_OF_MONTH
+            in 11..12 -> Calendar.HOUR_OF_DAY
+            in 14..15 -> Calendar.MINUTE
+            else -> defaultCalendarField
+        }
+    }
+
+    private fun stepDateTimeBySelectedField(
+        current: LocalDateTime,
+        selectedField: Int,
+        forward: Boolean,
+        minuteStep: Int,
+    ): LocalDateTime {
+        val truncated = DesktopInputSupport.truncateToMinute(current)
+        if (selectedField == Calendar.MINUTE) {
+            return DesktopInputSupport.stepDateTimeByMinuteInterval(truncated, minuteStep, forward)
+        }
+
+        val calendar = Calendar.getInstance().apply {
+            time = Date.from(truncated.atZone(ZoneId.systemDefault()).toInstant())
+            add(selectedField, if (forward) 1 else -1)
+        }
+        return calendar.time.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime()
+            .let(DesktopInputSupport::truncateToMinute)
+    }
+
+    private fun validatedDeviceTimeForScheduling(fieldLabel: String): LocalDateTime? {
+        val validatedCompact = try {
+            DesktopInputSupport.validateCurrentTimeForWrite(displayedDeviceTimeCompact())
+        } catch (exception: Exception) {
+            JOptionPane.showMessageDialog(this, exception.message ?: "Set Device Time first before changing $fieldLabel.")
+            return null
+        }
+        if (validatedCompact == null) {
+            JOptionPane.showMessageDialog(this, "Set Device Time first before changing $fieldLabel.")
+            return null
+        }
+        return DesktopInputSupport.parseCompactTimestamp(validatedCompact)
+    }
+
+    private fun stepStartTimeSelection(
+        current: LocalDateTime,
+        selectedField: Int,
+        forward: Boolean,
+    ): LocalDateTime? {
+        clearPendingDateTimeCompact(startTimeSpinner)
+        val deviceTime = validatedDeviceTimeForScheduling("Start Time") ?: return null
+        val minimumStart = DesktopInputSupport.minimumStartTimeBoundary(
+            DesktopInputSupport.formatCompactTimestamp(deviceTime),
+            stepMinutes = 5,
+        )
+        if (!forward && !current.isAfter(minimumStart)) {
+            snapDateTimeSpinnerToMinimum(
+                spinner = startTimeSpinner,
+                minimum = minimumStart,
+                message = "Start Time can't be set earlier than Device Time.",
+            )
+            return minimumStart
+        }
+
+        val stepped = stepDateTimeBySelectedField(current, selectedField, forward, minuteStep = 5)
+        if (stepped.isBefore(minimumStart)) {
+            return minimumStart
+        }
+        return stepped
+    }
+
+    private fun stepFinishTimeSelection(
+        current: LocalDateTime,
+        selectedField: Int,
+        forward: Boolean,
+    ): LocalDateTime? {
+        clearPendingDateTimeCompact(finishTimeSpinner)
+        val deviceTime = validatedDeviceTimeForScheduling("Finish Time") ?: return null
+        val selectedStartTime = selectedStartTimeForFinishConstraint()
+        val minimumFinish = listOfNotNull(deviceTime, selectedStartTime).maxOrNull() ?: deviceTime
+
+        if (!forward && !current.isAfter(minimumFinish)) {
+            snapDateTimeSpinnerToMinimum(
+                spinner = finishTimeSpinner,
+                minimum = minimumFinish,
+                message = finishTimeLowerBoundMessage(deviceTime, selectedStartTime),
+            )
+            return minimumFinish
+        }
+
+        val stepped = stepDateTimeBySelectedField(current, selectedField, forward, minuteStep = 1)
+        if (stepped.isBefore(minimumFinish)) {
+            return minimumFinish
+        }
+        return stepped
+    }
+
+    private fun snapDateTimeSpinnerToMinimum(
+        spinner: JSpinner,
+        minimum: LocalDateTime,
+        message: String,
+    ) {
+        spinner.putClientProperty(
+            DATE_TIME_PENDING_COMPACT_KEY,
+            DesktopInputSupport.formatCompactTimestamp(minimum),
+        )
+        spinner.putClientProperty(DATE_TIME_COMMIT_SUPPRESSED_KEY, true)
+        SwingUtilities.invokeLater {
+            setDateTimeSpinnerValue(spinner, minimum)
+            SwingUtilities.invokeLater {
+                try {
+                    JOptionPane.showMessageDialog(this, message)
+                } finally {
+                    spinner.putClientProperty(DATE_TIME_COMMIT_SUPPRESSED_KEY, false)
+                }
+            }
+        }
+    }
+
+    private fun isDateTimeCommitSuppressed(spinner: JSpinner): Boolean {
+        return spinner.getClientProperty(DATE_TIME_COMMIT_SUPPRESSED_KEY) as? Boolean ?: false
+    }
+
+    private fun takePendingDateTimeCompact(spinner: JSpinner): String? {
+        val pending = spinner.getClientProperty(DATE_TIME_PENDING_COMPACT_KEY) as? String
+        clearPendingDateTimeCompact(spinner)
+        return pending
+    }
+
+    private fun clearPendingDateTimeCompact(spinner: JSpinner) {
+        spinner.putClientProperty(DATE_TIME_PENDING_COMPACT_KEY, null)
+    }
+
+    private fun selectedStartTimeForFinishConstraint(): LocalDateTime? {
+        val selectedCompact = runCatching {
+            selectedDateTimeCompact(startTimeSpinner, currentConnectedTimedSettings().startTimeCompact)
+        }.getOrNull() ?: return null
+
+        val validatedCompact = runCatching {
+            DesktopInputSupport.validateStartTimeForWrite(selectedCompact)
+        }.getOrNull() ?: return null
+
+        return DesktopInputSupport.parseCompactTimestamp(validatedCompact)
+    }
+
+    private fun finishTimeLowerBoundMessage(
+        deviceTime: LocalDateTime,
+        startTime: LocalDateTime?,
+    ): String {
+        return if (startTime != null && !startTime.isBefore(deviceTime)) {
+            "Finish Time can't be set earlier than Start Time."
+        } else {
+            "Finish Time can't be set earlier than Device Time."
+        }
+    }
+
     private fun configureNullableDateTimeSpinner(spinner: JSpinner, statusLabel: JLabel) {
         spinner.putClientProperty(NULLABLE_TIMESTAMP_ACTIVE_KEY, false)
         spinner.putClientProperty(NULLABLE_TIMESTAMP_STATUS_LABEL_KEY, statusLabel)
@@ -3578,6 +4317,29 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 setNullableDateTimeSpinnerActive(spinner, false)
             }
         }
+        textField.addFocusListener(
+            object : FocusAdapter() {
+                override fun focusGained(event: FocusEvent?) {
+                    if (!updatingForm) {
+                        positionDateTimeEditorCaret(spinner)
+                    }
+                }
+            },
+        )
+        textField.addMouseListener(
+            object : MouseAdapter() {
+                override fun mouseReleased(event: MouseEvent?) {
+                    rememberSelectedDateTimeEditorField(spinner)
+                }
+            },
+        )
+        textField.addKeyListener(
+            object : java.awt.event.KeyAdapter() {
+                override fun keyReleased(event: java.awt.event.KeyEvent?) {
+                    rememberSelectedDateTimeEditorField(spinner)
+                }
+            },
+        )
         textField.document.addDocumentListener(
             object : javax.swing.event.DocumentListener {
                 override fun insertUpdate(event: javax.swing.event.DocumentEvent?) = onEdited()
@@ -3598,6 +4360,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
             },
         )
+        positionDateTimeEditorCaret(spinner)
     }
 
     private fun setDateTimeEditorValue(spinner: JSpinner, statusLabel: JLabel, compactTimestamp: String?) {
@@ -3605,6 +4368,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             spinner.value = suggestedDateTimeEditorValue()
             setNullableDateTimeSpinnerActive(spinner, true)
             statusLabel.text = "Not Set"
+            positionDateTimeEditorCaret(spinner)
             return
         }
 
@@ -3615,6 +4379,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             DesktopInputSupport.truncateToMinute(localDateTime).atZone(ZoneId.systemDefault()).toInstant(),
         )
         updateDateTimeEditorPresentation(spinner, showNotSet = false)
+        positionDateTimeEditorCaret(spinner)
     }
 
     private fun selectedDateTimeCompact(spinner: JSpinner, originalValue: String?): String? {
@@ -3655,11 +4420,48 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         } else {
             textField.value = spinner.value
         }
+        positionDateTimeEditorCaret(spinner)
+    }
+
+    private fun positionDateTimeEditorCaret(spinner: JSpinner) {
+        SwingUtilities.invokeLater {
+            val textField = spinnerEditorTextField(spinner)
+            val minuteIndex = textField.text.indexOf(':').let { colonIndex ->
+                if (colonIndex >= 0) colonIndex + 1 else textField.text.length
+            }
+            val clampedIndex = minuteIndex.coerceIn(0, textField.text.length)
+            spinner.putClientProperty(DATE_TIME_ACTIVE_FIELD_KEY, Calendar.MINUTE)
+            textField.select(clampedIndex, clampedIndex)
+            textField.caretPosition = clampedIndex
+        }
+    }
+
+    private fun rememberSelectedDateTimeEditorField(spinner: JSpinner) {
+        spinner.putClientProperty(
+            DATE_TIME_ACTIVE_FIELD_KEY,
+            selectedDateTimeEditorFieldFromText(spinnerEditorTextField(spinner)),
+        )
+    }
+
+    private fun selectedDateTimeEditorFieldFromText(textField: JFormattedTextField): Int {
+        val anchor = if (textField.selectionStart == textField.selectionEnd) {
+            textField.caretPosition
+        } else {
+            textField.selectionStart
+        }
+        return when (anchor) {
+            in 0..3 -> Calendar.YEAR
+            in 5..6 -> Calendar.MONTH
+            in 8..9 -> Calendar.DAY_OF_MONTH
+            in 11..12 -> Calendar.HOUR_OF_DAY
+            in 14..15 -> Calendar.MINUTE
+            else -> Calendar.MINUTE
+        }
     }
 
     private fun spinnerEditorTextField(spinner: JSpinner): JFormattedTextField {
-        val editor = spinner.editor as? JSpinner.DateEditor
-            ?: error("Date/time spinner editor is unavailable.")
+        val editor = spinner.editor as? JSpinner.DefaultEditor
+            ?: error("Spinner editor is unavailable.")
         return editor.textField
     }
 
@@ -3942,6 +4744,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private companion object {
+        const val DATE_TIME_ACTIVE_FIELD_KEY = "serialslinger.dateTimeActiveField"
+        const val DATE_TIME_PENDING_COMPACT_KEY = "serialslinger.dateTimePendingCompact"
+        const val DATE_TIME_COMMIT_SUPPRESSED_KEY = "serialslinger.dateTimeCommitSuppressed"
         const val NULLABLE_TIMESTAMP_ACTIVE_KEY = "serialslinger.nullableTimestampActive"
         const val NULLABLE_TIMESTAMP_STATUS_LABEL_KEY = "serialslinger.nullableTimestampStatusLabel"
         const val AUTO_DETECT_BUTTON_LONG_PRESS_MS = 900

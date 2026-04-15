@@ -9,7 +9,8 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
 }
 
-val desktopVersion = rootProject.extra["serialSlingerVersion"].toString()
+val desktopPackageVersion = rootProject.extra["serialSlingerVersion"].toString()
+val desktopDisplayVersion = rootProject.extra["serialSlingerDisplayVersion"].toString()
 val desktopPackageVendor = rootProject.extra["serialSlingerVendor"].toString()
 val desktopPackageDescription = rootProject.extra["serialSlingerDescription"].toString()
 val generatedDesktopVersionDir = layout.buildDirectory.dir("generated/source/desktopVersion/desktopMain/kotlin")
@@ -47,7 +48,8 @@ kotlin {
 val generateDesktopVersionSource = tasks.register("generateDesktopVersionSource") {
     description = "Generates desktop version constants from the Gradle build version."
 
-    inputs.property("desktopVersion", desktopVersion)
+    inputs.property("desktopDisplayVersion", desktopDisplayVersion)
+    inputs.property("desktopPackageVersion", desktopPackageVersion)
     outputs.dir(generatedDesktopVersionDir)
 
     doLast {
@@ -59,8 +61,8 @@ val generateDesktopVersionSource = tasks.register("generateDesktopVersionSource"
             package com.openardf.serialslinger.app
 
             object SerialSlingerVersion {
-                const val displayVersion = "$desktopVersion"
-                const val packageVersion = "$desktopVersion"
+                const val displayVersion = "$desktopDisplayVersion"
+                const val packageVersion = "$desktopPackageVersion"
             }
             """.trimIndent(),
         )
@@ -146,7 +148,7 @@ fun desktopPackagingBaseArgs(
                 "--name",
                 desktopAppName,
                 "--app-version",
-                desktopVersion,
+                desktopPackageVersion,
                 "--vendor",
                 desktopPackageVendor,
                 "--description",
@@ -195,7 +197,7 @@ tasks.register("verifyDesktopPackagingEnvironment") {
         }
 
         logger.lifecycle("Using jpackage at ${jpackageFile.absolutePath}")
-        logger.lifecycle("Packaging SerialSlinger version $desktopVersion")
+        logger.lifecycle("Packaging SerialSlinger version $desktopPackageVersion")
     }
 }
 
@@ -244,7 +246,7 @@ val desktopJdeployJar = tasks.register<Jar>("desktopJdeployJar") {
             "Main-Class" to desktopMainClass,
             "Class-Path" to runtimeClasspathEntriesProvider.get(),
             "Implementation-Title" to desktopAppName,
-            "Implementation-Version" to desktopVersion,
+            "Implementation-Version" to desktopPackageVersion,
         )
     }
 }

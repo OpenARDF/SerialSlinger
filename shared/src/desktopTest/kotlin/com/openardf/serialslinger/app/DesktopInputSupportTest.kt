@@ -239,6 +239,27 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun rejectsStartTimeEarlierThanDeviceTime() {
+        assertFailsWith<IllegalArgumentException> {
+            DesktopInputSupport.resolveStartTimeForChange(
+                startTimeCompact = "260411135959",
+                currentTimeCompact = "260411140000",
+            )
+        }
+    }
+
+    @Test
+    fun requiresDeviceTimeBeforeChangingFinishTime() {
+        assertFailsWith<IllegalStateException> {
+            DesktopInputSupport.resolveScheduleForFinishTimeChange(
+                startTimeCompact = "260411140000",
+                finishTimeCompact = "260411150000",
+                currentTimeCompact = null,
+            )
+        }
+    }
+
+    @Test
     fun formatsPreMinimumCurrentTimeAsNotSet() {
         assertEquals("Not Set", DesktopInputSupport.formatCompactTimestampOrNotSet("000101000414"))
     }
@@ -246,6 +267,27 @@ class DesktopInputSupportTest {
     @Test
     fun formatsValidCurrentTimeForDisplay() {
         assertEquals("2026-04-14 20:35:10", DesktopInputSupport.formatCompactTimestampOrNotSet("260414203510"))
+    }
+
+    @Test
+    fun convertsKhzSpinnerValueToFrequencyHz() {
+        val frequencyHz = DesktopInputSupport.frequencyHzFromSpinnerValue(3501, FrequencyDisplayUnit.KHZ)
+
+        assertEquals(3_501_000L, frequencyHz)
+    }
+
+    @Test
+    fun convertsMhzSpinnerValueToFrequencyHz() {
+        val frequencyHz = DesktopInputSupport.frequencyHzFromSpinnerValue(3.700, FrequencyDisplayUnit.MHZ)
+
+        assertEquals(3_700_000L, frequencyHz)
+    }
+
+    @Test
+    fun convertsFrequencyHzToMhzSpinnerValue() {
+        val displayValue = DesktopInputSupport.frequencySpinnerValue(3_654_000L, FrequencyDisplayUnit.MHZ)
+
+        assertEquals(3.654, displayValue)
     }
 
     @Test
@@ -305,6 +347,56 @@ class DesktopInputSupportTest {
         )
 
         assertEquals(LocalDateTime.of(2026, 4, 11, 13, 5, 0, 0), truncated)
+    }
+
+    @Test
+    fun stepsStartTimeForwardOnFiveMinuteBoundaries() {
+        val stepped = DesktopInputSupport.stepDateTimeByMinuteInterval(
+            LocalDateTime.of(2026, 4, 11, 13, 12, 42),
+            stepMinutes = 5,
+            forward = true,
+        )
+
+        assertEquals(LocalDateTime.of(2026, 4, 11, 13, 15, 0), stepped)
+    }
+
+    @Test
+    fun stepsStartTimeBackwardOnFiveMinuteBoundaries() {
+        val stepped = DesktopInputSupport.stepDateTimeByMinuteInterval(
+            LocalDateTime.of(2026, 4, 11, 13, 12, 42),
+            stepMinutes = 5,
+            forward = false,
+        )
+
+        assertEquals(LocalDateTime.of(2026, 4, 11, 13, 10, 0), stepped)
+    }
+
+    @Test
+    fun stepsFinishTimeBySingleMinutes() {
+        val stepped = DesktopInputSupport.stepDateTimeByMinuteInterval(
+            LocalDateTime.of(2026, 4, 11, 13, 12, 42),
+            stepMinutes = 1,
+            forward = true,
+        )
+
+        assertEquals(LocalDateTime.of(2026, 4, 11, 13, 13, 0), stepped)
+    }
+
+    @Test
+    fun alignsMinimumStartTimeToNextFiveMinuteBoundary() {
+        val minimum = DesktopInputSupport.minimumStartTimeBoundary("260411131242")
+
+        assertEquals(LocalDateTime.of(2026, 4, 11, 13, 15, 0), minimum)
+    }
+
+    @Test
+    fun usesLaterOfDeviceTimeAndStartTimeForMinimumFinishTime() {
+        val minimum = DesktopInputSupport.minimumFinishTimeBoundary(
+            currentTimeCompact = "260411131242",
+            startTimeCompact = "260411140000",
+        )
+
+        assertEquals(LocalDateTime.of(2026, 4, 11, 14, 0, 0), minimum)
     }
 
     @Test
