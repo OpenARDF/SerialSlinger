@@ -244,6 +244,11 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun formatsValidCurrentTimeForDisplay() {
+        assertEquals("2026-04-14 20:35:10", DesktopInputSupport.formatCompactTimestampOrNotSet("260414203510"))
+    }
+
+    @Test
     fun ignoresPreMinimumCurrentTimeWhenDescribingEventStatus() {
         val label = DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = true,

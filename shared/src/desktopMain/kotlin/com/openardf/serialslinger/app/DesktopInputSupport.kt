@@ -239,7 +239,7 @@ object DesktopInputSupport {
     }
 
     fun formatCompactTimestampOrNotSet(value: String?): String {
-        return normalizeCurrentTimeCompactForDisplay(value).orEmpty().ifBlank { "Not Set" }
+        return normalizeCurrentTimeCompactForDisplay(value)?.let(::formatCompactTimestamp).orEmpty().ifBlank { "Not Set" }
     }
 
     fun formatSystemTimestamp(systemNow: LocalDateTime = LocalDateTime.now()): String {
