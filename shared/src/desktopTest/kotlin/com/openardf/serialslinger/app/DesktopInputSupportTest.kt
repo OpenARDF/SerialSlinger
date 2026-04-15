@@ -239,6 +239,25 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun formatsPreMinimumCurrentTimeAsNotSet() {
+        assertEquals("Not Set", DesktopInputSupport.formatCompactTimestampOrNotSet("000101000414"))
+    }
+
+    @Test
+    fun ignoresPreMinimumCurrentTimeWhenDescribingEventStatus() {
+        val label = DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = true,
+            eventStateSummary = null,
+            currentTimeCompact = "000101000414",
+            startTimeCompact = "260410141530",
+            finishTimeCompact = "260410160000",
+            startsInFallback = "15 minutes 30 seconds",
+        )
+
+        assertEquals("Starts in 15 minutes 30 seconds", label)
+    }
+
+    @Test
     fun displaysClassicPatternTextFromFoxRoleInsteadOfStoredPatValue() {
         val text = DesktopInputSupport.displayPatternText(
             eventType = EventType.CLASSIC,

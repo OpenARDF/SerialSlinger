@@ -234,8 +234,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private lateinit var frequencyMhzMenuItem: JRadioButtonMenuItem
     private lateinit var temperatureCMenuItem: JRadioButtonMenuItem
     private lateinit var temperatureFMenuItem: JRadioButtonMenuItem
-    private lateinit var timeSetManualMenuItem: JRadioButtonMenuItem
-    private lateinit var timeSetSystemClockMenuItem: JRadioButtonMenuItem
+    private lateinit var timeSetManualMenuItem: JCheckBoxMenuItem
     private val headerLogStyle = SimpleAttributeSet().apply {
         StyleConstants.setForeground(this, Color(0x11, 0x18, 0x27))
         StyleConstants.setBold(this, true)
@@ -416,26 +415,24 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     showRawSerialMenuItem = JCheckBoxMenuItem("Show Raw Serial Entry", displayPreferences.rawSerialVisible).apply {
                         addActionListener { setRawSerialVisible(isSelected) }
                     }
-                    val timeSetModeGroup = ButtonGroup()
-                    timeSetManualMenuItem = JRadioButtonMenuItem(
+                    timeSetManualMenuItem = JCheckBoxMenuItem(
                         "Set Time Manually",
                         displayPreferences.timeSetMode == TimeSetMode.MANUAL,
                     ).apply {
-                        addActionListener { setTimeSetMode(TimeSetMode.MANUAL) }
+                        addActionListener {
+                            setTimeSetMode(
+                                if (isSelected) {
+                                    TimeSetMode.MANUAL
+                                } else {
+                                    TimeSetMode.SYSTEM_CLOCK
+                                },
+                            )
+                        }
                     }
-                    timeSetSystemClockMenuItem = JRadioButtonMenuItem(
-                        "Set Time Using System Clock",
-                        displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK,
-                    ).apply {
-                        addActionListener { setTimeSetMode(TimeSetMode.SYSTEM_CLOCK) }
-                    }
-                    timeSetModeGroup.add(timeSetManualMenuItem)
-                    timeSetModeGroup.add(timeSetSystemClockMenuItem)
                     add(showLogMenuItem)
                     add(showRawSerialMenuItem)
                     addSeparator()
                     add(timeSetManualMenuItem)
-                    add(timeSetSystemClockMenuItem)
                 },
             )
             add(
@@ -2565,9 +2562,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (::timeSetManualMenuItem.isInitialized) {
             timeSetManualMenuItem.isSelected = manualMode
         }
-        if (::timeSetSystemClockMenuItem.isInitialized) {
-            timeSetSystemClockMenuItem.isSelected = !manualMode
-        }
         updateWritableControlAvailability(backgroundWorkInProgress)
         updateClockPhaseWarning(lastClockPhaseErrorMillis)
         formScroll.revalidate()
@@ -3333,7 +3327,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             deviceTimeOffset != null -> DesktopInputSupport.formatTruncatedCompactTimestamp(
                 systemNow.plus(requireNotNull(deviceTimeOffset)),
             )
-            else -> settings?.currentTimeCompact
+            else -> DesktopInputSupport.normalizeCurrentTimeCompactForDisplay(settings?.currentTimeCompact)
         }
     }
 

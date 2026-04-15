@@ -224,13 +224,22 @@ object DesktopInputSupport {
         )
     }
 
+    fun normalizeCurrentTimeCompactForDisplay(value: String?): String? {
+        val timestamp = value?.let(::parseCompactTimestamp) ?: return null
+        return if (timestamp.isBefore(minimumValidTimestamp)) {
+            null
+        } else {
+            formatCompactTimestamp(timestamp)
+        }
+    }
+
     fun formatCompactTimestamp(value: String?): String {
         val timestamp = value?.let(::parseCompactTimestamp) ?: return ""
         return timestamp.format(displayTimestampFormatter)
     }
 
     fun formatCompactTimestampOrNotSet(value: String?): String {
-        return value?.let(::formatCompactTimestamp).orEmpty().ifBlank { "Not Set" }
+        return normalizeCurrentTimeCompactForDisplay(value).orEmpty().ifBlank { "Not Set" }
     }
 
     fun formatSystemTimestamp(systemNow: LocalDateTime = LocalDateTime.now()): String {
@@ -315,7 +324,7 @@ object DesktopInputSupport {
     ): String {
         val normalizedSummary = eventStateSummary?.trim().orEmpty()
         val summaryLower = normalizedSummary.lowercase()
-        val current = currentTimeCompact?.let(::parseCompactTimestamp)
+        val current = normalizeCurrentTimeCompactForDisplay(currentTimeCompact)?.let(::parseCompactTimestamp)
         val start = startTimeCompact?.let(::parseCompactTimestamp)
         val finish = finishTimeCompact?.let(::parseCompactTimestamp)
 
@@ -421,7 +430,7 @@ object DesktopInputSupport {
             return if (deviceReportedEventEnabled) "Enabled" else "Disabled"
         }
 
-        val current = currentTimeCompact?.let(::parseCompactTimestamp) ?: return "Disabled"
+        val current = normalizeCurrentTimeCompactForDisplay(currentTimeCompact)?.let(::parseCompactTimestamp) ?: return "Disabled"
         val start = startTimeCompact?.let(::parseCompactTimestamp) ?: return "Disabled"
         val finish = finishTimeCompact?.let(::parseCompactTimestamp) ?: return "Disabled"
 
@@ -439,7 +448,7 @@ object DesktopInputSupport {
         currentTimeCompact: String?,
         systemNow: LocalDateTime = LocalDateTime.now(),
     ): Boolean {
-        val current = currentTimeCompact?.let(::parseCompactTimestamp) ?: return true
+        val current = normalizeCurrentTimeCompactForDisplay(currentTimeCompact)?.let(::parseCompactTimestamp) ?: return true
         val differenceMillis = kotlin.math.abs(Duration.between(current, systemNow).toMillis())
         return differenceMillis > (timeSyncThresholdSeconds * 1_000L)
     }

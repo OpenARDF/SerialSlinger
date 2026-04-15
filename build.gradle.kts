@@ -2,7 +2,7 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform) apply false
 }
 
-val serialSlingerVersion = "1.0.86"
+val serialSlingerVersion = "1.0.87"
 val serialSlingerVendor = "OpenARDF"
 val serialSlingerDescription = "Desktop configuration tool for SignalSlinger devices."
 
