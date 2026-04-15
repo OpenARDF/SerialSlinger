@@ -519,35 +519,6 @@ object DesktopInputSupport {
         }
     }
 
-    fun eventEnabledLabel(
-        deviceReportedEventEnabled: Boolean?,
-        currentTimeCompact: String?,
-        startTimeCompact: String?,
-        finishTimeCompact: String?,
-        systemNow: LocalDateTime = LocalDateTime.now(),
-    ): String {
-        val start = startTimeCompact?.let(::parseCompactTimestamp)
-        val finish = finishTimeCompact?.let(::parseCompactTimestamp)
-
-        if (start != null && finish != null && start == finish) {
-            return "Disabled"
-        }
-
-        if (deviceReportedEventEnabled != null) {
-            return if (deviceReportedEventEnabled) "Enabled" else "Disabled"
-        }
-
-        val current = normalizeCurrentTimeCompactForDisplay(currentTimeCompact)?.let(::parseCompactTimestamp) ?: return "Disabled"
-        val resolvedStart = start ?: return "Disabled"
-        val resolvedFinish = finish ?: return "Disabled"
-
-        if (Duration.between(current, systemNow).toMinutes() > 30) {
-            return "Disabled"
-        }
-
-        return "Enabled"
-    }
-
     fun shouldEnableTimeSync(
         currentTimeCompact: String?,
         systemNow: LocalDateTime = LocalDateTime.now(),

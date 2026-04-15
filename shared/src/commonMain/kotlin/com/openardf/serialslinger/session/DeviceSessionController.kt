@@ -56,23 +56,27 @@ object DeviceSessionController {
     fun connectAndLoad(
         transport: DeviceTransport,
         baseSettings: DeviceSettings = DeviceSettings.empty(),
+        progress: ((completed: Int, total: Int) -> Unit)? = null,
     ): DeviceLoadResult {
         transport.connect()
         val connectedState = DeviceSessionWorkflow.connected(baseSettings)
-        return refreshFromDevice(connectedState, transport, startEditing = true)
+        return refreshFromDevice(connectedState, transport, startEditing = true, progress = progress)
     }
 
     fun refreshFromDevice(
         state: DeviceSessionState,
         transport: DeviceTransport,
         startEditing: Boolean = false,
+        progress: ((completed: Int, total: Int) -> Unit)? = null,
     ): DeviceLoadResult {
         val commands = mutableListOf<String>()
         val lines = mutableListOf<String>()
         val traceEntries = mutableListOf<SerialTraceEntry>()
         var updatedState = state.copy(connectionState = ConnectionState.CONNECTED)
+        val bootstrapCommands = SignalSlingerFirmwareSupport.bootstrapLoadCommands()
+        progress?.invoke(0, bootstrapCommands.size.coerceAtLeast(1))
 
-        for (command in SignalSlingerFirmwareSupport.bootstrapLoadCommands()) {
+        for (command in bootstrapCommands) {
             val sentAtMs = System.currentTimeMillis()
             transport.sendCommands(listOf(command))
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
@@ -84,6 +88,7 @@ object DeviceSessionController {
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
             }
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
+            progress?.invoke(commands.size, bootstrapCommands.size.coerceAtLeast(1))
         }
 
         val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
@@ -92,6 +97,8 @@ object DeviceSessionController {
         updatedState = updatedState.copy(
             snapshot = updatedState.snapshot?.copy(capabilities = firmwareProfile.capabilities),
         )
+        val totalCommands = bootstrapCommands.size + firmwareProfile.loadCommandsAfterVersion.size
+        progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
         for (command in firmwareProfile.loadCommandsAfterVersion) {
             val resolvedCommand = resolvePatternSpeedReadCommand(
                 command = command,
@@ -108,6 +115,7 @@ object DeviceSessionController {
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
             }
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
+            progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
         }
 
         if (startEditing && updatedState.editableSettings == null) {
@@ -126,10 +134,25 @@ object DeviceSessionController {
         state: DeviceSessionState,
         editedSettings: EditableDeviceSettings,
         transport: DeviceTransport,
+        progress: ((completed: Int, total: Int) -> Unit)? = null,
     ): DeviceSubmitResult {
         val submission = DeviceSessionWorkflow.submitChanges(state, editedSettings)
         val submitLines = mutableListOf<String>()
         val submitTraceEntries = mutableListOf<SerialTraceEntry>()
+        val validatedSettings = editedSettings.toValidatedDeviceSettings()
+        val submissionSnapshot = requireNotNull(submission.state.snapshot) {
+            "Cannot submit changes before a device snapshot has been loaded."
+        }
+        val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
+            submissionSnapshot.info.softwareVersion,
+        )
+        val readbackCommands = buildVerificationReadbackCommands(
+            writePlan = submission.writePlan,
+            expectedSettings = validatedSettings,
+            firmwareProfile = firmwareProfile,
+        )
+        val totalCommands = (submission.commands.size + readbackCommands.size).coerceAtLeast(1)
+        progress?.invoke(0, totalCommands)
         for (command in submission.commands) {
             val sentAtMs = System.currentTimeMillis()
             transport.sendCommands(listOf(command))
@@ -140,8 +163,8 @@ object DeviceSessionController {
             submitTraceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
             }
+            progress?.invoke(submitTraceEntries.count { it.direction == SerialTraceDirection.TX }, totalCommands)
         }
-        val validatedSettings = editedSettings.toValidatedDeviceSettings()
         val baseSnapshot = requireNotNull(submission.state.snapshot) {
             "Cannot finalize submission without a loaded snapshot."
         }
@@ -159,14 +182,6 @@ object DeviceSessionController {
             nextState = DeviceSessionWorkflow.ingestReportLines(nextState, submitLines)
         }
 
-        val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
-            submission.state.snapshot.info.softwareVersion,
-        )
-        val readbackCommands = buildVerificationReadbackCommands(
-            writePlan = submission.writePlan,
-            expectedSettings = validatedSettings,
-            firmwareProfile = firmwareProfile,
-        )
         val readbackLines = mutableListOf<String>()
         val readbackTraceEntries = mutableListOf<SerialTraceEntry>()
         val observedReadbackKeys = linkedSetOf<SettingKey>()
@@ -183,6 +198,10 @@ object DeviceSessionController {
             }
             observedReadbackKeys += extractObservedSettingKeys(responseLines)
             nextState = DeviceSessionWorkflow.ingestReportLines(nextState, responseLines)
+            progress?.invoke(
+                submission.commands.size + readbackTraceEntries.count { it.direction == SerialTraceDirection.TX },
+                totalCommands,
+            )
         }
 
         nextState = nextState.copy(

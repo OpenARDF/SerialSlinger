@@ -24,6 +24,7 @@ import com.openardf.serialslinger.session.SettingVerification
 import com.openardf.serialslinger.transport.DesktopSerialPortInfo
 import com.openardf.serialslinger.transport.DesktopSerialTransport
 import java.awt.Desktop
+import java.awt.Dialog
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -59,6 +60,7 @@ import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
 import javax.swing.JComboBox
+import javax.swing.JDialog
 import javax.swing.JFrame
 import javax.swing.JList
 import javax.swing.JLabel
@@ -72,6 +74,7 @@ import javax.swing.JSplitPane
 import javax.swing.JSpinner
 import javax.swing.JFormattedTextField
 import javax.swing.JRadioButtonMenuItem
+import javax.swing.JProgressBar
 import javax.swing.SpinnerNumberModel
 import javax.swing.JTextField
 import javax.swing.JTextPane
@@ -171,15 +174,31 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val cloneAccentColor = Color(0x1E, 0x40, 0xAF)
     private val cloneAccentBorderColor = Color(0x93, 0xC5, 0xFD)
     private val cloneAccentBackground = Color(0xEF, 0xF6, 0xFF)
+    private val applyAccentColor = Color(0x16, 0x65, 0x34)
+    private val applyAccentRolloverColor = Color(0x15, 0x80, 0x3D)
     private val unreadFieldForeground = Color(0x6B, 0x72, 0x80)
     private val alertForeground = Color(0xB9, 0x1C, 0x1C)
     private val portModel = DefaultComboBoxModel<SignalSlingerPortProbe>()
     private val portComboBox = JComboBox(portModel)
     private val autoDetectButton = JButton("Auto Detect")
     private val submitButton = createAccentButton("Clone")
+    private val applyButton = createAccentButton(
+        title = "Apply",
+        accentColor = applyAccentColor,
+        rolloverColor = applyAccentRolloverColor,
+    ).apply {
+        isEnabled = false
+    }
     private val cloneTemplateLabel = JLabel("Clone template not set")
     private val headlineLabel = JLabel(" ")
     private val statusLabel = JLabel("Idle")
+    private var busyDialog: JDialog? = null
+    private var busyDialogStatusLabel: JLabel? = null
+    private var busyDialogProgressBar: JProgressBar? = null
+    private var busyDialogProgressPanel: JPanel? = null
+    private var busyDialogShowTimer: Timer? = null
+    private var pendingImmediateEdit: PendingImmediateEdit? = null
+    @Volatile private var busyProgressState: BusyProgressState? = null
     private val rawCommandField = JTextField()
     private val rawSerialRowPanel = JPanel(BorderLayout(8, 0)).apply {
         add(JLabel("Raw Serial"), BorderLayout.WEST)
@@ -222,7 +241,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val daysField = JSpinner(SpinnerNumberModel(1, 1, 255, 1))
     private val startsInField = JTextField()
     private val lastsField = JTextField()
-    private val eventEnabledField = JTextField()
     private val disableEventButton = JButton("Disable Event")
     private val currentFrequencyField = JTextField()
     private val currentBankField = JTextField()
@@ -331,7 +349,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentBankField.isEditable = false
         startsInField.isEditable = false
         lastsField.isEditable = false
-        eventEnabledField.isEditable = false
         versionInfoField.isEditable = false
         internalBatteryField.isEditable = false
         externalBatteryField.isEditable = false
@@ -343,7 +360,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureInformationalField(currentBankField)
         configureInformationalField(startsInField)
         configureInformationalField(lastsField)
-        configureInformationalField(eventEnabledField)
         configureInformationalField(versionInfoField)
         configureInformationalField(internalBatteryField)
         configureInformationalField(externalBatteryField)
@@ -380,12 +396,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             autoDetectButton.margin.bottom,
             14,
         )
+        applyButton.margin = submitButton.margin
         val autoDetectPreferredSize = autoDetectButton.preferredSize
         val clonePreferredSize = submitButton.preferredSize
         val matchedCloneSize = Dimension(clonePreferredSize.width, autoDetectPreferredSize.height)
         submitButton.preferredSize = matchedCloneSize
         submitButton.minimumSize = matchedCloneSize
         submitButton.maximumSize = matchedCloneSize
+        val applyPreferredSize = applyButton.preferredSize
+        val matchedApplySize = Dimension(applyPreferredSize.width, autoDetectPreferredSize.height)
+        applyButton.preferredSize = matchedApplySize
+        applyButton.minimumSize = matchedApplySize
+        applyButton.maximumSize = matchedApplySize
 
         autoDetectButton.toolTipText = "Click to scan ports. Press and hold to reload the current/selected port as the active device."
         installAutoDetectButtonLongPressHandler()
@@ -405,6 +427,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             cloneTimedEventSettings()
         }
+        applyButton.toolTipText = "Make a change in a field, then click Apply."
+        applyButton.addActionListener { commitPendingImmediateEdit() }
         syncTimeButton.addActionListener { syncDeviceTimeToSystem() }
         setTimeButton.addActionListener { setDeviceTimeToSelection() }
         spinnerEditorTextField(manualTimeSpinner).addActionListener {
@@ -597,7 +621,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return JPanel(BorderLayout(8, 8)).apply {
             border = BorderFactory.createEmptyBorder(0, 12, 12, 12)
             add(rawSerialRowPanel, BorderLayout.NORTH)
-            add(statusLabel, BorderLayout.SOUTH)
+            add(
+                JPanel(BorderLayout(8, 0)).apply {
+                    isOpaque = false
+                    add(statusLabel, BorderLayout.CENTER)
+                    add(applyButton, BorderLayout.EAST)
+                },
+                BorderLayout.SOUTH,
+            )
         }
     }
 
@@ -628,8 +659,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = BorderFactory.createEmptyBorder(0, 0, 12, 0)
-            add(buildSectionPanel("Device Settings") { section ->
+            add(buildSectionPanel(
+                title = "Device Settings",
+                helperText = "These settings are individual to each device. They are not applied when Clone is used.",
+            ) { section ->
                 var row = 0
+                row = addSectionNote(section, row)
                 row = addRow(section, row, "Fox Role", foxRoleCombo)
                 row = addRow(section, row, "Pattern Text", patternTextField)
                 row = addRow(section, row, devicePatternSpeedLabel, devicePatternSpeedField)
@@ -666,8 +701,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     row = addRow(section, row, frequency1Label, frequency1Field)
                     row = addRow(section, row, frequency2Label, frequency2Field)
                     row = addRow(section, row, frequency3Label, frequency3Field)
-                    row = addRow(section, row, frequencyBLabel, frequencyBField)
-                    addRow(section, row, "Event Enabled", eventEnabledField)
+                    addRow(section, row, frequencyBLabel, frequencyBField)
                 },
             )
             add(Box.createVerticalStrut(12))
@@ -735,7 +769,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return row + 1
     }
 
-    private fun createAccentButton(title: String): JButton {
+    private fun createAccentButton(
+        title: String,
+        accentColor: Color = cloneAccentColor,
+        rolloverColor: Color = accentColor,
+    ): JButton {
         return object : JButton(title) {
             override fun paintComponent(graphics: Graphics) {
                 val graphics2d = graphics.create() as Graphics2D
@@ -748,9 +786,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     val fillHeight = (height - topInset - bottomInset).coerceAtLeast(10)
                     val fillColor = when {
                         !isEnabled -> Color(0xD1, 0xD5, 0xDB)
-                        model.isPressed -> cloneAccentColor.darker()
-                        model.isRollover -> Color(0x1D, 0x4E, 0xD8)
-                        else -> cloneAccentColor
+                        model.isPressed -> accentColor.darker()
+                        model.isRollover -> rolloverColor
+                        else -> accentColor
                     }
                     graphics2d.color = fillColor
                     graphics2d.fillRoundRect(1, fillY, width - 2, fillHeight, 12, 12)
@@ -769,7 +807,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     val bottomInset = referenceInsets.bottom.coerceAtLeast(2)
                     val borderY = topInset
                     val borderHeight = (height - topInset - bottomInset).coerceAtLeast(10)
-                    graphics2d.color = if (isEnabled) cloneAccentColor.darker() else Color(0x9C, 0xA3, 0xAF)
+                    graphics2d.color = if (isEnabled) accentColor.darker() else Color(0x9C, 0xA3, 0xAF)
                     graphics2d.drawRoundRect(1, borderY, width - 3, borderHeight - 1, 12, 12)
                 } finally {
                     graphics2d.dispose()
@@ -826,17 +864,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun installImmediateApplyHandlers() {
-        installTextCommitHandler(stationIdField) { applyStationIdChange() }
-        installTextCommitHandler(patternTextField) { applyPatternTextChange() }
+        installTextCommitHandler(stationIdField, "Station ID") { applyStationIdChange() }
+        installTextCommitHandler(patternTextField, "Pattern Text") { applyPatternTextChange() }
         installComboCommitHandler(idSpeedField) { applyIdSpeedChange() }
         installComboCommitHandler(devicePatternSpeedField) { applyPatternSpeedChange() }
         installComboCommitHandler(timedPatternSpeedField) { applyPatternSpeedChange() }
         installComboCommitHandler(batteryThresholdField) { applyBatteryThresholdChange() }
-        installSpinnerCommitHandler(daysField) { applyDaysToRunChange() }
-        installSpinnerCommitHandler(frequency1Field) { applyFrequency1Change() }
-        installSpinnerCommitHandler(frequency2Field) { applyFrequency2Change() }
-        installSpinnerCommitHandler(frequency3Field) { applyFrequency3Change() }
-        installSpinnerCommitHandler(frequencyBField) { applyFrequencyBChange() }
+        installSpinnerCommitHandler(daysField, "Days To Run") { applyDaysToRunChange() }
+        installSpinnerCommitHandler(frequency1Field, "Frequency 1") { applyFrequency1Change() }
+        installSpinnerCommitHandler(frequency2Field, "Frequency 2") { applyFrequency2Change() }
+        installSpinnerCommitHandler(frequency3Field, "Frequency 3") { applyFrequency3Change() }
+        installSpinnerCommitHandler(frequencyBField, "Frequency B") { applyFrequencyBChange() }
 
         eventTypeCombo.addActionListener {
             if (!updatingForm) {
@@ -853,21 +891,34 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 applyBatteryModeChange()
             }
         }
-        installDateTimeCommitHandler(startTimeSpinner) { applyStartTimeChange() }
-        installDateTimeCommitHandler(finishTimeSpinner) { applyFinishTimeChange() }
+        installDateTimeCommitHandler(startTimeSpinner, "Start Time") { applyStartTimeChange() }
+        installDateTimeCommitHandler(finishTimeSpinner, "Finish Time") { applyFinishTimeChange() }
     }
 
-    private fun installTextCommitHandler(field: JTextField, onCommit: () -> Unit) {
+    private fun installTextCommitHandler(field: JTextField, description: String, onCommit: () -> Unit) {
+        field.document.addDocumentListener(
+            object : javax.swing.event.DocumentListener {
+                override fun insertUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
+                override fun removeUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
+                override fun changedUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
+
+                private fun markPending() {
+                    if (!updatingForm && field.isEditable && field.isEnabled) {
+                        rememberPendingImmediateEdit(description, onCommit)
+                    }
+                }
+            },
+        )
         field.addActionListener {
             if (!updatingForm && field.isEditable && field.isEnabled) {
-                onCommit()
+                commitPendingImmediateEdit(orElse = onCommit)
             }
         }
         field.addFocusListener(
             object : FocusAdapter() {
                 override fun focusLost(event: FocusEvent?) {
                     if (!updatingForm && field.isEditable && field.isEnabled) {
-                        onCommit()
+                        commitPendingImmediateEdit(orElse = onCommit)
                     }
                 }
             },
@@ -882,40 +933,114 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun installSpinnerCommitHandler(spinner: JSpinner, onCommit: () -> Unit) {
-        val textField = spinnerEditorTextField(spinner)
-        textField.addActionListener {
+    private fun installSpinnerCommitHandler(spinner: JSpinner, description: String, onCommit: () -> Unit) {
+        fun markPending() {
             if (!updatingForm && spinner.isEnabled) {
-                onCommit()
+                rememberPendingImmediateEdit(description, onCommit)
             }
         }
-        textField.addFocusListener(
-            object : FocusAdapter() {
-                override fun focusLost(event: FocusEvent?) {
-                    if (!updatingForm && spinner.isEnabled) {
-                        onCommit()
+
+        fun attachEditorHandlers() {
+            val textField = spinnerEditorTextField(spinner)
+            if (textField.getClientProperty(SPINNER_COMMIT_HANDLER_INSTALLED_KEY) == true) {
+                return
+            }
+            textField.putClientProperty(SPINNER_COMMIT_HANDLER_INSTALLED_KEY, true)
+            textField.document.addDocumentListener(
+                object : javax.swing.event.DocumentListener {
+                    override fun insertUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
+                    override fun removeUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
+                    override fun changedUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
+                },
+            )
+            textField.addActionListener {
+                if (!updatingForm && spinner.isEnabled) {
+                    commitPendingImmediateEdit(orElse = onCommit)
+                }
+            }
+            textField.addFocusListener(
+                object : FocusAdapter() {
+                    override fun focusLost(event: FocusEvent?) {
+                        if (!updatingForm && spinner.isEnabled) {
+                            commitPendingImmediateEdit(orElse = onCommit)
+                        }
+                    }
+                },
+            )
+        }
+
+        attachEditorHandlers()
+        spinner.addPropertyChangeListener("editor") {
+            attachEditorHandlers()
+        }
+        spinner.addChangeListener {
+            markPending()
+        }
+    }
+
+    private fun installDateTimeCommitHandler(spinner: JSpinner, description: String, onCommit: () -> Unit) {
+        val textField = spinnerEditorTextField(spinner)
+        textField.document.addDocumentListener(
+            object : javax.swing.event.DocumentListener {
+                override fun insertUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
+                override fun removeUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
+                override fun changedUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
+
+                private fun markPending() {
+                    if (!updatingForm && !isDateTimeCommitSuppressed(spinner)) {
+                        rememberPendingImmediateEdit(description, onCommit)
                     }
                 }
             },
         )
-    }
-
-    private fun installDateTimeCommitHandler(spinner: JSpinner, onCommit: () -> Unit) {
-        val textField = spinnerEditorTextField(spinner)
         textField.addActionListener {
             if (!updatingForm && !isDateTimeCommitSuppressed(spinner)) {
-                onCommit()
+                commitPendingImmediateEdit(orElse = onCommit)
             }
         }
         textField.addFocusListener(
             object : FocusAdapter() {
                 override fun focusLost(event: FocusEvent?) {
                     if (!updatingForm && !isDateTimeCommitSuppressed(spinner)) {
-                        onCommit()
+                        commitPendingImmediateEdit(orElse = onCommit)
                     }
                 }
             },
         )
+    }
+
+    private fun rememberPendingImmediateEdit(description: String, onCommit: () -> Unit) {
+        if (backgroundWorkInProgress) {
+            return
+        }
+        pendingImmediateEdit = PendingImmediateEdit(description, onCommit)
+        updateApplyButtonState()
+    }
+
+    private fun clearPendingImmediateEdit() {
+        pendingImmediateEdit = null
+        updateApplyButtonState()
+    }
+
+    private fun commitPendingImmediateEdit(orElse: (() -> Unit)? = null) {
+        if (backgroundWorkInProgress) {
+            return
+        }
+        val pending = pendingImmediateEdit
+        clearPendingImmediateEdit()
+        (pending?.onCommit ?: orElse)?.invoke()
+    }
+
+    private fun updateApplyButtonState() {
+        val pending = pendingImmediateEdit
+        applyButton.isEnabled =
+            pending != null &&
+            !backgroundWorkInProgress &&
+            currentTransport != null &&
+            currentState?.connectionState == ConnectionState.CONNECTED
+        applyButton.toolTipText = pending?.let {
+            "Apply pending ${it.description.lowercase()} change."
+        } ?: "Make a change in a field, then click Apply."
     }
 
     private fun addRow(panel: JPanel, row: Int, label: String, component: Component): Int {
@@ -1645,18 +1770,40 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
 
         runInBackground("Cloning Timed Event Settings...") {
-            val targetRefresh = DeviceSessionController.refreshFromDevice(state, transport, startEditing = true)
+            val targetRefresh = DeviceSessionController.refreshFromDevice(
+                state,
+                transport,
+                startEditing = true,
+                progress = { completed, total ->
+                    setBusyProgressRange(0, 20, completed, total, commandProgressLabel(completed, total))
+                },
+            )
             val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
             val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
             val validated = editable.toValidatedDeviceSettings()
             val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
-            val result = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
+            val result = DeviceSessionController.submitEdits(
+                targetRefresh.state,
+                editable,
+                transport,
+                progress = { completed, total ->
+                    setBusyProgressRange(20, 70, completed, total, commandProgressLabel(completed, total))
+                },
+            )
             val verificationFailures = result.verifications.filter { !it.verified }
-            val refreshed = DeviceSessionController.refreshFromDevice(result.state, transport, startEditing = true)
+            val refreshed = DeviceSessionController.refreshFromDevice(
+                result.state,
+                transport,
+                startEditing = true,
+                progress = { completed, total ->
+                    setBusyProgressRange(70, 90, completed, total, commandProgressLabel(completed, total))
+                },
+            )
             var finalState = refreshed.state
             var syncOperation: TimeSyncOperationResult? = null
 
             if (verificationFailures.isEmpty() && refreshed.state.snapshot?.capabilities?.supportsScheduling == true) {
+                setBusyProgress(94, 100, "Syncing device time")
                 syncOperation = performAlignedTimeSync(
                     transport = transport,
                     state = refreshed.state,
@@ -1664,6 +1811,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 )
                 finalState = syncOperation.finalAttempt.state
             }
+            setBusyProgress(100, 100, "Done")
 
             currentState = finalState
             loadedSnapshot = finalState.snapshot
@@ -1886,15 +2034,37 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
         )
         runInBackground("Applying $description...") {
-            val result = DeviceSessionController.submitEdits(state, editable, transport)
+            val result = DeviceSessionController.submitEdits(
+                state,
+                editable,
+                transport,
+                progress = { completed, total ->
+                    setBusyProgressRange(0, 75, completed, total, commandProgressLabel(completed, total))
+                },
+            )
             val verificationFailures = result.verifications.filter { !it.verified }
             val changeSucceeded = verificationFailures.isEmpty()
             val refreshed = if (updatesTimedEventTemplate && changeSucceeded) {
-                DeviceSessionController.refreshFromDevice(result.state, transport, startEditing = true)
+                DeviceSessionController.refreshFromDevice(
+                    result.state,
+                    transport,
+                    startEditing = true,
+                    progress = { completed, total ->
+                        setBusyProgressRange(75, 95, completed, total, commandProgressLabel(completed, total))
+                    },
+                )
             } else {
                 null
             }
+            if (refreshed == null) {
+                setBusyProgress(100, 100, "Done")
+            } else {
+                setBusyProgress(97, 100, "Checking device time")
+            }
             val refreshClockSample = refreshed?.let { postLoadClockSample(transport, it.state.snapshot) }
+            if (refreshClockSample != null) {
+                setBusyProgress(100, 100, "Done")
+            }
             val refreshedWithClock = refreshed?.let { mergeLoadResults(it, refreshClockSample?.first) }
             val finalState = refreshedWithClock?.state ?: result.state
             val finalSnapshot = if (changeSucceeded) {
@@ -2315,6 +2485,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun applySnapshotToForm(snapshot: DeviceSnapshot?, recalculateClockOffset: Boolean = true) {
+        clearPendingImmediateEdit()
         if (snapshot == null) {
             clearFormForUnread()
             return
@@ -2790,14 +2961,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun runInBackground(
         status: String,
         showErrorDialog: Boolean = true,
+        showBusyDialog: Boolean = true,
         task: () -> Unit,
     ) {
         if (backgroundWorkInProgress) {
             return
         }
         backgroundWorkInProgress = true
+        clearBusyProgress()
         setBusy(true)
         setStatus(status)
+        if (showBusyDialog) {
+            scheduleBusyDialog(status)
+        }
         Thread {
             try {
                 task()
@@ -2827,6 +3003,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             } finally {
                 SwingUtilities.invokeLater {
                     backgroundWorkInProgress = false
+                    hideBusyDialog()
+                    clearBusyProgress()
                     setBusy(false)
                 }
             }
@@ -2854,6 +3032,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED &&
             cloneTemplateSettings != null
+        updateApplyButtonState()
     }
 
     private fun updateWritableControlAvailability(isBusy: Boolean) {
@@ -3050,6 +3229,153 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun setStatus(status: String) {
         statusLabel.text = status
+        busyDialogStatusLabel?.text = formatBusyDialogStatus(status)
+    }
+
+    private fun scheduleBusyDialog(status: String) {
+        busyDialogShowTimer?.stop()
+        busyDialogShowTimer = Timer(BUSY_DIALOG_DELAY_MS) {
+            busyDialogShowTimer?.stop()
+            busyDialogShowTimer = null
+            if (!backgroundWorkInProgress || busyDialog != null) {
+                return@Timer
+            }
+            showBusyDialog(status)
+        }.apply {
+            isRepeats = false
+            start()
+        }
+    }
+
+    private fun showBusyDialog(status: String) {
+        if (!backgroundWorkInProgress || busyDialog != null) {
+            return
+        }
+
+        val detailLabel = JLabel(formatBusyDialogStatus(status)).apply {
+            alignmentX = Component.LEFT_ALIGNMENT
+            border = BorderFactory.createEmptyBorder(4, 0, 0, 0)
+        }
+        val progressBar = JProgressBar().apply {
+            minimum = 0
+            alignmentX = Component.LEFT_ALIGNMENT
+            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+        }
+        val progressPanel = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            alignmentX = Component.LEFT_ALIGNMENT
+            add(progressBar, BorderLayout.CENTER)
+        }
+        val content = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = BorderFactory.createEmptyBorder(16, 18, 14, 18)
+            add(
+                JLabel(busyDialogPrimaryMessage()).apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                },
+            )
+            add(detailLabel)
+            add(Box.createVerticalStrut(12))
+            add(progressPanel)
+        }
+        val dialog = JDialog(this, "Please Wait", Dialog.ModalityType.APPLICATION_MODAL).apply {
+            defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
+            isResizable = false
+            contentPane.add(content)
+            pack()
+            setLocationRelativeTo(this@SerialSlingerDesktopFrame)
+        }
+
+        busyDialog = dialog
+        busyDialogStatusLabel = detailLabel
+        busyDialogProgressBar = progressBar
+        busyDialogProgressPanel = progressPanel
+        updateBusyDialogProgressUi()
+        dialog.isVisible = true
+    }
+
+    private fun hideBusyDialog() {
+        busyDialogShowTimer?.stop()
+        busyDialogShowTimer = null
+        busyDialogStatusLabel = null
+        busyDialogProgressBar = null
+        busyDialogProgressPanel = null
+        busyDialog?.let { dialog ->
+            busyDialog = null
+            if (dialog.isDisplayable) {
+                dialog.isVisible = false
+                dialog.dispose()
+            }
+        }
+    }
+
+    private fun busyDialogPrimaryMessage(): String {
+        return if (currentTransport != null || currentConnectedPortPath != null) {
+            "Talking with device..."
+        } else {
+            "Working..."
+        }
+    }
+
+    private fun setBusyProgress(completed: Int, total: Int, label: String? = null) {
+        val safeTotal = total.coerceAtLeast(1)
+        busyProgressState = BusyProgressState(
+            completed = completed.coerceIn(0, safeTotal),
+            total = safeTotal,
+            label = label,
+        )
+        SwingUtilities.invokeLater { updateBusyDialogProgressUi() }
+    }
+
+    private fun setBusyProgressRange(
+        startPercent: Int,
+        endPercent: Int,
+        completed: Int,
+        total: Int,
+        label: String? = null,
+    ) {
+        val boundedStart = startPercent.coerceIn(0, 100)
+        val boundedEnd = endPercent.coerceIn(boundedStart, 100)
+        val safeTotal = total.coerceAtLeast(1)
+        val safeCompleted = completed.coerceIn(0, safeTotal)
+        val scaledCompleted = boundedStart + (((boundedEnd - boundedStart) * safeCompleted) / safeTotal)
+        setBusyProgress(scaledCompleted, 100, label)
+    }
+
+    private fun clearBusyProgress() {
+        busyProgressState = null
+        SwingUtilities.invokeLater { updateBusyDialogProgressUi() }
+    }
+
+    private fun updateBusyDialogProgressUi() {
+        val progressBar = busyDialogProgressBar ?: return
+        val progressPanel = busyDialogProgressPanel ?: return
+        val state = busyProgressState
+        progressBar.string = null
+        progressBar.isStringPainted = false
+        if (state == null) {
+            progressPanel.isVisible = false
+        } else {
+            progressPanel.isVisible = true
+            progressBar.minimum = 0
+            progressBar.maximum = state.total
+            progressBar.value = state.completed
+        }
+        progressPanel.revalidate()
+        progressPanel.repaint()
+    }
+
+    private fun commandProgressLabel(completed: Int, total: Int): String {
+        val noun = if (total == 1) "command" else "commands"
+        return "$completed of $total $noun"
+    }
+
+    private fun formatBusyDialogStatus(status: String): String {
+        val escapedStatus = status
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        return "<html><div style='width: 260px;'>$escapedStatus</div></html>"
     }
 
     private fun sendRawSerialCommand() {
@@ -3072,8 +3398,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "Sending raw serial command on ${currentConnectedPortPath.orEmpty()}...",
         )
         runInBackground("Sending raw serial command...") {
+            setBusyProgress(0, 1, commandProgressLabel(0, 1))
             transport.sendCommands(listOf(command))
             val responseLines = transport.readAvailableLines()
+            setBusyProgress(1, 1, commandProgressLabel(1, 1))
             val nextState = DeviceSessionWorkflow.ingestReportLines(state, responseLines)
             currentState = nextState
             loadedSnapshot = nextState.snapshot
@@ -3156,9 +3484,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 state = requireNotNull(currentState),
                 transport = requireNotNull(currentTransport),
                 startEditing = true,
+                progress = { completed, total ->
+                    setBusyProgressRange(0, 85, completed, total, commandProgressLabel(completed, total))
+                },
             )
             requireLoadResponses(portPath, initialRefresh)
+            setBusyProgress(92, 100, "Checking device time")
             val finalClockSample = postLoadClockSample(requireNotNull(currentTransport), initialRefresh.state.snapshot)
+            setBusyProgress(100, 100, "Done")
             val finalResult = mergeLoadResults(initialRefresh, finalClockSample?.first)
             return LoadedConnection(
                 portPath = portPath,
@@ -3175,9 +3508,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val previousTransport = currentTransport
         val previousState = currentState
         val transport = DesktopSerialTransport(portPath)
-        val initialLoad = DeviceSessionController.connectAndLoad(transport)
+        val initialLoad = DeviceSessionController.connectAndLoad(
+            transport,
+            progress = { completed, total ->
+                setBusyProgressRange(0, 85, completed, total, commandProgressLabel(completed, total))
+            },
+        )
         requireLoadResponses(portPath, initialLoad)
+        setBusyProgress(92, 100, "Checking device time")
         val finalClockSample = postLoadClockSample(transport, initialLoad.state.snapshot)
+        setBusyProgress(100, 100, "Done")
         val finalResult = mergeLoadResults(initialLoad, finalClockSample?.first)
 
         return LoadedConnection(
@@ -3466,11 +3806,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         runInBackground("Syncing device time to system time...") {
+            val syncProgressTotal = estimatedSyncProgressUnits()
+            setBusyProgress(0, syncProgressTotal, "Preparing sync")
             val syncResult = performAlignedTimeSync(
                 transport = transport,
                 state = state,
                 snapshot = snapshot,
+                onProgress = { completed, label ->
+                    setBusyProgress(completed, syncProgressTotal, label)
+                },
             )
+            setBusyProgress(syncProgressTotal, syncProgressTotal, "Done")
             val finalAttempt = syncResult.finalAttempt
             currentState = finalAttempt.state
             loadedSnapshot = finalAttempt.state.snapshot
@@ -3589,8 +3935,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         transport: DesktopSerialTransport,
         state: DeviceSessionState,
         snapshot: DeviceSnapshot,
+        onProgress: ((completed: Int, label: String) -> Unit)? = null,
     ): TimeSyncOperationResult {
-        val latencySamples = sampleClockReadLatency(transport, sampleCount = 3)
+        onProgress?.invoke(0, "Measuring clock latency")
+        val latencySamples = sampleClockReadLatency(transport, sampleCount = SYNC_LATENCY_SAMPLE_COUNT) { completed, _ ->
+            onProgress?.invoke(completed, "Measuring clock latency")
+        }
         var oneWayDelayMillis = DesktopInputSupport.medianMillis(latencySamples.map { it.roundTripMillis }) / 2
         var workingState = state
         var workingSnapshot = snapshot
@@ -3598,13 +3948,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val attempts = mutableListOf<SyncAttempt>()
         var syncComplete = false
 
-        repeat(2) {
+        repeat(SYNC_MAX_ATTEMPTS) { attemptIndex ->
             if (syncComplete) {
                 return@repeat
             }
+            val attemptBase = SYNC_LATENCY_SAMPLE_COUNT + (attemptIndex * SYNC_ATTEMPT_PROGRESS_UNITS)
             val syncTargetTime = DesktopInputSupport.nextSyncTargetTime(
                 minimumLeadMillis = maxOf(1_500L, oneWayDelayMillis + 400L),
             )
+            onProgress?.invoke(attemptBase, "Waiting to send sync target")
             val attempt = performSyncAttempt(
                 transport = transport,
                 state = workingState,
@@ -3612,6 +3964,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 targetTime = syncTargetTime,
                 dispatchTime = syncTargetTime,
                 estimatedOneWayDelayMillis = oneWayDelayMillis.coerceIn(20L, 750L),
+                onSubmitProgress = { completed, _ ->
+                    onProgress?.invoke(
+                        attemptBase + completed,
+                        "Sync attempt ${attemptIndex + 1} of $SYNC_MAX_ATTEMPTS",
+                    )
+                },
+                onVerificationProgress = { completed, _ ->
+                    onProgress?.invoke(
+                        attemptBase + SYNC_SUBMIT_PROGRESS_UNITS + completed,
+                        "Verifying sync attempt ${attemptIndex + 1}",
+                    )
+                },
             )
             attempts += attempt
             workingState = attempt.state
@@ -3684,9 +4048,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         runInBackground("Disabling event...") {
             val goCommands = listOf("GO 0")
+            val currentTotalCommands = 1 + 3 + if (snapshot.capabilities.supportsScheduling) 1 else 0
+            var commandsCompleted = 0
             val goLines = mutableListOf<String>()
+            setBusyProgress(commandsCompleted, currentTotalCommands, commandProgressLabel(commandsCompleted, currentTotalCommands))
             transport.sendCommands(goCommands)
             goLines += transport.readAvailableLines()
+            commandsCompleted += goCommands.size
+            setBusyProgress(commandsCompleted, currentTotalCommands, commandProgressLabel(commandsCompleted, currentTotalCommands))
 
             var nextState = if (goLines.isNotEmpty()) {
                 DeviceSessionWorkflow.ingestReportLines(state, goLines)
@@ -3700,6 +4069,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             finishMirrorCommands.forEach { command ->
                 transport.sendCommands(listOf(command))
                 finishMirrorLines += transport.readAvailableLines()
+                commandsCompleted += 1
+                setBusyProgress(commandsCompleted, currentTotalCommands, commandProgressLabel(commandsCompleted, currentTotalCommands))
             }
             if (finishMirrorLines.isNotEmpty()) {
                 nextState = DeviceSessionWorkflow.ingestReportLines(nextState, finishMirrorLines)
@@ -3710,6 +4081,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val clockRefreshAnchor = if (clockRefreshCommands.isNotEmpty()) {
                 val clockSample = readClockSample(transport)
                 clockRefreshLines += clockSample.responseLines
+                commandsCompleted += 1
+                setBusyProgress(commandsCompleted, currentTotalCommands, commandProgressLabel(commandsCompleted, currentTotalCommands))
                 if (clockRefreshLines.isNotEmpty()) {
                     nextState = DeviceSessionWorkflow.ingestReportLines(nextState, clockRefreshLines)
                 }
@@ -3763,7 +4136,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             setInformationalFieldText(currentTimeField, "Not read")
             setInformationalFieldText(startsInField, "Not read")
             setInformationalFieldText(lastsField, "Not read")
-            setInformationalFieldText(eventEnabledField, "Not read")
             disableEventButton.isEnabled = false
             syncTimeButton.isEnabled = false
             return
@@ -3785,13 +4157,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             startTimeCompact = timedSettings.startTimeCompact,
             finishTimeCompact = timedSettings.finishTimeCompact,
             fallback = snapshot.status.eventDurationSummary,
-        ), unreadPlaceholder = false)
-        setInformationalFieldText(eventEnabledField, DesktopInputSupport.eventEnabledLabel(
-            deviceReportedEventEnabled = snapshot.status.eventEnabled,
-            currentTimeCompact = displayedDeviceTimeCompact,
-            startTimeCompact = timedSettings.startTimeCompact,
-            finishTimeCompact = timedSettings.finishTimeCompact,
-            systemNow = displayNow,
         ), unreadPlaceholder = false)
         syncTimeButton.isEnabled =
             displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK &&
@@ -3885,6 +4250,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         runInBackground(
             "Refreshing device time from SignalSlinger...",
             showErrorDialog = false,
+            showBusyDialog = false,
         ) {
             val transport = requireNotNull(currentTransport)
             val state = requireNotNull(currentState)
@@ -4492,10 +4858,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun sampleClockReadLatency(
         transport: DesktopSerialTransport,
         sampleCount: Int,
+        onProgress: ((completed: Int, total: Int) -> Unit)? = null,
     ): List<ClockReadSample> {
+        onProgress?.invoke(0, sampleCount)
         return buildList {
             repeat(sampleCount) { index ->
                 add(readClockSample(transport))
+                onProgress?.invoke(index + 1, sampleCount)
                 if (index < sampleCount - 1) {
                     Thread.sleep(80L)
                 }
@@ -4510,6 +4879,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         targetTime: java.time.LocalDateTime,
         dispatchTime: java.time.LocalDateTime,
         estimatedOneWayDelayMillis: Long,
+        onSubmitProgress: ((completed: Int, total: Int) -> Unit)? = null,
+        onVerificationProgress: ((completed: Int, total: Int) -> Unit)? = null,
     ): SyncAttempt {
         waitForSyncTargetDispatch(dispatchTime, estimatedOneWayDelayMillis)
         val editable = EditableDeviceSettings.fromDeviceSettings(snapshot.settings).copy(
@@ -4520,9 +4891,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 DesktopInputSupport.formatCompactTimestamp(targetTime),
             ),
         )
-        val submitResult = DeviceSessionController.submitEdits(state, editable, transport)
+        val submitResult = DeviceSessionController.submitEdits(
+            state,
+            editable,
+            transport,
+            progress = onSubmitProgress,
+        )
         var nextState = submitResult.state
-        val verificationSamples = observeClockPhaseSamples(transport)
+        val verificationSamples = observeClockPhaseSamples(
+            transport,
+            maxSamples = SYNC_VERIFICATION_SAMPLE_MAX,
+            onProgress = onVerificationProgress,
+        )
         verificationSamples.forEach { sample ->
             nextState = DeviceSessionWorkflow.ingestReportLines(nextState, sample.responseLines)
         }
@@ -4549,11 +4929,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun observeClockPhaseSamples(
         transport: DesktopSerialTransport,
         maxSamples: Int = 8,
+        onProgress: ((completed: Int, total: Int) -> Unit)? = null,
     ): List<ClockReadSample> {
         val samples = mutableListOf<ClockReadSample>()
+        onProgress?.invoke(0, maxSamples)
         repeat(maxSamples) { index ->
             val sample = readClockSample(transport)
             samples += sample
+            onProgress?.invoke(samples.size, maxSamples)
             val previousReported = samples.getOrNull(samples.lastIndex - 1)?.reportedTimeCompact
             if (previousReported != null && sample.reportedTimeCompact != null && previousReported != sample.reportedTimeCompact) {
                 return samples
@@ -4578,6 +4961,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 .mapNotNull { line -> SignalSlingerProtocolCodec.parseReportLine(line)?.settingsPatch?.currentTimeCompact }
                 .firstOrNull(),
         )
+    }
+
+    private fun estimatedSyncProgressUnits(): Int {
+        return SYNC_LATENCY_SAMPLE_COUNT + (SYNC_MAX_ATTEMPTS * SYNC_ATTEMPT_PROGRESS_UNITS)
     }
 
     private fun chooseBetterSyncAttempt(
@@ -4665,6 +5052,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private data class PendingImmediateEdit(
+        val description: String,
+        val onCommit: () -> Unit,
+    )
+
+    private data class BusyProgressState(
+        val completed: Int,
+        val total: Int,
+        val label: String?,
+    )
+
     private data class LoadedConnection(
         val portPath: String,
         val transport: DesktopSerialTransport,
@@ -4744,6 +5142,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private companion object {
+        const val BUSY_DIALOG_DELAY_MS = 200
+        const val SYNC_LATENCY_SAMPLE_COUNT = 3
+        const val SYNC_MAX_ATTEMPTS = 2
+        const val SYNC_SUBMIT_PROGRESS_UNITS = 3
+        const val SYNC_VERIFICATION_SAMPLE_MAX = 8
+        const val SYNC_ATTEMPT_PROGRESS_UNITS = SYNC_SUBMIT_PROGRESS_UNITS + SYNC_VERIFICATION_SAMPLE_MAX
+        const val SPINNER_COMMIT_HANDLER_INSTALLED_KEY = "serialslinger.spinnerCommitHandlerInstalled"
         const val DATE_TIME_ACTIVE_FIELD_KEY = "serialslinger.dateTimeActiveField"
         const val DATE_TIME_PENDING_COMPACT_KEY = "serialslinger.dateTimePendingCompact"
         const val DATE_TIME_COMMIT_SUPPRESSED_KEY = "serialslinger.dateTimeCommitSuppressed"
