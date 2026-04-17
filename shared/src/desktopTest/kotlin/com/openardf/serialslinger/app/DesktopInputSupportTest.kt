@@ -1,7 +1,9 @@
 package com.openardf.serialslinger.app
 
 import com.openardf.serialslinger.model.EventType
+import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.FoxRole
+import com.openardf.serialslinger.model.JvmTimeSupport
 import java.time.LocalDateTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -48,7 +50,7 @@ class DesktopInputSupportTest {
             startsInFallback = null,
         )
 
-        assertEquals("Time remaining: 59m 59s", label)
+        assertEquals("Running - Time remaining 59m 59s", label)
     }
 
     @Test
@@ -76,7 +78,7 @@ class DesktopInputSupportTest {
             startsInFallback = "In Progress",
         )
 
-        assertEquals("Time remaining: 1h 00m 00s", label)
+        assertEquals("Running - Time remaining 1h 00m 00s", label)
     }
 
     @Test
@@ -105,6 +107,101 @@ class DesktopInputSupportTest {
         )
 
         assertEquals("Completed", label)
+    }
+
+    @Test
+    fun describesGapBetweenMultiDayWindowsAsStartsIn() {
+        val label = DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = true,
+            eventStateSummary = null,
+            currentTimeCompact = "260411090000",
+            startTimeCompact = "260410120000",
+            finishTimeCompact = "260410170000",
+            startsInFallback = null,
+            daysToRun = 3,
+        )
+
+        assertEquals("Starts in 3h 00m 00s", label)
+    }
+
+    @Test
+    fun describesRunningMultiDayEventWithDayNumber() {
+        val label = DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = true,
+            eventStateSummary = null,
+            currentTimeCompact = "260411130000",
+            startTimeCompact = "260410120000",
+            finishTimeCompact = "260410170000",
+            startsInFallback = null,
+            daysToRun = 3,
+        )
+
+        assertEquals("Running Day 2 - Time remaining 4h 00m 00s", label)
+    }
+
+    @Test
+    fun describesCompletedMultiDayEventWithProgressSummary() {
+        val label = DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = true,
+            eventStateSummary = null,
+            currentTimeCompact = "260413090000",
+            startTimeCompact = "260410120000",
+            finishTimeCompact = "260410170000",
+            startsInFallback = null,
+            daysToRun = 3,
+        )
+
+        assertEquals("Completed 3 of 3 days", label)
+    }
+
+    @Test
+    fun formatsDaysToRunRemainingSummaryForMultiDayEvent() {
+        val summary = DesktopInputSupport.formatDaysToRunRemainingSummary(
+            totalDaysToRun = 3,
+            daysToRunRemaining = 1,
+            currentTimeCompact = "260411090000",
+        )
+
+        assertEquals("(1 Remaining)", summary)
+    }
+
+    @Test
+    fun formatsUnknownDaysToRunRemainingSummaryWhenClockIsInvalid() {
+        val summary = DesktopInputSupport.formatDaysToRunRemainingSummary(
+            totalDaysToRun = 3,
+            daysToRunRemaining = 1,
+            currentTimeCompact = null,
+        )
+
+        assertEquals("(? Remaining)", summary)
+    }
+
+    @Test
+    fun estimatesDaysToRunRemainingBeforeFirstDayStarts() {
+        val summary =
+            JvmTimeSupport.formatDaysToRunRemainingSummary(
+                totalDaysToRun = 3,
+                daysToRunRemaining = null,
+                currentTimeCompact = "260410110000",
+                startTimeCompact = "260410120000",
+                finishTimeCompact = "260410170000",
+            )
+
+        assertEquals("(3 Remaining)", summary)
+    }
+
+    @Test
+    fun estimatesDaysToRunRemainingDuringSecondDay() {
+        val summary =
+            JvmTimeSupport.formatDaysToRunRemainingSummary(
+                totalDaysToRun = 3,
+                daysToRunRemaining = null,
+                currentTimeCompact = "260411130000",
+                startTimeCompact = "260410120000",
+                finishTimeCompact = "260410170000",
+            )
+
+        assertEquals("(1 Remaining)", summary)
     }
 
     @Test
@@ -450,6 +547,140 @@ class DesktopInputSupportTest {
         assertEquals(
             listOf(EventType.CLASSIC, EventType.FOXORING, EventType.SPRINT),
             DesktopInputSupport.selectableEventTypes(),
+        )
+    }
+
+    @Test
+    fun desktopEventProfileHelpersStayAlignedWithSharedSupport() {
+        EventType.entries
+            .filter { it != EventType.NONE }
+            .forEach { eventType ->
+                assertEquals(
+                    EventProfileSupport.patternTextIsEditable(eventType),
+                    DesktopInputSupport.patternTextIsEditable(eventType),
+                )
+                assertEquals(
+                    EventProfileSupport.patternSpeedBelongsToTimedEventSettings(eventType),
+                    DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(eventType),
+                )
+                assertEquals(
+                    EventProfileSupport.timedEventFrequencyVisibility(eventType),
+                    DesktopInputSupport.timedEventFrequencyVisibility(eventType),
+                )
+            }
+    }
+
+    @Test
+    fun desktopPatternDisplayStaysAlignedWithSharedSupport() {
+        val cases =
+            listOf(
+                Triple(EventType.CLASSIC, FoxRole.CLASSIC_2, "MOH"),
+                Triple(EventType.FOXORING, FoxRole.FOXORING_2, "MOS"),
+                Triple(EventType.SPRINT, FoxRole.SPRINT_SLOW_2, "MOI"),
+            )
+
+        cases.forEach { (eventType, foxRole, storedPatternText) ->
+            assertEquals(
+                EventProfileSupport.displayPatternText(eventType, foxRole, storedPatternText),
+                DesktopInputSupport.displayPatternText(eventType, foxRole, storedPatternText),
+            )
+        }
+    }
+
+    @Test
+    fun desktopScheduleResolutionStaysAlignedWithSharedSupport() {
+        val desktopStart =
+            DesktopInputSupport.resolveStartTimeForChange(
+                startTimeCompact = "260411140000",
+                currentTimeCompact = "260411131500",
+            )
+        val sharedStart =
+            JvmTimeSupport.resolveStartTimeForChange(
+                startTimeCompact = "260411140000",
+                currentTimeCompact = "260411131500",
+            )
+        assertEquals(sharedStart, desktopStart)
+
+        val desktopSchedule =
+            DesktopInputSupport.resolveScheduleForFinishTimeChange(
+                startTimeCompact = "260411140000",
+                finishTimeCompact = "260411170000",
+                currentTimeCompact = "260411131500",
+            )
+        val sharedSchedule =
+            JvmTimeSupport.resolveScheduleForFinishTimeChange(
+                startTimeCompact = "260411140000",
+                finishTimeCompact = "260411170000",
+                currentTimeCompact = "260411131500",
+            )
+
+        assertEquals(sharedSchedule.startTimeCompact, desktopSchedule.startTimeCompact)
+        assertEquals(sharedSchedule.finishTimeCompact, desktopSchedule.finishTimeCompact)
+        assertEquals(
+            JvmTimeSupport.minimumStartTimeBoundary("260411131242"),
+            DesktopInputSupport.minimumStartTimeBoundary("260411131242"),
+        )
+        assertEquals(
+            JvmTimeSupport.minimumFinishTimeBoundary(
+                currentTimeCompact = "260411131242",
+                startTimeCompact = "260411140000",
+            ),
+            DesktopInputSupport.minimumFinishTimeBoundary(
+                currentTimeCompact = "260411131242",
+                startTimeCompact = "260411140000",
+            ),
+        )
+    }
+
+    @Test
+    fun desktopMultiDayStatusFormattingStaysAlignedWithSharedSupport() {
+        val desktopStatus =
+            DesktopInputSupport.describeEventStatus(
+                deviceReportedEventEnabled = true,
+                eventStateSummary = null,
+                currentTimeCompact = "260411130000",
+                startTimeCompact = "260410120000",
+                finishTimeCompact = "260410170000",
+                startsInFallback = null,
+                daysToRun = 3,
+            )
+        val sharedStatus =
+            JvmTimeSupport.describeEventStatus(
+                deviceReportedEventEnabled = true,
+                eventStateSummary = null,
+                currentTimeCompact = "260411130000",
+                startTimeCompact = "260410120000",
+                finishTimeCompact = "260410170000",
+                startsInFallback = null,
+                daysToRun = 3,
+            )
+        assertEquals(sharedStatus, desktopStatus)
+
+        val desktopDuration =
+            DesktopInputSupport.describeEventDuration(
+                startTimeCompact = "260410120000",
+                finishTimeCompact = "260410170000",
+                fallback = "5 hours",
+            )
+        val sharedDuration =
+            JvmTimeSupport.describeEventDuration(
+                startTimeCompact = "260410120000",
+                finishTimeCompact = "260410170000",
+                fallback = "5 hours",
+            )
+        assertEquals(sharedDuration, desktopDuration)
+
+        assertEquals(
+            JvmTimeSupport.formatDaysToRunRemainingSummary(
+                totalDaysToRun = 3,
+                daysToRunRemaining = 1,
+                currentTimeCompact = "260411090000",
+            ),
+            DesktopInputSupport.formatDaysToRunRemainingSummary(
+                totalDaysToRun = 3,
+                daysToRunRemaining = 1,
+                currentTimeCompact = "260411090000",
+            ),
         )
     }
 }

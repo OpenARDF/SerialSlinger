@@ -114,6 +114,7 @@ object DeviceSessionWorkflow {
                 temperatureC = update.deviceStatusPatch?.temperatureC ?: status.temperatureC,
                 internalBatteryVolts = update.deviceStatusPatch?.internalBatteryVolts ?: status.internalBatteryVolts,
                 externalBatteryVolts = update.deviceStatusPatch?.externalBatteryVolts ?: status.externalBatteryVolts,
+                daysRemaining = update.deviceStatusPatch?.daysRemaining ?: status.daysRemaining,
                 eventEnabled = update.deviceStatusPatch?.eventEnabled ?: status.eventEnabled,
                 eventStateSummary = update.deviceStatusPatch?.eventStateSummary ?: status.eventStateSummary,
                 eventStartsInSummary = update.deviceStatusPatch?.eventStartsInSummary ?: status.eventStartsInSummary,

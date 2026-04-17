@@ -122,6 +122,14 @@ class SignalSlingerProtocolCodecTest {
     }
 
     @Test
+    fun parsesDaysRemainingIntoDeviceStatusPatch() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("* Days remaining: 1")
+
+        assertNotNull(update)
+        assertEquals(1, update.deviceStatusPatch?.daysRemaining)
+    }
+
+    @Test
     fun parsesDeviceReportedEventStateLines() {
         val enabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Running forever.")
         val disabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Not scheduled")

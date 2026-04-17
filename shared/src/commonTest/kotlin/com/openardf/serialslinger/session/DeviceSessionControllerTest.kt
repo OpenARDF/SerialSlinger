@@ -113,11 +113,44 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun submitEditsAcceptsUppercaseReadbackForLowercaseTextInput() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "ID w1fox" to listOf("* ID: W1FOX"),
+                "PAT moe" to listOf("* PAT:MOE"),
+                "ID" to listOf("* ID: W1FOX"),
+                "PAT" to listOf("* PAT:MOE"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(FakeDeviceTransport(), sampleSettings())
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            stationId = SettingsField("stationId", "Station ID", "N0CALL", "w1fox"),
+            patternText = SettingsField("patternText", "Pattern Text", "MOE", "moe"),
+        )
+
+        val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
+
+        assertEquals(listOf("ID w1fox", "PAT moe"), result.commandsSent)
+        assertEquals(listOf("ID", "PAT"), result.readbackCommandsSent)
+        assertEquals("W1FOX", result.state.snapshot?.settings?.stationId)
+        assertEquals("MOE", result.state.snapshot?.settings?.patternText)
+        assertEquals(
+            listOf(SettingKey.STATION_ID, SettingKey.PATTERN_TEXT),
+            result.verifications.map { it.fieldKey },
+        )
+        assertTrue(result.verifications.all { it.observedInReadback && it.verified })
+    }
+
+    @Test
     fun submitEditsUsesReadbackToCatchVerificationMismatch() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(
                 "EVT F" to listOf("* Event:Foxoring"),
                 "EVT" to listOf("* Event:Classic"),
+                "FOX" to listOf("""* Fox:Classic Fox 1 "MOE""""),
+                "PAT" to listOf("* PAT:MOE"),
+                "SPD F" to listOf("* FOX-O SPD:8 WPM"),
                 "FRE" to listOf("* FRE=3510.0 kHz"),
             ),
         )
@@ -130,7 +163,7 @@ class DeviceSessionControllerTest {
         val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
 
         assertEquals(listOf("EVT F"), result.commandsSent)
-        assertEquals(listOf("EVT", "FRE"), result.readbackCommandsSent)
+        assertEquals(listOf("EVT", "FOX", "PAT", "SPD F", "FRE"), result.readbackCommandsSent)
         assertEquals(EventType.CLASSIC, result.state.snapshot?.settings?.eventType)
         assertEquals(
             SettingVerification(
@@ -145,11 +178,52 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun submitEditsRefreshesFoxRoleAfterEventTypeChange() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "EVT C" to listOf(
+                    "* Event:Classic",
+                    """* Fox:Classic Fox 3 "MOS"""",
+                ),
+                "EVT" to listOf("* Event:Classic"),
+                "FOX" to listOf("""* Fox:Classic Fox 3 "MOS""""),
+                "PAT" to listOf("* PAT:MOS"),
+                "SPD P" to listOf("* PAT SPD:8 WPM"),
+                "FRE" to listOf("* FRE=3520.0 kHz"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(FakeDeviceTransport(), sampleSettings().copy(
+            eventType = EventType.FOXORING,
+            foxRole = FoxRole.FOXORING_3,
+            defaultFrequencyHz = 3_560_000L,
+            lowFrequencyHz = 3_520_000L,
+            mediumFrequencyHz = 3_540_000L,
+            highFrequencyHz = 3_560_000L,
+            beaconFrequencyHz = 3_600_000L,
+        ))
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            eventType = SettingsField("eventType", "Event Type", EventType.FOXORING, EventType.CLASSIC),
+        )
+
+        val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
+
+        assertEquals(listOf("EVT C"), result.commandsSent)
+        assertEquals(listOf("EVT", "FOX", "PAT", "SPD P", "FRE"), result.readbackCommandsSent)
+        assertEquals(EventType.CLASSIC, result.state.snapshot?.settings?.eventType)
+        assertEquals(FoxRole.CLASSIC_3, result.state.snapshot?.settings?.foxRole)
+        assertEquals("MOS", result.state.snapshot?.settings?.patternText)
+        assertEquals(8, result.state.snapshot?.settings?.patternCodeSpeedWpm)
+        assertEquals(3_520_000L, result.state.snapshot?.settings?.defaultFrequencyHz)
+    }
+
+    @Test
     fun submitEditsRefreshesCurrentFrequencyAfterFoxRoleChange() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(
                 "FOX 2" to listOf("""* Fox:Foxoring "Medium Freq" Fox"""),
                 "FOX" to listOf("""* Fox:Foxoring "Medium Freq" Fox"""),
+                "PAT" to listOf("* PAT:MOI"),
                 "SPD F" to listOf("* FOX-O SPD:8 WPM"),
                 "FRE" to listOf("* FRE=3540.0 kHz"),
             ),
@@ -171,11 +245,12 @@ class DeviceSessionControllerTest {
         val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
 
         assertEquals(listOf("FOX 2"), result.commandsSent)
-        assertEquals(listOf("FOX", "SPD F", "FRE"), result.readbackCommandsSent)
+        assertEquals(listOf("FOX", "PAT", "SPD F", "FRE"), result.readbackCommandsSent)
         assertEquals(FoxRole.FOXORING_2, result.state.snapshot?.settings?.foxRole)
+        assertEquals("MOI", result.state.snapshot?.settings?.patternText)
         assertEquals(3_540_000L, result.state.snapshot?.settings?.defaultFrequencyHz)
         assertEquals(
-            listOf("FOX 2", "FOX", "SPD F", "FRE"),
+            listOf("FOX 2", "FOX", "PAT", "SPD F", "FRE"),
             transport.sentCommands,
         )
     }
@@ -238,6 +313,119 @@ class DeviceSessionControllerTest {
         assertEquals(listOf("SPD F"), result.readbackCommandsSent)
         assertEquals(listOf("SPD F 8", "SPD F"), transport.sentCommands)
         assertTrue(result.verifications.all { it.observedInReadback && it.verified })
+    }
+
+    @Test
+    fun submitEditsUsesFullReloadVerificationForFinishTime() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "CLK F 260410172000" to listOf("* Finish:Fri 10-apr-2026 17:20:00"),
+                "CLK" to listOf(
+                    "* Time:Fri 10-apr-2026 14:22:33",
+                    "* Start:Fri 10-apr-2026 15:00:00",
+                    "* Finish:Fri 10-apr-2026 17:20:00",
+                    "* Days to run: 3",
+                ),
+                "EVT" to listOf("* Event:Classic"),
+                "VER" to listOf("* SW Ver: 1.2.3 HW Build: 3.5"),
+                "ID" to listOf("* ID: N0CALL"),
+                "FOX" to listOf("""* Fox:Classic Fox 1 "TEST""""),
+                "PAT" to listOf("* PAT:TEST"),
+                "SPD I" to listOf("* ID SPD:8 WPM"),
+                "SPD P" to listOf("* PAT SPD:12 WPM"),
+                "FRE" to listOf("* FRE=3550.0 kHz"),
+                "FRE 1" to listOf("* FRE 1=3510.0 kHz"),
+                "FRE 2" to listOf("* FRE 2=3550.0 kHz"),
+                "FRE 3" to listOf("* FRE 3=3590.0 kHz"),
+                "FRE B" to listOf("* FRE B=3570.0 kHz"),
+                "BAT" to listOf(
+                    "* Int. Bat = 4.1 Volts",
+                    "* thresh   = 3.5 Volts",
+                    "* Ext. Bat =12.8 Volts",
+                    "* Ext. Bat. Ctrl = OFF",
+                    "* Transmitter = Enabled",
+                ),
+                "TMP" to listOf("* Temp: 20.9C"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                currentTimeCompact = "260410142233",
+                startTimeCompact = "260410150000",
+                finishTimeCompact = "260410171500",
+                daysToRun = 3,
+            ),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            finishTimeCompact = SettingsField("finishTimeCompact", "Finish Time", "260410171500", "260410172000"),
+        )
+
+        val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
+
+        assertEquals(listOf("CLK F 260410172000"), result.commandsSent)
+        assertEquals(
+            listOf("CLK", "EVT") + SignalSlingerReadPlan.defaultLoadCommands,
+            result.readbackCommandsSent,
+        )
+        assertTrue("VER" in transport.sentCommands)
+        assertEquals("260410172000", result.state.snapshot?.settings?.finishTimeCompact)
+        assertEquals(
+            SettingVerification(
+                fieldKey = SettingKey.FINISH_TIME,
+                expectedValue = "260410172000",
+                actualValue = "260410172000",
+                observedInReadback = true,
+                verified = true,
+            ),
+            result.verifications.single(),
+        )
+    }
+
+    @Test
+    fun submitEditsAllowsSmallClockDriftWhenVerifyingCurrentTime() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "CLK T 260410142233" to listOf("* Time:Fri 10-apr-2026 14:22:33"),
+                "CLK" to listOf(
+                    "* Time:Fri 10-apr-2026 14:22:35",
+                    "* Start:Fri 10-apr-2026 15:00:00",
+                    "* Finish:Fri 10-apr-2026 17:15:00",
+                    "* Days to run: 3",
+                ),
+                "EVT" to listOf("* Event:Classic"),
+                "VER" to listOf("* SW Ver: 1.2.3 HW Build: 3.5"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                currentTimeCompact = "260410142230",
+                startTimeCompact = "260410150000",
+                finishTimeCompact = "260410171500",
+                daysToRun = 3,
+            ),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            currentTimeCompact = SettingsField("currentTimeCompact", "Current Time", "260410142230", "260410142233"),
+        )
+
+        val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
+
+        assertEquals(listOf("CLK T 260410142233"), result.commandsSent)
+        assertEquals("260410142235", result.state.snapshot?.settings?.currentTimeCompact)
+        assertEquals(
+            SettingVerification(
+                fieldKey = SettingKey.CURRENT_TIME,
+                expectedValue = "260410142233",
+                actualValue = "260410142235",
+                observedInReadback = true,
+                verified = true,
+            ),
+            result.verifications.single(),
+        )
     }
 
     @Test

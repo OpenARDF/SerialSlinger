@@ -43,6 +43,7 @@ import java.awt.event.FocusEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
+import java.net.URI
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -73,11 +74,13 @@ import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JSpinner
 import javax.swing.JFormattedTextField
+import javax.swing.JEditorPane
 import javax.swing.JRadioButtonMenuItem
 import javax.swing.JProgressBar
 import javax.swing.SpinnerNumberModel
 import javax.swing.JTextField
 import javax.swing.JTextPane
+import javax.swing.UIManager
 import javax.swing.SwingUtilities
 import javax.swing.Timer
 import javax.swing.WindowConstants
@@ -239,6 +242,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
     private val finishTimeStatusLabel = JLabel(" ")
     private val daysField = JSpinner(SpinnerNumberModel(1, 1, 255, 1))
+    private val daysRemainingLabel = JLabel(" ")
     private val startsInField = JTextField()
     private val lastsField = JTextField()
     private val disableEventButton = JButton("Disable Event")
@@ -323,6 +327,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         StyleConstants.setForeground(this, Color(0x1F, 0x29, 0x37))
     }
     private val editableTextFieldBackground = patternTextField.background
+    private val readOnlyTextFieldBackground = UIManager.getColor("TextField.inactiveBackground") ?: editableTextFieldBackground
     private val editableTextFieldBorder: Border = patternTextField.border
     private val informationalTextFieldBorder: Border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
     private val defaultInformationalFieldForeground = currentTimeField.foreground
@@ -607,7 +612,49 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     )
                 },
             )
+            add(
+                JMenu("Help").apply {
+                    add(
+                        JMenuItem("About SerialSlinger").apply {
+                            addActionListener { showAboutDialog() }
+                        },
+                    )
+                },
+            )
         }
+    }
+
+    private fun showAboutDialog() {
+        JOptionPane.showMessageDialog(
+            this,
+            JEditorPane(
+                "text/html",
+                buildString {
+                    append("<html><body style='font-family:sans-serif;'>")
+                    append("<div>App Version: ${SerialSlingerVersion.displayVersion}</div>")
+                    append("<div>Build Date (UTC): ${SerialSlingerVersion.buildDateUtc}</div>")
+                    append("<div>Platform: Desktop</div>")
+                    append("<div>Project: <a href='${SerialSlingerVersion.projectUrl}'>${SerialSlingerVersion.projectUrl}</a></div>")
+                    append("<div>License: ${SerialSlingerVersion.licenseLabel}</div>")
+                    append("</body></html>")
+                },
+            ).apply {
+                isEditable = false
+                isOpaque = false
+                addHyperlinkListener { event ->
+                    if (event.eventType == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED &&
+                        Desktop.isDesktopSupported() &&
+                        Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)
+                    ) {
+                        runCatching {
+                            Desktop.getDesktop().browse(URI(event.url.toString()))
+                        }
+                    }
+                }
+            },
+            "About SerialSlinger",
+            JOptionPane.INFORMATION_MESSAGE,
+        )
     }
 
     private fun configuredContentSplitPane(): JSplitPane {
@@ -697,7 +744,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     row = addRow(section, row, "Finish Time", buildDateTimeEditorRow(finishTimeSpinner, finishTimeStatusLabel))
                     row = addRow(section, row, "Event Status", buildEventStatusRow())
                     row = addRow(section, row, "Lasts", lastsField)
-                    row = addRow(section, row, "Days To Run", daysField)
+                    row = addRow(section, row, "Days To Run", buildDaysToRunRow())
                     row = addRow(section, row, frequency1Label, frequency1Field)
                     row = addRow(section, row, frequency2Label, frequency2Field)
                     row = addRow(section, row, frequency3Label, frequency3Field)
@@ -860,6 +907,31 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             add(spinner)
             add(Box.createHorizontalStrut(8))
             add(statusLabel)
+        }
+    }
+
+    private fun buildDaysToRunRow(): JPanel {
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            isOpaque = false
+            add(daysField)
+            add(Box.createHorizontalStrut(8))
+            add(daysRemainingLabel)
+        }
+    }
+
+    private fun updateDaysToRunDisplay(snapshot: DeviceSnapshot) {
+        val settings = snapshot.settings
+        daysField.value = settings.daysToRun.coerceAtLeast(1)
+        daysRemainingLabel.text = DesktopInputSupport.formatDaysToRunRemainingSummary(
+            totalDaysToRun = settings.daysToRun,
+            daysToRunRemaining = snapshot.status.daysRemaining,
+            currentTimeCompact = settings.currentTimeCompact,
+        )
+        daysRemainingLabel.toolTipText = if (daysRemainingLabel.text.isBlank()) {
+            null
+        } else {
+            "Remaining days reported by the latest CLK read."
         }
     }
 
@@ -2516,7 +2588,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             applyDateTimeEditorCapability(startTimeSpinner, schedulingSupported)
             applyDateTimeEditorCapability(finishTimeSpinner, schedulingSupported)
             daysField.isEnabled = schedulingSupported
-            daysField.value = timedSettings.daysToRun
+            updateDaysToRunDisplay(snapshot)
             setInformationalFieldText(currentFrequencyField, formatFrequencyForDisplay(frequencies.currentFrequencyHz), unreadPlaceholder = false)
             setInformationalFieldText(currentBankField, frequencies.currentBankId?.label ?: "Unknown", unreadPlaceholder = false)
             setFrequencySpinnerValue(frequency1Field, timedSettings.lowFrequencyHz)
@@ -2903,7 +2975,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             entries += traceEntriesToLogEntries(attempt.submitResult.submitTraceEntries)
             entries += traceEntriesToLogEntries(attempt.submitResult.readbackTraceEntries, suffix = "(readback)")
             attempt.verificationSamples.forEach { sample ->
-                entries += DesktopLogEntry("TX(verify) CLK T", DesktopLogCategory.SERIAL, sample.sentAtMs)
+                entries += DesktopLogEntry("TX(verify) ${sample.command}", DesktopLogCategory.SERIAL, sample.sentAtMs)
                 sample.responseLines.forEach { line ->
                     entries += DesktopLogEntry("RX(verify) $line", DesktopLogCategory.SERIAL, sample.receivedAtMs)
                 }
@@ -3093,9 +3165,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             patternTextField.background = editableTextFieldBackground
             patternTextField.isOpaque = true
         } else {
-            patternTextField.border = informationalTextFieldBorder
-            patternTextField.background = editableTextFieldBackground
-            patternTextField.isOpaque = false
+            patternTextField.border = editableTextFieldBorder
+            patternTextField.background = readOnlyTextFieldBackground
+            patternTextField.isOpaque = true
         }
         patternTextField.toolTipText = if (editable) {
             "Editable in Foxoring."
@@ -3584,11 +3656,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val latestSample = samples.lastOrNull()
         return DeviceLoadResult(
             state = updatedState,
-            commandsSent = List(samples.size) { "CLK T" },
+            commandsSent = samples.map { it.command },
             linesReceived = samples.flatMap { it.responseLines },
             traceEntries = buildList {
                 samples.forEach { sample ->
-                    add(SerialTraceEntry(sample.sentAtMs, SerialTraceDirection.TX, "CLK T"))
+                    add(SerialTraceEntry(sample.sentAtMs, SerialTraceDirection.TX, sample.command))
                     addAll(sample.responseLines.map { line ->
                         SerialTraceEntry(sample.receivedAtMs, SerialTraceDirection.RX, line)
                     })
@@ -3649,6 +3721,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 connection.result.state.snapshot,
                 recalculateClockOffset = connection.clockAnchor == null,
             )
+            SwingUtilities.invokeLater {
+                autoDetectButton.requestFocusInWindow()
+            }
             appendLoadLog(
                 title = connection.loadLogTitle,
                 result = connection.result,
@@ -4076,10 +4151,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 nextState = DeviceSessionWorkflow.ingestReportLines(nextState, finishMirrorLines)
             }
 
-            val clockRefreshCommands = if (currentSnapshot.capabilities.supportsScheduling) listOf("CLK T") else emptyList()
+            val clockRefreshCommands = if (currentSnapshot.capabilities.supportsScheduling) listOf("CLK") else emptyList()
             val clockRefreshLines = mutableListOf<String>()
             val clockRefreshAnchor = if (clockRefreshCommands.isNotEmpty()) {
-                val clockSample = readClockSample(transport)
+                val clockSample = readClockSample(transport, command = "CLK")
                 clockRefreshLines += clockSample.responseLines
                 commandsCompleted += 1
                 setBusyProgress(commandsCompleted, currentTotalCommands, commandProgressLabel(commandsCompleted, currentTotalCommands))
@@ -4152,6 +4227,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             startTimeCompact = timedSettings.startTimeCompact,
             finishTimeCompact = timedSettings.finishTimeCompact,
             startsInFallback = snapshot.status.eventStartsInSummary,
+            daysToRun = timedSettings.daysToRun,
         ), unreadPlaceholder = false)
         setInformationalFieldText(lastsField, DesktopInputSupport.describeEventDuration(
             startTimeCompact = timedSettings.startTimeCompact,
@@ -4186,6 +4262,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setDateTimeEditorValue(startTimeSpinner, startTimeStatusLabel, null)
         setDateTimeEditorValue(finishTimeSpinner, finishTimeStatusLabel, null)
         daysField.value = 1
+        daysRemainingLabel.text = " "
+        daysRemainingLabel.toolTipText = null
         setInformationalFieldText(currentFrequencyField, "Not read")
         setInformationalFieldText(currentBankField, "Not read")
         clearFrequencySpinner(frequency1Field)
@@ -4254,7 +4332,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         ) {
             val transport = requireNotNull(currentTransport)
             val state = requireNotNull(currentState)
-            val clockSample = readClockSample(transport)
+            val clockSample = readClockSample(transport, command = "CLK")
             val responseLines = clockSample.responseLines.toMutableList()
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
             val phaseErrorMillis = DesktopInputSupport.estimateCoarseClockErrorMillis(
@@ -4281,7 +4359,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     updateClockPhaseWarning(phaseErrorMillis)
                     appendLog("Device Time Check", buildList {
-                        add(DesktopLogEntry("TX CLK T", DesktopLogCategory.SERIAL, clockSample.sentAtMs))
+                        add(DesktopLogEntry("TX ${clockSample.command}", DesktopLogCategory.SERIAL, clockSample.sentAtMs))
                         clockSample.responseLines.forEach { line ->
                             add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, clockSample.receivedAtMs))
                         }
@@ -4948,9 +5026,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return samples
     }
 
-    private fun readClockSample(transport: DesktopSerialTransport): ClockReadSample {
+    private fun readClockSample(
+        transport: DesktopSerialTransport,
+        command: String = "CLK T",
+    ): ClockReadSample {
         val sentAt = java.time.LocalDateTime.now()
-        transport.sendCommands(listOf("CLK T"))
+        transport.sendCommands(listOf(command))
         val responseLines = transport.readAvailableLines()
         val receivedAt = java.time.LocalDateTime.now()
         return ClockReadSample(
@@ -4960,6 +5041,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             reportedTimeCompact = responseLines
                 .mapNotNull { line -> SignalSlingerProtocolCodec.parseReportLine(line)?.settingsPatch?.currentTimeCompact }
                 .firstOrNull(),
+            command = command,
         )
     }
 
@@ -5092,6 +5174,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val receivedAt: java.time.LocalDateTime,
         val responseLines: List<String>,
         val reportedTimeCompact: String?,
+        val command: String,
     ) {
         val sentAtMs: Long
             get() = sentAt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()

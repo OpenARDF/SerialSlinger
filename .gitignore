@@ -8,3 +8,4 @@ jdeploy-bundle/
 jdeploy/
 .DS_Store
 *.iml
+local.properties

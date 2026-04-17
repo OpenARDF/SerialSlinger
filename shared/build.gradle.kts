@@ -2,10 +2,12 @@ import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.Sync
 import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 import org.gradle.jvm.tasks.Jar
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.io.File
 import java.util.jar.JarFile
 
 plugins {
+    alias(libs.plugins.android.kotlin.multiplatform.library)
     alias(libs.plugins.kotlin.multiplatform)
 }
 
@@ -13,9 +15,24 @@ val desktopPackageVersion = rootProject.extra["serialSlingerVersion"].toString()
 val desktopDisplayVersion = rootProject.extra["serialSlingerDisplayVersion"].toString()
 val desktopPackageVendor = rootProject.extra["serialSlingerVendor"].toString()
 val desktopPackageDescription = rootProject.extra["serialSlingerDescription"].toString()
+val desktopProjectUrl = rootProject.extra["serialSlingerProjectUrl"].toString()
+val desktopLicenseLabel = rootProject.extra["serialSlingerLicenseLabel"].toString()
+val desktopBuildDateUtc = rootProject.extra["serialSlingerBuildDateUtc"].toString()
 val generatedDesktopVersionDir = layout.buildDirectory.dir("generated/source/desktopVersion/desktopMain/kotlin")
 
 kotlin {
+    jvmToolchain(17)
+
+    android {
+        namespace = "com.openardf.serialslinger.shared"
+        compileSdk = 36
+        minSdk = 24
+
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
+        }
+    }
+
     jvm("desktop")
     iosX64()
     iosArm64()
@@ -29,8 +46,21 @@ kotlin {
             implementation(kotlin("test"))
         }
 
+        val jvmSharedMain by creating {
+            kotlin.srcDir("src/jvmSharedMain/kotlin")
+            dependsOn(commonMain.get())
+        }
+
+        val androidMain by getting {
+            dependsOn(jvmSharedMain)
+            dependencies {
+                implementation(libs.usbserialandroid)
+            }
+        }
+
         val desktopMain by getting {
             kotlin.srcDir(generatedDesktopVersionDir)
+            dependsOn(jvmSharedMain)
 
             dependencies {
                 implementation(libs.jserialcomm)
@@ -50,6 +80,9 @@ val generateDesktopVersionSource = tasks.register("generateDesktopVersionSource"
 
     inputs.property("desktopDisplayVersion", desktopDisplayVersion)
     inputs.property("desktopPackageVersion", desktopPackageVersion)
+    inputs.property("desktopProjectUrl", desktopProjectUrl)
+    inputs.property("desktopLicenseLabel", desktopLicenseLabel)
+    inputs.property("desktopBuildDateUtc", desktopBuildDateUtc)
     outputs.dir(generatedDesktopVersionDir)
 
     doLast {
@@ -63,6 +96,9 @@ val generateDesktopVersionSource = tasks.register("generateDesktopVersionSource"
             object SerialSlingerVersion {
                 const val displayVersion = "$desktopDisplayVersion"
                 const val packageVersion = "$desktopPackageVersion"
+                const val buildDateUtc = "$desktopBuildDateUtc"
+                const val projectUrl = "$desktopProjectUrl"
+                const val licenseLabel = "$desktopLicenseLabel"
             }
             """.trimIndent(),
         )

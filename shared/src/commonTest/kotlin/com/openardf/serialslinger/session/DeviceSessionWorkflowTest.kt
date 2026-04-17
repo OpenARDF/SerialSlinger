@@ -28,6 +28,7 @@ class DeviceSessionWorkflowTest {
                 "* ID SPD:8 WPM",
                 "* PAT SPD:12 WPM",
                 "* Days to run: 3",
+                "* Days remaining: 1",
                 "* FRE B=3570.0 kHz",
                 "* thresh   = 3.5 Volts",
                 "* Ext. Bat. Ctrl = ON",
@@ -56,6 +57,7 @@ class DeviceSessionWorkflowTest {
         assertTrue(snapshot.settings.transmissionsEnabled)
         assertEquals(4.1, snapshot.status.internalBatteryVolts)
         assertEquals(12.8, snapshot.status.externalBatteryVolts)
+        assertEquals(1, snapshot.status.daysRemaining)
         assertEquals(true, snapshot.status.eventEnabled)
         assertEquals("Running forever.", snapshot.status.eventStateSummary)
         assertEquals("23 hours 4 minutes 5 seconds", snapshot.status.eventStartsInSummary)

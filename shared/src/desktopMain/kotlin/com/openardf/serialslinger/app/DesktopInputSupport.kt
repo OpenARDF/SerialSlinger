@@ -1,12 +1,17 @@
 package com.openardf.serialslinger.app
 
 import com.openardf.serialslinger.model.EventType
+import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
+import com.openardf.serialslinger.model.JvmTimeSupport
+import com.openardf.serialslinger.model.TimedEventFrequencyVisibility
+import com.openardf.serialslinger.model.ClockPhaseSample as SharedClockPhaseSample
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlin.math.max
 import kotlin.math.roundToLong
 
 object DesktopInputSupport {
@@ -28,23 +33,16 @@ object DesktopInputSupport {
         val finishTimeCompact: String?,
     )
 
-    data class TimedEventFrequencyVisibility(
-        val showFrequency1: Boolean,
-        val showFrequency2: Boolean,
-        val showFrequency3: Boolean,
-        val showFrequencyB: Boolean,
-    )
-
     fun selectableEventTypes(): List<EventType> {
-        return EventType.entries.filterNot { it == EventType.NONE }
+        return EventProfileSupport.selectableEventTypes()
     }
 
     fun truncateToMinute(value: LocalDateTime): LocalDateTime {
-        return value.withSecond(0).withNano(0)
+        return JvmTimeSupport.truncateToMinute(value)
     }
 
     fun truncateToSecond(value: LocalDateTime): LocalDateTime {
-        return value.withNano(0)
+        return JvmTimeSupport.truncateToSecond(value)
     }
 
     fun stepDateTimeByMinuteInterval(
@@ -52,42 +50,20 @@ object DesktopInputSupport {
         stepMinutes: Int,
         forward: Boolean,
     ): LocalDateTime {
-        require(stepMinutes > 0) { "stepMinutes must be positive." }
-        val truncated = truncateToMinute(value)
-        if (stepMinutes == 1) {
-            return truncated.plusMinutes(if (forward) 1 else -1)
-        }
-
-        val minute = truncated.minute
-        val remainder = minute % stepMinutes
-        val deltaMinutes = if (forward) {
-            if (remainder == 0) stepMinutes else stepMinutes - remainder
-        } else {
-            if (remainder == 0) -stepMinutes else -remainder
-        }
-        return truncated.plusMinutes(deltaMinutes.toLong())
+        return JvmTimeSupport.stepDateTimeByMinuteInterval(value, stepMinutes, forward)
     }
 
     fun roundToSecond(value: LocalDateTime): LocalDateTime {
-        return if (value.nano >= 500_000_000) {
-            value.plusSeconds(1)
-        } else {
-            value
-        }.withNano(0)
+        return JvmTimeSupport.roundToSecond(value)
     }
 
     fun isManualEventStateSummary(eventStateSummary: String?): Boolean {
-        val summaryLower = eventStateSummary?.trim()?.lowercase().orEmpty()
-        return summaryLower.contains("user launched") || summaryLower.contains("running forever")
+        return JvmTimeSupport.isManualEventStateSummary(eventStateSummary)
     }
 
     fun parseEventType(value: String): EventType {
-        return when (value.lowercase()) {
-            "none" -> EventType.NONE
-            "classic" -> EventType.CLASSIC
-            "foxoring" -> EventType.FOXORING
-            "sprint" -> EventType.SPRINT
-            else -> error("Unsupported eventType `$value`.")
+        return requireNotNull(EventProfileSupport.parseEventTypeOrNull(value)) {
+            "Unsupported eventType `$value`."
         }
     }
 
@@ -104,44 +80,8 @@ object DesktopInputSupport {
     }
 
     fun parseFoxRole(value: String, eventType: EventType): FoxRole {
-        val normalized = value.trim().lowercase()
-        return when (eventType) {
-            EventType.CLASSIC -> when (normalized) {
-                "b", "beacon" -> FoxRole.BEACON
-                "1" -> FoxRole.CLASSIC_1
-                "2" -> FoxRole.CLASSIC_2
-                "3" -> FoxRole.CLASSIC_3
-                "4" -> FoxRole.CLASSIC_4
-                "5" -> FoxRole.CLASSIC_5
-                else -> error("Unsupported foxRole `$value` for CLASSIC.")
-            }
-            EventType.FOXORING -> when (normalized) {
-                "1", "low", "lowfreq" -> FoxRole.FOXORING_1
-                "2", "medium", "med", "mediumfreq" -> FoxRole.FOXORING_2
-                "3", "high", "highfreq" -> FoxRole.FOXORING_3
-                "f", "t", "test", "frequencytest", "frequency_test_beacon" -> FoxRole.FREQUENCY_TEST_BEACON
-                "b", "beacon" -> FoxRole.BEACON
-                else -> error("Unsupported foxRole `$value` for FOXORING.")
-            }
-            EventType.SPRINT -> when (normalized) {
-                "s", "spectator" -> FoxRole.SPRINT_SPECTATOR
-                "1", "s1", "slow1" -> FoxRole.SPRINT_SLOW_1
-                "2", "s2", "slow2" -> FoxRole.SPRINT_SLOW_2
-                "3", "s3", "slow3" -> FoxRole.SPRINT_SLOW_3
-                "4", "s4", "slow4" -> FoxRole.SPRINT_SLOW_4
-                "5", "s5", "slow5" -> FoxRole.SPRINT_SLOW_5
-                "1f", "f1", "fast1" -> FoxRole.SPRINT_FAST_1
-                "2f", "f2", "fast2" -> FoxRole.SPRINT_FAST_2
-                "3f", "f3", "fast3" -> FoxRole.SPRINT_FAST_3
-                "4f", "f4", "fast4" -> FoxRole.SPRINT_FAST_4
-                "5f", "f5", "fast5" -> FoxRole.SPRINT_FAST_5
-                "b", "beacon" -> FoxRole.BEACON
-                else -> error("Unsupported foxRole `$value` for SPRINT.")
-            }
-            EventType.NONE -> when (normalized) {
-                "b", "beacon" -> FoxRole.BEACON
-                else -> error("Unsupported foxRole `$value` when no event is selected.")
-            }
+        return requireNotNull(EventProfileSupport.parseFoxRoleOrNull(value, eventType)) {
+            "Unsupported foxRole `$value` for $eventType."
         }
     }
 
@@ -150,39 +90,19 @@ object DesktopInputSupport {
         foxRole: FoxRole?,
         storedPatternText: String?,
     ): String {
-        return when {
-            foxRole?.fixedPatternText != null -> foxRole.fixedPatternText
-            eventType == EventType.FOXORING -> storedPatternText.orEmpty()
-            else -> storedPatternText.orEmpty()
-        }
+        return EventProfileSupport.displayPatternText(eventType, foxRole, storedPatternText)
     }
 
     fun patternSpeedBelongsToTimedEventSettings(eventType: EventType): Boolean {
-        return eventType != EventType.FOXORING
+        return EventProfileSupport.patternSpeedBelongsToTimedEventSettings(eventType)
     }
 
     fun patternTextIsEditable(eventType: EventType): Boolean {
-        return eventType == EventType.FOXORING
+        return EventProfileSupport.patternTextIsEditable(eventType)
     }
 
     fun timedEventFrequencyVisibility(eventType: EventType): TimedEventFrequencyVisibility {
-        return when (eventType) {
-            EventType.CLASSIC -> TimedEventFrequencyVisibility(
-                showFrequency1 = true,
-                showFrequency2 = false,
-                showFrequency3 = false,
-                showFrequencyB = true,
-            )
-            EventType.FOXORING,
-            EventType.SPRINT,
-            EventType.NONE,
-            -> TimedEventFrequencyVisibility(
-                showFrequency1 = true,
-                showFrequency2 = true,
-                showFrequency3 = true,
-                showFrequencyB = true,
-            )
-        }
+        return EventProfileSupport.timedEventFrequencyVisibility(eventType)
     }
 
     fun parseFrequencyAssignment(value: String): Long {
@@ -206,38 +126,26 @@ object DesktopInputSupport {
     }
 
     fun parseOptionalCompactTimestamp(value: String): String? {
-        if (value.isBlank() || value.equals("Not Set", ignoreCase = true)) {
-            return null
-        }
-        return normalizeTimestampInput(value)
+        return JvmTimeSupport.parseOptionalCompactTimestamp(value)
     }
 
     fun validateCurrentTimeForWrite(currentTimeCompact: String?): String? {
-        val current = requireValidTimestampForWrite("Device Time", currentTimeCompact) ?: return null
-        return formatCompactTimestamp(current)
+        return JvmTimeSupport.validateCurrentTimeForWrite(currentTimeCompact)
     }
 
     fun validateStartTimeForWrite(startTimeCompact: String?): String? {
-        val start = requireValidTimestampForWrite("Start Time", startTimeCompact) ?: return null
-        return formatCompactTimestamp(start)
+        return JvmTimeSupport.validateStartTimeForWrite(startTimeCompact)
     }
 
     fun validateFinishTimeForWrite(finishTimeCompact: String?): String? {
-        val finish = requireValidTimestampForWrite("Finish Time", finishTimeCompact) ?: return null
-        return formatCompactTimestamp(finish)
+        return JvmTimeSupport.validateFinishTimeForWrite(finishTimeCompact)
     }
 
     fun resolveStartTimeForChange(
         startTimeCompact: String?,
         currentTimeCompact: String?,
     ): String? {
-        val current = requireValidTimestampForWrite("Device Time", currentTimeCompact)
-            ?: error("Set Device Time first before changing Start Time.")
-        val start = requireValidTimestampForWrite("Start Time", startTimeCompact) ?: return null
-        require(!start.isBefore(current)) {
-            "Start Time must not be earlier than Device Time."
-        }
-        return formatCompactTimestamp(start)
+        return JvmTimeSupport.resolveStartTimeForChange(startTimeCompact, currentTimeCompact)
     }
 
     fun resolveScheduleForFinishTimeChange(
@@ -245,25 +153,14 @@ object DesktopInputSupport {
         finishTimeCompact: String?,
         currentTimeCompact: String?,
     ): ValidatedScheduleTimes {
-        val start = requireValidTimestampForWrite("Start Time", startTimeCompact)
-        val finish = requireValidTimestampForWrite("Finish Time", finishTimeCompact)
-            ?: return ValidatedScheduleTimes(
-                startTimeCompact = start?.let(::formatCompactTimestamp),
-                finishTimeCompact = null,
-            )
-        val current = requireValidTimestampForWrite("Device Time", currentTimeCompact)
-            ?: error("Set Device Time first before changing Finish Time.")
-
-        require(start == null || !finish.isBefore(start)) {
-            "Finish Time must not be earlier than Start Time."
-        }
-        require(!finish.isBefore(current)) {
-            "Finish Time must not be earlier than Device Time."
-        }
-
+        val shared = JvmTimeSupport.resolveScheduleForFinishTimeChange(
+            startTimeCompact = startTimeCompact,
+            finishTimeCompact = finishTimeCompact,
+            currentTimeCompact = currentTimeCompact,
+        )
         return ValidatedScheduleTimes(
-            startTimeCompact = start?.let(::formatCompactTimestamp),
-            finishTimeCompact = formatCompactTimestamp(finish),
+            startTimeCompact = shared.startTimeCompact,
+            finishTimeCompact = shared.finishTimeCompact,
         )
     }
 
@@ -271,50 +168,30 @@ object DesktopInputSupport {
         currentTimeCompact: String,
         stepMinutes: Int = 5,
     ): LocalDateTime {
-        require(stepMinutes > 0) { "stepMinutes must be positive." }
-        val current = parseCompactTimestamp(currentTimeCompact)
-        var minimum = truncateToMinute(current)
-        if (current.second > 0 || current.nano > 0) {
-            minimum = minimum.plusMinutes(1)
-        }
-        val remainder = minimum.minute % stepMinutes
-        if (remainder != 0) {
-            minimum = minimum.plusMinutes((stepMinutes - remainder).toLong())
-        }
-        return minimum
+        return JvmTimeSupport.minimumStartTimeBoundary(currentTimeCompact, stepMinutes)
     }
 
     fun minimumFinishTimeBoundary(
         currentTimeCompact: String,
         startTimeCompact: String?,
     ): LocalDateTime {
-        val current = parseCompactTimestamp(currentTimeCompact)
-        val start = startTimeCompact
-            ?.let(::validateStartTimeForWrite)
-            ?.let(::parseCompactTimestamp)
-        return listOfNotNull(current, start).maxOrNull() ?: current
+        return JvmTimeSupport.minimumFinishTimeBoundary(currentTimeCompact, startTimeCompact)
     }
 
     fun normalizeCurrentTimeCompactForDisplay(value: String?): String? {
-        val timestamp = value?.let(::parseCompactTimestamp) ?: return null
-        return if (timestamp.isBefore(minimumValidTimestamp)) {
-            null
-        } else {
-            formatCompactTimestamp(timestamp)
-        }
+        return JvmTimeSupport.normalizeCurrentTimeCompactForDisplay(value)
     }
 
     fun formatCompactTimestamp(value: String?): String {
-        val timestamp = value?.let(::parseCompactTimestamp) ?: return ""
-        return timestamp.format(displayTimestampFormatter)
+        return JvmTimeSupport.formatCompactTimestamp(value)
     }
 
     fun formatCompactTimestampOrNotSet(value: String?): String {
-        return normalizeCurrentTimeCompactForDisplay(value)?.let(::formatCompactTimestamp).orEmpty().ifBlank { "Not Set" }
+        return JvmTimeSupport.formatCompactTimestampOrNotSet(value)
     }
 
     fun formatSystemTimestamp(systemNow: LocalDateTime = LocalDateTime.now()): String {
-        return systemNow.format(displayTimestampFormatter)
+        return JvmTimeSupport.formatSystemTimestamp(systemNow)
     }
 
     fun formatVoltageOrWaiting(value: Double?): String {
@@ -390,28 +267,7 @@ object DesktopInputSupport {
     }
 
     fun formatDurationCompact(duration: Duration): String {
-        val totalSeconds = duration.seconds.coerceAtLeast(0)
-        val days = totalSeconds / 86_400
-        val hours = (totalSeconds % 86_400) / 3_600
-        val minutes = (totalSeconds % 3_600) / 60
-        val seconds = totalSeconds % 60
-
-        return buildString {
-            if (days > 0) {
-                append(days)
-                append("d ")
-            }
-            if (days > 0 || hours > 0) {
-                append(hours.toString().padStart(if (days > 0) 2 else 1, '0'))
-                append("h ")
-            }
-            if (days > 0 || hours > 0 || minutes > 0) {
-                append(minutes.toString().padStart(if (days > 0 || hours > 0) 2 else 1, '0'))
-                append("m ")
-            }
-            append(seconds.toString().padStart(if (days > 0 || hours > 0 || minutes > 0) 2 else 1, '0'))
-            append("s")
-        }
+        return JvmTimeSupport.formatDurationCompact(duration)
     }
 
     fun describeEventStatus(
@@ -421,50 +277,17 @@ object DesktopInputSupport {
         startTimeCompact: String?,
         finishTimeCompact: String?,
         startsInFallback: String?,
+        daysToRun: Int? = null,
     ): String {
-        val normalizedSummary = eventStateSummary?.trim().orEmpty()
-        val summaryLower = normalizedSummary.lowercase()
-        val current = normalizeCurrentTimeCompactForDisplay(currentTimeCompact)?.let(::parseCompactTimestamp)
-        val start = startTimeCompact?.let(::parseCompactTimestamp)
-        val finish = finishTimeCompact?.let(::parseCompactTimestamp)
-
-        if (isManualEventStateSummary(normalizedSummary)) {
-            return "Manually started event in progress"
-        }
-
-        if (current != null && start != null) {
-            if (start == finish) {
-                return "Disabled"
-            }
-            if (current < start) {
-                return "Starts in ${formatDurationCompact(Duration.between(current, start))}"
-            }
-            if (finish != null && current < finish) {
-                return "Time remaining: ${formatDurationCompact(Duration.between(current, finish))}"
-            }
-            if (finish != null && !current.isBefore(finish)) {
-                return "Completed"
-            }
-        }
-
-        if (summaryLower.startsWith("time remaining:")) {
-            return normalizedSummary
-        }
-        if (summaryLower == "in progress" || summaryLower.contains("on the air")) {
-            return "Event in progress"
-        }
-        if (deviceReportedEventEnabled == false) {
-            return "Disabled"
-        }
-
-        if (current == null) {
-            return startsInFallback?.takeIf { it.isNotBlank() }?.let { "Starts in $it" } ?: "Not Available"
-        }
-        if (start == null) {
-            return "Disabled"
-        }
-
-        return if (start == finish) "Disabled" else "Not Available"
+        return JvmTimeSupport.describeEventStatus(
+            deviceReportedEventEnabled = deviceReportedEventEnabled,
+            eventStateSummary = eventStateSummary,
+            currentTimeCompact = currentTimeCompact,
+            startTimeCompact = startTimeCompact,
+            finishTimeCompact = finishTimeCompact,
+            startsInFallback = startsInFallback,
+            daysToRun = daysToRun,
+        )
     }
 
     fun describeEventDuration(
@@ -472,40 +295,34 @@ object DesktopInputSupport {
         finishTimeCompact: String?,
         fallback: String?,
     ): String {
-        val start = startTimeCompact?.let(::parseCompactTimestamp)
-        val finish = finishTimeCompact?.let(::parseCompactTimestamp)
+        return JvmTimeSupport.describeEventDuration(startTimeCompact, finishTimeCompact, fallback)
+    }
 
-        if (start != null && finish != null) {
-            if (start == finish) {
-                return "Disabled"
-            }
-            if (!finish.isBefore(start)) {
-                return formatDurationCompact(Duration.between(start, finish))
-            }
-        }
-
-        return fallback.orEmpty().ifBlank { "Not Available" }
+    fun formatDaysToRunRemainingSummary(
+        totalDaysToRun: Int?,
+        daysToRunRemaining: Int?,
+        currentTimeCompact: String?,
+    ): String {
+        return JvmTimeSupport.formatDaysToRunRemainingSummary(totalDaysToRun, daysToRunRemaining, currentTimeCompact)
     }
 
     fun currentSystemTimeCompact(systemNow: LocalDateTime = LocalDateTime.now()): String {
-        return formatCompactTimestamp(systemNow)
+        return JvmTimeSupport.currentSystemTimeCompact(systemNow)
     }
 
     fun formatTruncatedCompactTimestamp(timestamp: LocalDateTime): String {
-        return formatCompactTimestamp(timestamp.withNano(0))
+        return JvmTimeSupport.formatTruncatedCompactTimestamp(timestamp)
     }
 
     fun formatRoundedCompactTimestamp(timestamp: LocalDateTime): String {
-        val rounded = roundToSecond(timestamp)
-        return formatCompactTimestamp(rounded)
+        return JvmTimeSupport.formatRoundedCompactTimestamp(timestamp)
     }
 
     fun nextSyncTargetTime(
         systemNow: LocalDateTime = LocalDateTime.now(),
         minimumLeadMillis: Long = syncLeadSeconds * 1_000L,
     ): LocalDateTime {
-        val candidate = systemNow.plusNanos(minimumLeadMillis * 1_000_000L)
-        return candidate.withNano(0).plusSeconds(1)
+        return JvmTimeSupport.nextSyncTargetTime(systemNow, minimumLeadMillis)
     }
 
     fun formatReportedVersion(
@@ -523,99 +340,46 @@ object DesktopInputSupport {
         currentTimeCompact: String?,
         systemNow: LocalDateTime = LocalDateTime.now(),
     ): Boolean {
-        val current = normalizeCurrentTimeCompactForDisplay(currentTimeCompact)?.let(::parseCompactTimestamp) ?: return true
-        val differenceMillis = kotlin.math.abs(Duration.between(current, systemNow).toMillis())
-        return differenceMillis > (timeSyncThresholdSeconds * 1_000L)
+        return JvmTimeSupport.shouldEnableTimeSync(currentTimeCompact, systemNow)
     }
 
     fun isTimeSynchronizedToSystem(
         currentTimeCompact: String?,
         systemNow: LocalDateTime = LocalDateTime.now(),
     ): Boolean {
-        return !shouldEnableTimeSync(currentTimeCompact, systemNow)
+        return JvmTimeSupport.isTimeSynchronizedToSystem(currentTimeCompact, systemNow)
     }
 
     fun formatSignedDurationMillis(durationMillis: Long): String {
-        val sign = if (durationMillis < 0) "-" else "+"
-        val absMillis = kotlin.math.abs(durationMillis)
-        val seconds = absMillis / 1_000
-        val milliseconds = absMillis % 1_000
-        return "$sign${seconds}.${milliseconds.toString().padStart(3, '0')}s"
+        return JvmTimeSupport.formatSignedDurationMillis(durationMillis)
     }
 
     fun medianMillis(values: List<Long>): Long {
-        require(values.isNotEmpty()) {
-            "Cannot compute a median from an empty list."
-        }
-        val sorted = values.sorted()
-        val midpoint = sorted.size / 2
-        return if (sorted.size % 2 == 1) {
-            sorted[midpoint]
-        } else {
-            (sorted[midpoint - 1] + sorted[midpoint]) / 2
-        }
+        return JvmTimeSupport.medianMillis(values)
     }
 
     fun estimateClockPhaseErrorMillis(samples: List<ClockPhaseSample>): Long? {
-        val parsed = samples.mapNotNull { sample ->
-            val reportedTime = sample.reportedTimeCompact?.let(::parseCompactTimestamp) ?: return@mapNotNull null
-            sample.midpointAt to reportedTime
-        }
-
-        for (index in 1 until parsed.size) {
-            val previous = parsed[index - 1]
-            val current = parsed[index]
-            if (current.second == previous.second) {
-                continue
-            }
-
-            val transitionEstimate = previous.first.plus(
-                Duration.between(previous.first, current.first).dividedBy(2),
-            )
-            return Duration.between(current.second, transitionEstimate).toMillis()
-        }
-
-        return null
+        return JvmTimeSupport.estimateClockPhaseErrorMillis(
+            samples.map { sample ->
+                SharedClockPhaseSample(
+                    midpointAt = sample.midpointAt,
+                    reportedTimeCompact = sample.reportedTimeCompact,
+                )
+            },
+        )
     }
 
     fun estimateCoarseClockErrorMillis(sample: ClockPhaseSample): Long? {
-        val reportedTime = sample.reportedTimeCompact?.let(::parseCompactTimestamp) ?: return null
-        return Duration.between(reportedTime, sample.midpointAt).toMillis() - 500L
+        return JvmTimeSupport.estimateCoarseClockErrorMillis(
+            SharedClockPhaseSample(
+                midpointAt = sample.midpointAt,
+                reportedTimeCompact = sample.reportedTimeCompact,
+            ),
+        )
     }
 
     fun foxRoleOptions(eventType: EventType): List<FoxRole> {
-        return when (eventType) {
-            EventType.CLASSIC -> listOf(
-                FoxRole.BEACON,
-                FoxRole.CLASSIC_1,
-                FoxRole.CLASSIC_2,
-                FoxRole.CLASSIC_3,
-                FoxRole.CLASSIC_4,
-                FoxRole.CLASSIC_5,
-            )
-            EventType.FOXORING -> listOf(
-                FoxRole.BEACON,
-                FoxRole.FOXORING_1,
-                FoxRole.FOXORING_2,
-                FoxRole.FOXORING_3,
-                FoxRole.FREQUENCY_TEST_BEACON,
-            )
-            EventType.SPRINT -> listOf(
-                FoxRole.BEACON,
-                FoxRole.SPRINT_SPECTATOR,
-                FoxRole.SPRINT_SLOW_1,
-                FoxRole.SPRINT_SLOW_2,
-                FoxRole.SPRINT_SLOW_3,
-                FoxRole.SPRINT_SLOW_4,
-                FoxRole.SPRINT_SLOW_5,
-                FoxRole.SPRINT_FAST_1,
-                FoxRole.SPRINT_FAST_2,
-                FoxRole.SPRINT_FAST_3,
-                FoxRole.SPRINT_FAST_4,
-                FoxRole.SPRINT_FAST_5,
-            )
-            EventType.NONE -> listOf(FoxRole.BEACON)
-        }
+        return EventProfileSupport.foxRoleOptions(eventType)
     }
 
     private fun normalizeTimestampInput(value: String): String {
@@ -634,28 +398,11 @@ object DesktopInputSupport {
     }
 
     fun parseCompactTimestamp(value: String): LocalDateTime {
-        require(value.matches(Regex("""\d{12}"""))) {
-            "Unsupported compact timestamp `$value`."
-        }
-
-        val year = 2000 + value.substring(0, 2).toInt()
-        val month = value.substring(2, 4).toInt()
-        val day = value.substring(4, 6).toInt()
-        val hour = value.substring(6, 8).toInt()
-        val minute = value.substring(8, 10).toInt()
-        val second = value.substring(10, 12).toInt()
-        return LocalDateTime.of(year, month, day, hour, minute, second)
+        return JvmTimeSupport.parseCompactTimestamp(value)
     }
 
     fun formatCompactTimestamp(timestamp: LocalDateTime): String {
-        return "%02d%02d%02d%02d%02d%02d".format(
-            timestamp.year % 100,
-            timestamp.monthValue,
-            timestamp.dayOfMonth,
-            timestamp.hour,
-            timestamp.minute,
-            timestamp.second,
-        )
+        return JvmTimeSupport.formatCompactTimestamp(timestamp)
     }
 
     private fun parseIsoLikeTimestamp(value: String): LocalDateTime? {

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SerialSlinger" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F6F3EA</item>
+        <item name="android:colorBackground">#F6F3EA</item>
+        <item name="android:windowSplashScreenBackground">#F6F3EA</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splashscreen_transparent_icon</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#F6F3EA</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+    </style>
+</resources>

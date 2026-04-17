@@ -12,7 +12,9 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         google()
+        maven(url = "https://jitpack.io")
     }
 }
 
 include(":shared")
+include(":androidApp")

@@ -42,7 +42,7 @@ class SignalSlingerFirmwareSupportTest {
         val profile = SignalSlingerFirmwareSupport.resolve("1.2s")
 
         assertEquals(
-            listOf("FOX", "SPD P", "FRE"),
+            listOf("FOX", "PAT", "SPD P", "FRE"),
             profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.FOX_ROLE],
         )
     }

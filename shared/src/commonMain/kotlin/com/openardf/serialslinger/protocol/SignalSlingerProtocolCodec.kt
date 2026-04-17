@@ -17,6 +17,7 @@ data class DeviceStatusPatch(
     val temperatureC: Double? = null,
     val internalBatteryVolts: Double? = null,
     val externalBatteryVolts: Double? = null,
+    val daysRemaining: Int? = null,
     val eventEnabled: Boolean? = null,
     val eventStateSummary: String? = null,
     val eventStartsInSummary: String? = null,
@@ -100,6 +101,7 @@ object SignalSlingerProtocolCodec {
     private val startTimePattern = Regex("""^\*\s*Start:\s*(.+)$""")
     private val finishTimePattern = Regex("""^\*\s*Finish:\s*(.+)$""")
     private val daysToRunPattern = Regex("""^\* Days to run:\s*(\d+)$""")
+    private val daysRemainingPattern = Regex("""^\* Days remaining:\s*(\d+)$""")
     private val frequencyPattern = Regex("""^\* FRE(?:\s+([123B]))?=(.+)$""")
     private val batteryThresholdPattern = Regex("""^\* thresh\s*=\s*([0-9.]+)\s+Volts$""")
     private val externalBatteryControlPattern = Regex("""^\* Ext\. Bat\. Ctrl\s*=\s*(ON|OFF)$""")
@@ -225,6 +227,14 @@ object SignalSlingerProtocolCodec {
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
                     daysToRun = match.groupValues[1].toInt(),
+                ),
+            )
+        }
+
+        daysRemainingPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    daysRemaining = match.groupValues[1].toInt(),
                 ),
             )
         }

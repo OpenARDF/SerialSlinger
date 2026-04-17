@@ -146,12 +146,18 @@ object DeviceSessionController {
         val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
             submissionSnapshot.info.softwareVersion,
         )
+        val requiresFullReloadVerification = requiresFullReloadVerification(submission.writePlan)
         val readbackCommands = buildVerificationReadbackCommands(
             writePlan = submission.writePlan,
             expectedSettings = validatedSettings,
             firmwareProfile = firmwareProfile,
         )
-        val totalCommands = (submission.commands.size + readbackCommands.size).coerceAtLeast(1)
+        val reportedReadbackCommands = mutableListOf<String>()
+        val totalCommands = (
+            submission.commands.size +
+                readbackCommands.size +
+                if (requiresFullReloadVerification) firmwareProfile.fullLoadCommands.size else 0
+        ).coerceAtLeast(1)
         progress?.invoke(0, totalCommands)
         for (command in submission.commands) {
             val sentAtMs = System.currentTimeMillis()
@@ -187,6 +193,7 @@ object DeviceSessionController {
         val observedReadbackKeys = linkedSetOf<SettingKey>()
 
         for (command in readbackCommands) {
+            reportedReadbackCommands += command
             val sentAtMs = System.currentTimeMillis()
             transport.sendCommands(listOf(command))
             readbackTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
@@ -202,6 +209,16 @@ object DeviceSessionController {
                 submission.commands.size + readbackTraceEntries.count { it.direction == SerialTraceDirection.TX },
                 totalCommands,
             )
+        }
+
+        if (requiresFullReloadVerification) {
+            val reloadResult = refreshFromDevice(nextState, transport, startEditing = false)
+            reportedReadbackCommands += reloadResult.commandsSent
+            readbackLines += reloadResult.linesReceived
+            readbackTraceEntries += reloadResult.traceEntries
+            observedReadbackKeys += extractObservedSettingKeys(reloadResult.linesReceived)
+            nextState = reloadResult.state
+            progress?.invoke(totalCommands, totalCommands)
         }
 
         nextState = nextState.copy(
@@ -223,7 +240,7 @@ object DeviceSessionController {
             state = nextState,
             commandsSent = submission.commands,
             linesReceived = submitLines,
-            readbackCommandsSent = readbackCommands,
+            readbackCommandsSent = reportedReadbackCommands,
             readbackLinesReceived = readbackLines,
             verifications = verifications,
             submitTraceEntries = submitTraceEntries,
@@ -274,6 +291,20 @@ object DeviceSessionController {
         val commands = firmwareProfile.verificationReadbackCommands[fieldKey].orEmpty()
         return commands.map { command ->
             resolvePatternSpeedReadCommand(command, expectedSettings.eventType)
+        }
+    }
+
+    private fun requiresFullReloadVerification(writePlan: WritePlan): Boolean {
+        return writePlan.changes.any { change ->
+            change.requiresVerification &&
+                when (change.fieldKey) {
+                    SettingKey.CURRENT_TIME,
+                    SettingKey.START_TIME,
+                    SettingKey.FINISH_TIME,
+                    -> true
+
+                    else -> false
+                }
         }
     }
 
@@ -345,9 +376,73 @@ object DeviceSessionController {
                     expectedValue = expectedValue,
                     actualValue = actualValue,
                     observedInReadback = observedInReadback,
-                    verified = observedInReadback && expectedValue == actualValue,
+                    verified = observedInReadback && valuesMatchForVerification(
+                        fieldKey = change.fieldKey,
+                        expectedValue = expectedValue,
+                        actualValue = actualValue,
+                    ),
                 )
             }
+    }
+
+    private fun valuesMatchForVerification(
+        fieldKey: SettingKey,
+        expectedValue: Any?,
+        actualValue: Any?,
+    ): Boolean {
+        if (expectedValue == actualValue) {
+            return true
+        }
+
+        return when (fieldKey) {
+            SettingKey.STATION_ID,
+            SettingKey.PATTERN_TEXT,
+            -> {
+                val expectedText = expectedValue as? String
+                val actualText = actualValue as? String
+                expectedText != null &&
+                    actualText != null &&
+                    expectedText.uppercase() == actualText.uppercase()
+            }
+
+            SettingKey.CURRENT_TIME -> {
+                val expectedTime = expectedValue as? String
+                val actualTime = actualValue as? String
+                expectedTime != null &&
+                    actualTime != null &&
+                    compactTimestampWithinTolerance(expectedTime, actualTime, toleranceSeconds = 5)
+            }
+
+            else -> false
+        }
+    }
+
+    private fun compactTimestampWithinTolerance(
+        expected: String,
+        actual: String,
+        toleranceSeconds: Int,
+    ): Boolean {
+        if (expected.length != 12 || actual.length != 12 || toleranceSeconds < 0) {
+            return false
+        }
+
+        if (expected.substring(0, 6) != actual.substring(0, 6)) {
+            return false
+        }
+
+        val expectedSecondsOfDay = compactTimestampSecondsOfDay(expected) ?: return false
+        val actualSecondsOfDay = compactTimestampSecondsOfDay(actual) ?: return false
+        return kotlin.math.abs(expectedSecondsOfDay - actualSecondsOfDay) <= toleranceSeconds
+    }
+
+    private fun compactTimestampSecondsOfDay(value: String): Int? {
+        val hour = value.substring(6, 8).toIntOrNull() ?: return null
+        val minute = value.substring(8, 10).toIntOrNull() ?: return null
+        val second = value.substring(10, 12).toIntOrNull() ?: return null
+        if (hour !in 0..23 || minute !in 0..59 || second !in 0..59) {
+            return null
+        }
+        return hour * 3600 + minute * 60 + second
     }
 
     private fun readSettingValue(settings: DeviceSettings, fieldKey: SettingKey): Any? {

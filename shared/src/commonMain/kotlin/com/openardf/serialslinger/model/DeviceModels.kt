@@ -78,6 +78,7 @@ data class DeviceStatus(
     val temperatureC: Double? = null,
     val internalBatteryVolts: Double? = null,
     val externalBatteryVolts: Double? = null,
+    val daysRemaining: Int? = null,
     val eventEnabled: Boolean? = null,
     val eventStateSummary: String? = null,
     val eventStartsInSummary: String? = null,
