@@ -48,6 +48,13 @@ jobs:
           deploy_target: github
           jdeploy_version: "6.1.3"
 
+      - name: Upload canonical npm package tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm pack --ignore-scripts
+          gh release upload "${{ github.ref_name }}" serialslinger-*.tgz --clobber
+
       - name: Repair macOS jDeploy branding
         env:
           GH_TOKEN: ${{ github.token }}
