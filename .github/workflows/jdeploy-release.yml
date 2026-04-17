@@ -52,3 +52,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/repair-jdeploy-github-release-macos.sh "${{ github.ref_name }}"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false
