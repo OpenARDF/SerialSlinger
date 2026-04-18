@@ -99,24 +99,9 @@ fun main() {
 }
 
 private fun shouldUseMacScreenMenuBar(): Boolean {
-    if (!System.getProperty("os.name").contains("mac", ignoreCase = true)) {
-        return false
-    }
-    return !isRunningFromJdeployMacBundle()
-}
-
-private fun isRunningFromJdeployMacBundle(): Boolean {
-    val executablePath = runCatching {
-        ProcessHandle.current().info().command().orElse(null)
-    }.getOrNull() ?: return false
-    val executableFile = File(executablePath)
-    val infoPlist = executableFile.parentFile?.parentFile?.resolve("Info.plist") ?: return false
-    if (!infoPlist.isFile) {
-        return false
-    }
-
-    val plistText = runCatching { infoPlist.readText() }.getOrNull() ?: return false
-    return "ca.weblite.jdeploy.apps." in plistText
+    // Keep the menu attached to the app window so it is discoverable in both
+    // shell-launched and bundled desktop runs.
+    return false
 }
 
 private object SerialSlingerAppVersion {
@@ -174,6 +159,11 @@ private class FieldAwareSpinnerDateModel(
 }
 
 private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerAppVersion.value}") {
+    private enum class ScheduleTimeField {
+        START,
+        FINISH,
+    }
+
     private val cloneAccentColor = Color(0x1E, 0x40, 0xAF)
     private val cloneAccentBorderColor = Color(0x93, 0xC5, 0xFD)
     private val cloneAccentBackground = Color(0xEF, 0xF6, 0xFF)
@@ -237,10 +227,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         stepStartTimeSelection(current, field, forward)
     }
     private val startTimeStatusLabel = JLabel(" ")
+    private val startTimeRelativeField = createRelativeScheduleField("Start Time")
+    private val startTimeAbsoluteMirrorField = createReadOnlySummaryValueLabel()
+    private val startTimeAbsoluteMirrorLabel = JLabel("Current setting:")
+    private val startTimeEditorHost = createScheduleTimeEditorHost()
     private val finishTimeSpinner = createFieldAwareDateTimeSpinner { current, field, forward ->
         stepFinishTimeSelection(current, field, forward)
     }
     private val finishTimeStatusLabel = JLabel(" ")
+    private val finishTimeRelativeField = createRelativeScheduleField("Finish Time")
+    private val finishTimeAbsoluteMirrorField = createReadOnlySummaryValueLabel()
+    private val finishTimeAbsoluteMirrorLabel = JLabel("Current setting:")
+    private val finishTimeEditorHost = createScheduleTimeEditorHost()
     private val daysField = JSpinner(SpinnerNumberModel(1, 1, 255, 1))
     private val daysRemainingLabel = JLabel(" ")
     private val startsInField = JTextField()
@@ -268,12 +266,31 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val currentTimeRowLabel = JLabel("Device Time")
     private val systemTimeRowLabel = JLabel("System Time")
     private val manualTimeRowLabel = JLabel("Set Device Time")
+    private val startTimeRowLabel = JLabel("Start Time")
+    private val finishTimeRowLabel = JLabel("Finish Time")
     private val currentFrequencyRowLabel = JLabel("Frequency")
     private val currentBankRowLabel = JLabel("Memory Bank")
+    private val temperatureRowLabel = JLabel("Device Temperature")
     private val transmissionsRowLabel = JLabel("External device being controlled")
     private val currentTimeRowPanel by lazy { buildCurrentTimeRow() }
     private val manualTimeRowPanel by lazy { buildManualTimeRow() }
     private val currentTimeRowSpacer = Box.createHorizontalStrut(8)
+    private val startTimeAbsoluteEditorRow by lazy { buildDateTimeEditorRow(startTimeSpinner, startTimeStatusLabel) }
+    private val finishTimeAbsoluteEditorRow by lazy { buildDateTimeEditorRow(finishTimeSpinner, finishTimeStatusLabel) }
+    private val startTimeRelativeEditorPanel by lazy {
+        buildRelativeScheduleEditorPanel(
+            startTimeRelativeField,
+            startTimeAbsoluteMirrorField,
+            startTimeAbsoluteMirrorLabel,
+        )
+    }
+    private val finishTimeRelativeEditorPanel by lazy {
+        buildRelativeScheduleEditorPanel(
+            finishTimeRelativeField,
+            finishTimeAbsoluteMirrorField,
+            finishTimeAbsoluteMirrorLabel,
+        )
+    }
 
     private var currentTransport: DesktopSerialTransport? = null
     private var currentState: DeviceSessionState? = null
@@ -298,6 +315,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var suppressNextAutoDetectAction: Boolean = false
     private var cloneButtonLongPressTimer: Timer? = null
     private var suppressNextCloneAction: Boolean = false
+    private var suppressScheduleInteractionUntilMs: Long = 0L
+    private var relativeStartDisplaySelectionOverride: DesktopInputSupport.RelativeTimeSelection? = null
+    private var relativeFinishDisplaySelectionOverride: DesktopInputSupport.RelativeTimeSelection? = null
     private var displayPreferences: DesktopDisplayPreferences = PreferencesDesktopDisplayPreferencesStore.load()
     private val knownProbeResults = linkedMapOf<String, SignalSlingerPortProbe>()
     private val portMemory: DesktopPortMemory = PreferencesDesktopPortMemory
@@ -309,7 +329,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private lateinit var frequencyMhzMenuItem: JRadioButtonMenuItem
     private lateinit var temperatureCMenuItem: JRadioButtonMenuItem
     private lateinit var temperatureFMenuItem: JRadioButtonMenuItem
-    private lateinit var timeSetManualMenuItem: JCheckBoxMenuItem
+    private lateinit var timeSetAutomaticMenuItem: JRadioButtonMenuItem
+    private lateinit var timeSetManualMenuItem: JRadioButtonMenuItem
+    private lateinit var scheduleTimeAbsoluteMenuItem: JRadioButtonMenuItem
+    private lateinit var scheduleTimeRelativeMenuItem: JRadioButtonMenuItem
+    private lateinit var defaultEventLengthMenuItem: JMenuItem
     private val headerLogStyle = SimpleAttributeSet().apply {
         StyleConstants.setForeground(this, Color(0x11, 0x18, 0x27))
         StyleConstants.setBold(this, true)
@@ -394,6 +418,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setRawSerialVisible(displayPreferences.rawSerialVisible)
         setLogVisible(displayPreferences.logVisible)
         applyTimeSetMode(displayPreferences.timeSetMode)
+        refreshScheduleTimeEditorPresentation(loadedSnapshot)
         clearFormForUnread()
         submitButton.margin = Insets(
             autoDetectButton.margin.top,
@@ -441,6 +466,38 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 setDeviceTimeToSelection()
             }
         }
+        startTimeRelativeField.addActionListener { showRelativeTimePickerDialog(ScheduleTimeField.START) }
+        startTimeRelativeField.addMouseListener(
+            object : MouseAdapter() {
+                override fun mouseClicked(event: MouseEvent) {
+                    if (consumeLongPressClick(startTimeRelativeField)) {
+                        return
+                    }
+                    if (isScheduleInteractionSuppressed()) {
+                        return
+                    }
+                    if (event.button == MouseEvent.BUTTON1 && !backgroundWorkInProgress && startTimeRelativeField.isEnabled) {
+                        showRelativeTimePickerDialog(ScheduleTimeField.START)
+                    }
+                }
+            },
+        )
+        finishTimeRelativeField.addActionListener { showRelativeTimePickerDialog(ScheduleTimeField.FINISH) }
+        finishTimeRelativeField.addMouseListener(
+            object : MouseAdapter() {
+                override fun mouseClicked(event: MouseEvent) {
+                    if (consumeLongPressClick(finishTimeRelativeField)) {
+                        return
+                    }
+                    if (isScheduleInteractionSuppressed()) {
+                        return
+                    }
+                    if (event.button == MouseEvent.BUTTON1 && !backgroundWorkInProgress && finishTimeRelativeField.isEnabled) {
+                        showRelativeTimePickerDialog(ScheduleTimeField.FINISH)
+                    }
+                }
+            },
+        )
         disableEventButton.addActionListener { disableProgrammedEvent() }
         rawCommandField.addActionListener { sendRawSerialCommand() }
         portComboBox.addActionListener {
@@ -472,6 +529,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
         }
         installImmediateApplyHandlers()
+        installSettingsShortcutLongPressHandlers()
 
         Timer(3_000) { smartPollPorts() }.start()
         updateDisplayedClockFields()
@@ -517,27 +575,59 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     showRawSerialMenuItem = JCheckBoxMenuItem("Show Raw Serial Entry", displayPreferences.rawSerialVisible).apply {
                         addActionListener { setRawSerialVisible(isSelected) }
                     }
-                    timeSetManualMenuItem = JCheckBoxMenuItem(
-                        "Set Time Manually",
-                        displayPreferences.timeSetMode == TimeSetMode.MANUAL,
-                    ).apply {
-                        addActionListener {
-                            setTimeSetMode(
-                                if (isSelected) {
-                                    TimeSetMode.MANUAL
-                                } else {
-                                    TimeSetMode.SYSTEM_CLOCK
-                                },
-                            )
-                        }
-                    }
                     add(showRawSerialMenuItem)
-                    addSeparator()
-                    add(timeSetManualMenuItem)
                 },
             )
             add(
                 JMenu("Settings").apply {
+                    add(
+                        JMenu("Device Time Setting").apply {
+                            val group = ButtonGroup()
+                            timeSetAutomaticMenuItem = JRadioButtonMenuItem(
+                                "Automatic",
+                                displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK,
+                            ).apply {
+                                addActionListener { setTimeSetMode(TimeSetMode.SYSTEM_CLOCK) }
+                            }
+                            timeSetManualMenuItem = JRadioButtonMenuItem(
+                                "Manual",
+                                displayPreferences.timeSetMode == TimeSetMode.MANUAL,
+                            ).apply {
+                                addActionListener { setTimeSetMode(TimeSetMode.MANUAL) }
+                            }
+                            group.add(timeSetAutomaticMenuItem)
+                            group.add(timeSetManualMenuItem)
+                            add(timeSetAutomaticMenuItem)
+                            add(timeSetManualMenuItem)
+                        },
+                    )
+                    add(
+                        JMenu("Schedule Time Setting").apply {
+                            val group = ButtonGroup()
+                            scheduleTimeAbsoluteMenuItem = JRadioButtonMenuItem(
+                                "Absolute",
+                                displayPreferences.scheduleTimeInputMode == ScheduleTimeInputMode.ABSOLUTE,
+                            ).apply {
+                                addActionListener { setScheduleTimeInputMode(ScheduleTimeInputMode.ABSOLUTE) }
+                            }
+                            scheduleTimeRelativeMenuItem = JRadioButtonMenuItem(
+                                "Relative",
+                                displayPreferences.scheduleTimeInputMode == ScheduleTimeInputMode.RELATIVE,
+                            ).apply {
+                                addActionListener { setScheduleTimeInputMode(ScheduleTimeInputMode.RELATIVE) }
+                            }
+                            group.add(scheduleTimeAbsoluteMenuItem)
+                            group.add(scheduleTimeRelativeMenuItem)
+                            add(scheduleTimeAbsoluteMenuItem)
+                            add(scheduleTimeRelativeMenuItem)
+                        },
+                    )
+                    defaultEventLengthMenuItem = JMenuItem().apply {
+                        addActionListener { showDefaultEventLengthDialog() }
+                    }
+                    updateDefaultEventLengthMenuItem()
+                    add(defaultEventLengthMenuItem)
+                    addSeparator()
                     add(
                         JMenu("Frequency Units").apply {
                             val group = ButtonGroup()
@@ -580,6 +670,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                             add(temperatureFMenuItem)
                         },
                     )
+                    addSeparator()
+                    add(
+                        JMenuItem("About SerialSlinger").apply {
+                            addActionListener { showAboutDialog() }
+                        },
+                    )
                 },
             )
             add(
@@ -608,15 +704,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     add(
                         JMenuItem("Delete All Log Files...").apply {
                             addActionListener { confirmAndDeleteAllLogs() }
-                        },
-                    )
-                },
-            )
-            add(
-                JMenu("Help").apply {
-                    add(
-                        JMenuItem("About SerialSlinger").apply {
-                            addActionListener { showAboutDialog() }
                         },
                     )
                 },
@@ -655,6 +742,79 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "About SerialSlinger",
             JOptionPane.INFORMATION_MESSAGE,
         )
+    }
+
+    private fun showDefaultEventLengthDialog() {
+        val initialMinutes = displayPreferences.defaultEventLengthMinutes
+        val initialHours = initialMinutes / 60
+        val initialRemainderMinutes = initialMinutes % 60
+        val hourSpinner = JSpinner(SpinnerNumberModel(initialHours, 0, 24, 1))
+        val minuteSpinner = JSpinner(SpinnerNumberModel(initialRemainderMinutes, 0, 55, 5))
+        val summaryLabel = JLabel().apply {
+            foreground = cloneAccentColor
+        }
+
+        fun selectedMinutes(): Int {
+            val hours = (hourSpinner.value as? Number)?.toInt()?.coerceIn(0, 24) ?: 0
+            val minutes = (minuteSpinner.value as? Number)?.toInt()?.coerceIn(0, 55) ?: 0
+            return (hours * 60) + minutes
+        }
+
+        fun refreshSummary() {
+            val totalMinutes = selectedMinutes()
+            summaryLabel.text = if (totalMinutes in 10..(24 * 60)) {
+                "Default finish offset: ${DesktopInputSupport.formatDefaultEventLength(totalMinutes)}"
+            } else {
+                "Choose between 10 minutes and 24 hours."
+            }
+        }
+
+        hourSpinner.addChangeListener { refreshSummary() }
+        minuteSpinner.addChangeListener { refreshSummary() }
+        refreshSummary()
+
+        val panel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(summaryLabel)
+            add(Box.createVerticalStrut(10))
+            add(
+                JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    isOpaque = false
+                    add(JLabel("Hours"))
+                    add(Box.createHorizontalStrut(6))
+                    add(hourSpinner)
+                    add(Box.createHorizontalStrut(12))
+                    add(JLabel("Minutes"))
+                    add(Box.createHorizontalStrut(6))
+                    add(minuteSpinner)
+                },
+            )
+            add(Box.createVerticalStrut(10))
+            add(JLabel("Range: 10 minutes to 24 hours."))
+        }
+
+        val result = JOptionPane.showConfirmDialog(
+            this,
+            panel,
+            "Default Event Length",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+        )
+        if (result != JOptionPane.OK_OPTION) {
+            return
+        }
+
+        try {
+            setDefaultEventLengthMinutes(selectedMinutes())
+        } catch (exception: IllegalArgumentException) {
+            JOptionPane.showMessageDialog(
+                this,
+                exception.message ?: "Invalid Default Event Length.",
+                "Default Event Length",
+                JOptionPane.WARNING_MESSAGE,
+            )
+        }
     }
 
     private fun configuredContentSplitPane(): JSplitPane {
@@ -740,8 +900,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     row = addRow(section, row, "Station ID", stationIdField)
                     row = addRow(section, row, "ID Speed", idSpeedField)
                     row = addRow(section, row, timedPatternSpeedLabel, timedPatternSpeedField)
-                    row = addRow(section, row, "Start Time", buildDateTimeEditorRow(startTimeSpinner, startTimeStatusLabel))
-                    row = addRow(section, row, "Finish Time", buildDateTimeEditorRow(finishTimeSpinner, finishTimeStatusLabel))
+                    row = addRow(section, row, startTimeRowLabel, startTimeEditorHost)
+                    row = addRow(section, row, finishTimeRowLabel, finishTimeEditorHost)
                     row = addRow(section, row, "Event Status", buildEventStatusRow())
                     row = addRow(section, row, "Lasts", lastsField)
                     row = addRow(section, row, "Days To Run", buildDaysToRunRow())
@@ -756,7 +916,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 var row = 0
                 row = addRow(section, row, "Internal Battery", internalBatteryField)
                 row = addRow(section, row, "External Battery", externalBatteryField)
-                row = addRow(section, row, "Device Temperature", temperatureField)
+                row = addRow(section, row, temperatureRowLabel, temperatureField)
                 addRow(section, row, "Version", versionInfoField)
             })
             add(Box.createVerticalGlue())
@@ -898,6 +1058,59 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             add(Box.createHorizontalStrut(8))
             add(disableEventButton)
         }
+    }
+
+    private fun createScheduleTimeEditorHost(): JPanel {
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+        }
+    }
+
+    private fun createRelativeScheduleField(fieldLabel: String): JTextField {
+        return JTextField().apply {
+            isEditable = false
+            cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+            toolTipText = "Click to choose $fieldLabel. Press and hold to switch between absolute and relative entry."
+        }
+    }
+
+    private fun createReadOnlySummaryValueLabel(): JLabel {
+        return JLabel("Not Set").apply {
+            foreground = currentTimeField.foreground
+            border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
+        }
+    }
+
+    private fun buildRelativeScheduleEditorPanel(
+        relativeField: JTextField,
+        absoluteMirrorField: JLabel,
+        absoluteMirrorLabel: JLabel,
+    ): JPanel {
+        configureInteractiveSelectionField(relativeField)
+        absoluteMirrorField.font = absoluteMirrorField.font.deriveFont(absoluteMirrorField.font.size2D - 1f)
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(relativeField)
+            add(Box.createVerticalStrut(4))
+            add(
+                JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    isOpaque = false
+                    add(absoluteMirrorLabel)
+                    add(Box.createHorizontalStrut(8))
+                    add(absoluteMirrorField)
+                },
+            )
+        }
+    }
+
+    private fun configureInteractiveSelectionField(field: JTextField) {
+        field.border = editableTextFieldBorder
+        field.background = editableTextFieldBackground
+        field.isOpaque = true
+        field.disabledTextColor = field.foreground
     }
 
     private fun buildDateTimeEditorRow(spinner: JSpinner, statusLabel: JLabel): JPanel {
@@ -1059,26 +1272,30 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 override fun changedUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
 
                 private fun markPending() {
-                    if (!updatingForm && !isDateTimeCommitSuppressed(spinner)) {
+                    if (!updatingForm && !isDateTimeCommitSuppressed(spinner) && !shouldSuppressScheduleCommit(spinner)) {
                         rememberPendingImmediateEdit(description, onCommit)
                     }
                 }
             },
         )
         textField.addActionListener {
-            if (!updatingForm && !isDateTimeCommitSuppressed(spinner)) {
+            if (!updatingForm && !isDateTimeCommitSuppressed(spinner) && !shouldSuppressScheduleCommit(spinner)) {
                 commitPendingImmediateEdit(orElse = onCommit)
             }
         }
         textField.addFocusListener(
             object : FocusAdapter() {
                 override fun focusLost(event: FocusEvent?) {
-                    if (!updatingForm && !isDateTimeCommitSuppressed(spinner)) {
+                    if (!updatingForm && !isDateTimeCommitSuppressed(spinner) && !shouldSuppressScheduleCommit(spinner)) {
                         commitPendingImmediateEdit(orElse = onCommit)
                     }
                 }
             },
         )
+    }
+
+    private fun shouldSuppressScheduleCommit(spinner: JSpinner): Boolean {
+        return spinner in listOf(startTimeSpinner, finishTimeSpinner) && isScheduleInteractionSuppressed()
     }
 
     private fun rememberPendingImmediateEdit(description: String, onCommit: () -> Unit) {
@@ -1738,6 +1955,233 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
     }
 
+    private fun installSettingsShortcutLongPressHandlers() {
+        installSettingLongPressShortcut(
+            targets = listOf(currentTimeField, currentTimeRowLabel),
+            animatedTargets = timeSetToggleAnimatedTargets(),
+        ) { toggleTimeSetMode() }
+        installTimeSetSpinnerLongPressShortcut()
+        installSettingLongPressShortcut(
+            targets = listOf(systemTimeField, systemTimeRowLabel),
+            animatedTargets = timeSetToggleAnimatedTargets(),
+        ) { toggleTimeSetMode() }
+        installSettingLongPressShortcut(
+            targets = listOf(manualTimeRowLabel, manualTimeRowPanel, setTimeButton),
+            animatedTargets = timeSetToggleAnimatedTargets(),
+        ) { toggleTimeSetMode() }
+        installSettingLongPressShortcut(
+            targets = listOf(currentFrequencyField, currentFrequencyRowLabel),
+            animatedTargets = frequencyToggleAnimatedTargets(),
+        ) { toggleFrequencyDisplayUnit() }
+        installFrequencySpinnerLongPressShortcut(frequency1Field, frequency1Label)
+        installFrequencySpinnerLongPressShortcut(frequency2Field, frequency2Label)
+        installFrequencySpinnerLongPressShortcut(frequency3Field, frequency3Label)
+        installFrequencySpinnerLongPressShortcut(frequencyBField, frequencyBLabel)
+        installSettingLongPressShortcut(
+            targets = listOf(temperatureField, temperatureRowLabel),
+            animatedTargets = listOf(temperatureField, temperatureRowLabel),
+        ) { toggleTemperatureDisplayUnit() }
+        val scheduleAnimatedTargets = listOf(
+            startTimeRowLabel,
+            finishTimeRowLabel,
+            startTimeRelativeField,
+            finishTimeRelativeField,
+            startTimeAbsoluteMirrorLabel,
+            finishTimeAbsoluteMirrorLabel,
+            startTimeAbsoluteMirrorField,
+            finishTimeAbsoluteMirrorField,
+            spinnerEditorTextField(startTimeSpinner),
+            spinnerEditorTextField(finishTimeSpinner),
+        )
+        installSettingLongPressShortcut(
+            targets = listOf(
+                startTimeRowLabel,
+                finishTimeRowLabel,
+                startTimeRelativeField,
+                finishTimeRelativeField,
+                startTimeAbsoluteMirrorLabel,
+                finishTimeAbsoluteMirrorLabel,
+                startTimeAbsoluteMirrorField,
+                finishTimeAbsoluteMirrorField,
+                spinnerEditorTextField(startTimeSpinner),
+                spinnerEditorTextField(finishTimeSpinner),
+            ),
+            animatedTargets = scheduleAnimatedTargets,
+        ) { toggleScheduleTimeInputMode() }
+    }
+
+    private fun installTimeSetSpinnerLongPressShortcut() {
+        installSettingLongPressShortcut(
+            targets = listOf(manualTimeSpinner, spinnerEditorTextField(manualTimeSpinner)),
+            animatedTargets = timeSetToggleAnimatedTargets(),
+        ) { toggleTimeSetMode() }
+        manualTimeSpinner.addPropertyChangeListener("editor") {
+            installSettingLongPressShortcut(
+                targets = listOf(spinnerEditorTextField(manualTimeSpinner)),
+                animatedTargets = timeSetToggleAnimatedTargets(),
+            ) { toggleTimeSetMode() }
+        }
+    }
+
+    private fun installFrequencySpinnerLongPressShortcut(spinner: JSpinner, label: JLabel) {
+        installSettingLongPressShortcut(
+            targets = listOf(spinner, label, spinnerEditorTextField(spinner)),
+            animatedTargets = frequencyToggleAnimatedTargets(),
+        ) { toggleFrequencyDisplayUnit() }
+        spinner.addPropertyChangeListener("editor") {
+            installSettingLongPressShortcut(
+                targets = listOf(spinnerEditorTextField(spinner)),
+                animatedTargets = frequencyToggleAnimatedTargets(),
+            ) { toggleFrequencyDisplayUnit() }
+        }
+    }
+
+    private fun timeSetToggleAnimatedTargets(): List<Component> {
+        return buildList {
+            add(currentTimeRowLabel)
+            add(currentTimeField)
+            if (displayPreferences.timeSetMode == TimeSetMode.MANUAL) {
+                add(manualTimeRowLabel)
+                add(manualTimeSpinner)
+                add(spinnerEditorTextField(manualTimeSpinner))
+            } else {
+                add(systemTimeRowLabel)
+                add(systemTimeField)
+            }
+        }
+    }
+
+    private fun frequencyToggleAnimatedTargets(): List<Component> {
+        return buildList {
+            add(currentFrequencyRowLabel)
+            add(currentFrequencyField)
+            if (frequency1Label.isVisible && frequency1Field.isVisible) {
+                add(frequency1Label)
+                add(frequency1Field)
+            }
+            if (frequency2Label.isVisible && frequency2Field.isVisible) {
+                add(frequency2Label)
+                add(frequency2Field)
+            }
+            if (frequency3Label.isVisible && frequency3Field.isVisible) {
+                add(frequency3Label)
+                add(frequency3Field)
+            }
+            if (frequencyBLabel.isVisible && frequencyBField.isVisible) {
+                add(frequencyBLabel)
+                add(frequencyBField)
+            }
+        }
+    }
+
+    private fun installSettingLongPressShortcut(
+        targets: List<Component>,
+        animatedTargets: List<Component>,
+        onLongPress: () -> Unit,
+    ) {
+        val uniqueTargets = targets.distinct()
+        uniqueTargets.forEach { component ->
+            val installable = component as? javax.swing.JComponent ?: return@forEach
+            if (installable.getClientProperty(SETTING_LONG_PRESS_HANDLER_INSTALLED_KEY) == true) {
+                return@forEach
+            }
+            installable.putClientProperty(SETTING_LONG_PRESS_HANDLER_INSTALLED_KEY, true)
+            component.addMouseListener(
+                object : MouseAdapter() {
+                    private var longPressTimer: Timer? = null
+
+                    override fun mousePressed(event: MouseEvent) {
+                        if (event.button != MouseEvent.BUTTON1 || !component.isEnabled) {
+                            return
+                        }
+                        longPressTimer?.stop()
+                        longPressTimer = Timer(SETTING_TOGGLE_LONG_PRESS_MS) {
+                            longPressTimer = null
+                            if (!backgroundWorkInProgress && component.isEnabled) {
+                                markLongPressTriggered(component)
+                                performAnimatedToggle(animatedTargets.distinct(), onLongPress)
+                            }
+                        }.apply {
+                            isRepeats = false
+                            start()
+                        }
+                    }
+
+                    override fun mouseReleased(event: MouseEvent) {
+                        longPressTimer?.stop()
+                        longPressTimer = null
+                    }
+
+                    override fun mouseExited(event: MouseEvent) {
+                        longPressTimer?.stop()
+                        longPressTimer = null
+                    }
+                },
+            )
+        }
+    }
+
+    private fun performAnimatedToggle(targets: List<Component>, onToggle: () -> Unit) {
+        animateToggleFeedback(targets)
+        Timer(SETTING_TOGGLE_FEEDBACK_MS) {
+            onToggle()
+        }.apply {
+            isRepeats = false
+            start()
+        }
+    }
+
+    private fun animateToggleFeedback(targets: List<Component>) {
+        targets.distinct().forEach { component ->
+            when (component) {
+                is JLabel -> {
+                    val originalForeground = component.foreground
+                    val originalFont = component.font
+                    component.foreground = cloneAccentColor
+                    component.font = originalFont.deriveFont(java.awt.Font.BOLD)
+                    Timer(SETTING_TOGGLE_ANIMATION_MS) {
+                        component.foreground = originalForeground
+                        component.font = originalFont
+                    }.apply {
+                        isRepeats = false
+                        start()
+                    }
+                }
+                is javax.swing.JComponent -> {
+                    val originalOpaque = component.isOpaque
+                    val originalBackground = component.background
+                    val originalBorder = component.border
+                    component.isOpaque = true
+                    component.background = Color(0xE0, 0xEC, 0xFF)
+                    component.border = BorderFactory.createLineBorder(cloneAccentColor, 2, true)
+                    component.repaint()
+                    Timer(SETTING_TOGGLE_ANIMATION_MS) {
+                        component.isOpaque = originalOpaque
+                        component.background = originalBackground
+                        component.border = originalBorder
+                        component.repaint()
+                    }.apply {
+                        isRepeats = false
+                        start()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun markLongPressTriggered(component: Component) {
+        (component as? javax.swing.JComponent)?.putClientProperty(SETTING_LONG_PRESS_TRIGGERED_KEY, true)
+    }
+
+    private fun consumeLongPressClick(component: Component): Boolean {
+        val installable = component as? javax.swing.JComponent ?: return false
+        val triggered = installable.getClientProperty(SETTING_LONG_PRESS_TRIGGERED_KEY) == true
+        if (triggered) {
+            installable.putClientProperty(SETTING_LONG_PRESS_TRIGGERED_KEY, false)
+        }
+        return triggered
+    }
+
     private fun reloadCurrentPortAsDetected() {
         val selectedPath = preferredReloadPortPath()
         if (selectedPath == null) {
@@ -2356,8 +2800,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun applyStartTimeChange() {
+        if (isScheduleInteractionSuppressed()) {
+            return
+        }
+        clearRelativeScheduleDisplayOverrides()
         val connectedTimedSettings = currentConnectedTimedSettings()
         val normalizedStartTime = normalizedStartTimeSelectionForCommit(connectedTimedSettings.startTimeCompact) ?: return
+        val derivedFinishTime = DesktopInputSupport.finishTimeCompactFromStart(
+            startTimeCompact = normalizedStartTime,
+            defaultEventLengthMinutes = displayPreferences.defaultEventLengthMinutes,
+        )
         applyImmediateEdit("Start Time", updatesTimedEventTemplate = true) { base ->
             EditableDeviceSettings.fromDeviceSettings(base).copy(
                 startTimeCompact = SettingsField(
@@ -2366,11 +2818,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     base.startTimeCompact,
                     normalizedStartTime,
                 ),
+                finishTimeCompact = SettingsField(
+                    "finishTimeCompact",
+                    "Finish Time",
+                    base.finishTimeCompact,
+                    derivedFinishTime,
+                ),
             )
         }
     }
 
     private fun applyFinishTimeChange() {
+        if (isScheduleInteractionSuppressed()) {
+            return
+        }
+        clearRelativeScheduleDisplayOverrides()
         val connectedTimedSettings = currentConnectedTimedSettings()
         val normalizedFinishTime = normalizedFinishTimeSelectionForCommit(
             originalStartTimeCompact = connectedTimedSettings.startTimeCompact,
@@ -2556,6 +3018,307 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun refreshScheduleTimeEditorPresentation(snapshot: DeviceSnapshot?) {
+        startTimeEditorHost.removeAll()
+        finishTimeEditorHost.removeAll()
+
+        if (displayPreferences.scheduleTimeInputMode == ScheduleTimeInputMode.RELATIVE) {
+            startTimeRelativeField.text = DesktopInputSupport.formatRelativeTimeSelection(
+                relativeEditorSelectionFor(ScheduleTimeField.START, snapshot),
+            )
+            startTimeAbsoluteMirrorField.text = DesktopInputSupport.formatCompactTimestampOrNotSet(snapshot?.settings?.startTimeCompact)
+            finishTimeRelativeField.text = DesktopInputSupport.formatRelativeTimeSelection(
+                relativeEditorSelectionFor(ScheduleTimeField.FINISH, snapshot),
+            )
+            finishTimeAbsoluteMirrorField.text = DesktopInputSupport.formatCompactTimestampOrNotSet(snapshot?.settings?.finishTimeCompact)
+            startTimeEditorHost.add(startTimeRelativeEditorPanel)
+            finishTimeEditorHost.add(finishTimeRelativeEditorPanel)
+        } else {
+            startTimeEditorHost.add(startTimeAbsoluteEditorRow)
+            finishTimeEditorHost.add(finishTimeAbsoluteEditorRow)
+        }
+
+        startTimeEditorHost.revalidate()
+        startTimeEditorHost.repaint()
+        finishTimeEditorHost.revalidate()
+        finishTimeEditorHost.repaint()
+    }
+
+    private fun relativeEditorSelectionFor(
+        field: ScheduleTimeField,
+        snapshot: DeviceSnapshot?,
+    ): DesktopInputSupport.RelativeTimeSelection {
+        return when (field) {
+            ScheduleTimeField.START -> relativeStartDisplaySelectionOverride ?: relativeTimeSelectionFor(field, snapshot)
+            ScheduleTimeField.FINISH -> relativeFinishDisplaySelectionOverride ?: defaultEventLengthRelativeSelection()
+        }
+    }
+
+    private fun relativeTimeSelectionFor(
+        field: ScheduleTimeField,
+        snapshot: DeviceSnapshot?,
+    ): DesktopInputSupport.RelativeTimeSelection {
+        return DesktopInputSupport.deriveRelativeTimeSelection(
+            baseCompact = relativeBaseCompact(field, snapshot),
+            targetCompact = relativeTargetCompact(field, snapshot),
+        )
+    }
+
+    private fun relativeBaseCompact(
+        field: ScheduleTimeField,
+        snapshot: DeviceSnapshot? = loadedSnapshot,
+    ): String? {
+        return when (field) {
+            ScheduleTimeField.START -> displayedDeviceTimeCompact()
+            ScheduleTimeField.FINISH -> snapshot?.settings?.startTimeCompact
+        }
+    }
+
+    private fun relativeTargetCompact(
+        field: ScheduleTimeField,
+        snapshot: DeviceSnapshot? = loadedSnapshot,
+    ): String? {
+        return when (field) {
+            ScheduleTimeField.START -> snapshot?.settings?.startTimeCompact
+            ScheduleTimeField.FINISH -> snapshot?.settings?.finishTimeCompact
+        }
+    }
+
+    private fun showRelativeTimePickerDialog(field: ScheduleTimeField) {
+        if (isScheduleInteractionSuppressed()) {
+            return
+        }
+        val snapshot = loadedSnapshot ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        if (!snapshot.capabilities.supportsScheduling) {
+            JOptionPane.showMessageDialog(this, "Scheduling is not supported by the loaded snapshot.")
+            return
+        }
+
+        val initialSelection = relativeEditorSelectionFor(field, snapshot)
+        val hoursSpinner = JSpinner(SpinnerNumberModel(initialSelection.hours, 0, 480, 1))
+        val minuteOptions = listOf("TOTH") + (0..55 step 5).map { it.toString().padStart(2, '0') }
+        val minuteCombo = JComboBox(DefaultComboBoxModel(minuteOptions.toTypedArray())).apply {
+            selectedItem = if (initialSelection.useTopOfHour) {
+                "TOTH"
+            } else {
+                initialSelection.minutes.toString().padStart(2, '0')
+            }
+        }
+        val previewLabel = JLabel().apply {
+            foreground = cloneAccentColor
+        }
+
+        fun currentSelection(): DesktopInputSupport.RelativeTimeSelection {
+            val hours = (hoursSpinner.value as? Number)?.toInt()?.coerceIn(0, 480) ?: 0
+            val minuteChoice = minuteCombo.selectedItem as? String ?: "TOTH"
+            return DesktopInputSupport.RelativeTimeSelection(
+                hours = hours,
+                minutes = if (minuteChoice == "TOTH") 0 else minuteChoice.toInt(),
+                useTopOfHour = minuteChoice == "TOTH",
+            )
+        }
+
+        fun refreshPreview() {
+            previewLabel.text = DesktopInputSupport.formatRelativeTimeSelection(currentSelection())
+        }
+
+        hoursSpinner.addChangeListener { refreshPreview() }
+        minuteCombo.addActionListener { refreshPreview() }
+        refreshPreview()
+
+        val panel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(previewLabel)
+            add(Box.createVerticalStrut(10))
+            add(
+                JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    isOpaque = false
+                    add(JLabel("+"))
+                    add(Box.createHorizontalStrut(6))
+                    add(hoursSpinner)
+                    add(Box.createHorizontalStrut(6))
+                    add(JLabel("hours"))
+                    add(Box.createHorizontalStrut(10))
+                    add(minuteCombo)
+                    add(Box.createHorizontalStrut(6))
+                    add(JLabel("minutes"))
+                },
+            )
+            add(Box.createVerticalStrut(10))
+            add(JLabel("TOTH = Top of the Hour"))
+        }
+
+        val result = JOptionPane.showConfirmDialog(
+            this,
+            panel,
+            when (field) {
+                ScheduleTimeField.START -> "Relative Start Time"
+                ScheduleTimeField.FINISH -> "Relative Finish Time"
+            },
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+        )
+        if (result == JOptionPane.OK_OPTION) {
+            applyRelativeScheduleTimeChange(field, currentSelection())
+        }
+    }
+
+    private fun applyRelativeScheduleTimeChange(
+        field: ScheduleTimeField,
+        selection: DesktopInputSupport.RelativeTimeSelection,
+    ) {
+        if (updatingForm || backgroundWorkInProgress || isScheduleInteractionSuppressed()) {
+            return
+        }
+
+        val transport = currentTransport ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        val state = currentState ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        val snapshot = loadedSnapshot ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        if (!snapshot.capabilities.supportsScheduling) {
+            JOptionPane.showMessageDialog(this, "Scheduling is not supported by the loaded snapshot.")
+            return
+        }
+
+        val description = when (field) {
+            ScheduleTimeField.START -> "Relative Start Time"
+            ScheduleTimeField.FINISH -> "Relative Finish Time"
+        }
+        val commands = when (field) {
+            ScheduleTimeField.START -> listOf(
+                "CLK S ${DesktopInputSupport.formatRelativeTimeCommand(selection)}",
+                "CLK F ${DesktopInputSupport.formatRelativeTimeCommand(defaultEventLengthRelativeSelection())}",
+            )
+            ScheduleTimeField.FINISH -> listOf(
+                "CLK F ${DesktopInputSupport.formatRelativeTimeCommand(selection)}",
+            )
+        }
+
+        showConnectionIndicator(
+            ConnectionIndicatorState.SEARCHING,
+            "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
+        )
+        runInBackground("Applying $description...") {
+            setBusyProgress(0, 100, "Sending relative schedule command")
+            val sentAtMs = System.currentTimeMillis()
+            transport.sendCommands(commands)
+            val responseLines = transport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
+            extractDeviceError(responseLines)?.let { error ->
+                throw IllegalStateException(error)
+            }
+
+            val updatedState = if (responseLines.isNotEmpty()) {
+                DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+            } else {
+                state
+            }
+
+            val refreshed = DeviceSessionController.refreshFromDevice(
+                updatedState,
+                transport,
+                startEditing = true,
+                progress = { completed, total ->
+                    setBusyProgressRange(20, 95, completed, total, commandProgressLabel(completed, total))
+                },
+            )
+            setBusyProgress(97, 100, "Checking device time")
+            val refreshClockSample = postLoadClockSample(transport, refreshed.state.snapshot)
+            if (refreshClockSample != null) {
+                setBusyProgress(100, 100, "Done")
+            } else {
+                setBusyProgress(100, 100, "Done")
+            }
+            val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
+            currentState = refreshedWithClock.state
+            loadedSnapshot = refreshedWithClock.state.snapshot
+            refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+
+            SwingUtilities.invokeLater {
+                when (field) {
+                    ScheduleTimeField.START -> {
+                        relativeStartDisplaySelectionOverride = selection
+                        relativeFinishDisplaySelectionOverride = defaultEventLengthRelativeSelection()
+                    }
+                    ScheduleTimeField.FINISH -> {
+                        relativeFinishDisplaySelectionOverride = selection
+                    }
+                }
+                refreshClockSample?.second?.let(::applyClockDisplayAnchor)
+                applySnapshotToForm(
+                    refreshedWithClock.state.snapshot,
+                    recalculateClockOffset = refreshClockSample == null,
+                )
+                updateCloneTemplateLabel(
+                    "Clone template updated from current device.",
+                    Color(0x0B, 0x3D, 0x91),
+                )
+                appendRelativeScheduleLog(
+                    title = "Apply $description",
+                    commands = commands,
+                    sentAtMs = sentAtMs,
+                    responseLines = responseLines,
+                    receivedAtMs = receivedAtMs,
+                    refreshResult = refreshedWithClock,
+                )
+                showConnectionIndicator(
+                    ConnectionIndicatorState.CONNECTED,
+                    "Applied $description on ${currentConnectedPortPath.orEmpty()}.",
+                )
+                setStatus("Applied $description.")
+            }
+        }
+    }
+
+    private fun appendRelativeScheduleLog(
+        title: String,
+        commands: List<String>,
+        sentAtMs: Long,
+        responseLines: List<String>,
+        receivedAtMs: Long,
+        refreshResult: DeviceLoadResult,
+    ) {
+        appendLog(title, buildList {
+            commands.forEach { command ->
+                add(DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL, sentAtMs))
+            }
+            responseLines.forEach { line ->
+                add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, receivedAtMs))
+            }
+            refreshResult.traceEntries.forEach { entry ->
+                add(
+                    DesktopLogEntry(
+                        message = "${entry.direction.label} ${entry.payload}",
+                        category = DesktopLogCategory.SERIAL,
+                        timestampMs = entry.timestampMs,
+                    ),
+                )
+            }
+            add(
+                DesktopLogEntry(
+                    message = "Reloaded settings after relative schedule change.",
+                    category = DesktopLogCategory.APP,
+                ),
+            )
+        })
+    }
+
+    private fun extractDeviceError(responseLines: List<String>): String? {
+        return responseLines.firstOrNull { it.contains("* Err:") }?.removePrefix("* ")?.trim()
+    }
+
     private fun applySnapshotToForm(snapshot: DeviceSnapshot?, recalculateClockOffset: Boolean = true) {
         clearPendingImmediateEdit()
         if (snapshot == null) {
@@ -2587,6 +3350,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             setDateTimeEditorValue(finishTimeSpinner, finishTimeStatusLabel, timedSettings.finishTimeCompact)
             applyDateTimeEditorCapability(startTimeSpinner, schedulingSupported)
             applyDateTimeEditorCapability(finishTimeSpinner, schedulingSupported)
+            refreshScheduleTimeEditorPresentation(snapshot)
             daysField.isEnabled = schedulingSupported
             updateDaysToRunDisplay(snapshot)
             setInformationalFieldText(currentFrequencyField, formatFrequencyForDisplay(frequencies.currentFrequencyHz), unreadPlaceholder = false)
@@ -3135,6 +3899,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         applyDateTimeEditorCapability(manualTimeSpinner, writableEnabled && schedulingSupported)
         applyDateTimeEditorCapability(startTimeSpinner, writableEnabled && schedulingSupported)
         applyDateTimeEditorCapability(finishTimeSpinner, writableEnabled && schedulingSupported)
+        startTimeRelativeField.isEnabled = writableEnabled && schedulingSupported
+        finishTimeRelativeField.isEnabled = writableEnabled && schedulingSupported
+        startTimeAbsoluteMirrorField.isEnabled = writableEnabled && schedulingSupported
+        finishTimeAbsoluteMirrorField.isEnabled = writableEnabled && schedulingSupported
         setTimeButton.isEnabled =
             writableEnabled &&
             schedulingSupported &&
@@ -3208,6 +3976,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         frequencyKhzMenuItem.isSelected = unit == FrequencyDisplayUnit.KHZ
         frequencyMhzMenuItem.isSelected = unit == FrequencyDisplayUnit.MHZ
         applySnapshotToForm(loadedSnapshot, recalculateClockOffset = false)
+        setStatus("Frequency units set to ${if (unit == FrequencyDisplayUnit.MHZ) "MHz" else "kHz"}.")
     }
 
     private fun setTemperatureDisplayUnit(unit: TemperatureDisplayUnit) {
@@ -3219,6 +3988,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         temperatureCMenuItem.isSelected = unit == TemperatureDisplayUnit.CELSIUS
         temperatureFMenuItem.isSelected = unit == TemperatureDisplayUnit.FAHRENHEIT
         applySnapshotToForm(loadedSnapshot, recalculateClockOffset = false)
+        setStatus("Temperature units set to ${if (unit == TemperatureDisplayUnit.CELSIUS) "Celsius" else "Fahrenheit"}.")
     }
 
     private fun setTimeSetMode(mode: TimeSetMode) {
@@ -3228,6 +3998,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         displayPreferences = displayPreferences.copy(timeSetMode = mode)
         applyTimeSetMode(mode)
         persistDisplayPreferences()
+        setStatus("Device Time Setting is now ${if (mode == TimeSetMode.SYSTEM_CLOCK) "Automatic" else "Manual"}.")
     }
 
     private fun applyTimeSetMode(mode: TimeSetMode) {
@@ -3240,6 +4011,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         manualTimeRowPanel.isVisible = manualMode
         currentTimeRowSpacer.isVisible = !manualMode
         syncTimeButton.isVisible = !manualMode
+        if (::timeSetAutomaticMenuItem.isInitialized) {
+            timeSetAutomaticMenuItem.isSelected = !manualMode
+        }
         if (::timeSetManualMenuItem.isInitialized) {
             timeSetManualMenuItem.isSelected = manualMode
         }
@@ -3247,6 +4021,104 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         updateClockPhaseWarning(lastClockPhaseErrorMillis)
         formScroll.revalidate()
         formScroll.repaint()
+    }
+
+    private fun setScheduleTimeInputMode(mode: ScheduleTimeInputMode) {
+        if (displayPreferences.scheduleTimeInputMode == mode) {
+            return
+        }
+        suppressScheduleInteractionUntilMs = System.currentTimeMillis() + SCHEDULE_MODE_TOGGLE_SUPPRESSION_MS
+        clearPendingImmediateEdit()
+        if (mode == ScheduleTimeInputMode.ABSOLUTE) {
+            clearRelativeScheduleDisplayOverrides()
+        }
+        displayPreferences = displayPreferences.copy(scheduleTimeInputMode = mode)
+        persistDisplayPreferences()
+        if (::scheduleTimeAbsoluteMenuItem.isInitialized) {
+            scheduleTimeAbsoluteMenuItem.isSelected = mode == ScheduleTimeInputMode.ABSOLUTE
+        }
+        if (::scheduleTimeRelativeMenuItem.isInitialized) {
+            scheduleTimeRelativeMenuItem.isSelected = mode == ScheduleTimeInputMode.RELATIVE
+        }
+        refreshScheduleTimeEditorPresentation(loadedSnapshot)
+        updateWritableControlAvailability(backgroundWorkInProgress)
+        formScroll.revalidate()
+        formScroll.repaint()
+        setStatus("Schedule Time Setting is now ${if (mode == ScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"}.")
+    }
+
+    private fun setDefaultEventLengthMinutes(minutes: Int) {
+        val validatedMinutes = DesktopInputSupport.validateDefaultEventLengthMinutes(minutes)
+        if (displayPreferences.defaultEventLengthMinutes == validatedMinutes) {
+            return
+        }
+        displayPreferences = displayPreferences.copy(defaultEventLengthMinutes = validatedMinutes)
+        relativeFinishDisplaySelectionOverride = defaultEventLengthRelativeSelection()
+        persistDisplayPreferences()
+        updateDefaultEventLengthMenuItem()
+        refreshScheduleTimeEditorPresentation(loadedSnapshot)
+        setStatus("Default Event Length is now ${DesktopInputSupport.formatDefaultEventLength(validatedMinutes)}.")
+    }
+
+    private fun updateDefaultEventLengthMenuItem() {
+        if (!::defaultEventLengthMenuItem.isInitialized) {
+            return
+        }
+        defaultEventLengthMenuItem.text =
+            "Default Event Length (${DesktopInputSupport.formatDefaultEventLength(displayPreferences.defaultEventLengthMinutes)})..."
+    }
+
+    private fun defaultEventLengthRelativeSelection(): DesktopInputSupport.RelativeTimeSelection {
+        return DesktopInputSupport.relativeTimeSelectionForDuration(displayPreferences.defaultEventLengthMinutes)
+    }
+
+    private fun clearRelativeScheduleDisplayOverrides() {
+        relativeStartDisplaySelectionOverride = null
+        relativeFinishDisplaySelectionOverride = null
+    }
+
+    private fun toggleFrequencyDisplayUnit() {
+        setFrequencyDisplayUnit(
+            if (displayPreferences.frequencyDisplayUnit == FrequencyDisplayUnit.MHZ) {
+                FrequencyDisplayUnit.KHZ
+            } else {
+                FrequencyDisplayUnit.MHZ
+            },
+        )
+    }
+
+    private fun toggleTemperatureDisplayUnit() {
+        setTemperatureDisplayUnit(
+            if (displayPreferences.temperatureDisplayUnit == TemperatureDisplayUnit.CELSIUS) {
+                TemperatureDisplayUnit.FAHRENHEIT
+            } else {
+                TemperatureDisplayUnit.CELSIUS
+            },
+        )
+    }
+
+    private fun toggleTimeSetMode() {
+        setTimeSetMode(
+            if (displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK) {
+                TimeSetMode.MANUAL
+            } else {
+                TimeSetMode.SYSTEM_CLOCK
+            },
+        )
+    }
+
+    private fun toggleScheduleTimeInputMode() {
+        setScheduleTimeInputMode(
+            if (displayPreferences.scheduleTimeInputMode == ScheduleTimeInputMode.ABSOLUTE) {
+                ScheduleTimeInputMode.RELATIVE
+            } else {
+                ScheduleTimeInputMode.ABSOLUTE
+            },
+        )
+    }
+
+    private fun isScheduleInteractionSuppressed(): Boolean {
+        return System.currentTimeMillis() < suppressScheduleInteractionUntilMs
     }
 
     private fun setRawSerialVisible(isVisible: Boolean) {
@@ -4250,6 +5122,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun clearFormForUnread() {
         loadedSnapshot = null
+        clearRelativeScheduleDisplayOverrides()
         deviceTimeOffset = null
         stationIdField.text = ""
         eventTypeCombo.selectedItem = null
@@ -4261,6 +5134,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         timedPatternSpeedField.selectedItem = null
         setDateTimeEditorValue(startTimeSpinner, startTimeStatusLabel, null)
         setDateTimeEditorValue(finishTimeSpinner, finishTimeStatusLabel, null)
+        refreshScheduleTimeEditorPresentation(null)
         daysField.value = 1
         daysRemainingLabel.text = " "
         daysRemainingLabel.toolTipText = null
@@ -5237,8 +6111,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         const val DATE_TIME_COMMIT_SUPPRESSED_KEY = "serialslinger.dateTimeCommitSuppressed"
         const val NULLABLE_TIMESTAMP_ACTIVE_KEY = "serialslinger.nullableTimestampActive"
         const val NULLABLE_TIMESTAMP_STATUS_LABEL_KEY = "serialslinger.nullableTimestampStatusLabel"
+        const val SETTING_LONG_PRESS_HANDLER_INSTALLED_KEY = "serialslinger.settingLongPressHandlerInstalled"
+        const val SETTING_LONG_PRESS_TRIGGERED_KEY = "serialslinger.settingLongPressTriggered"
         const val AUTO_DETECT_BUTTON_LONG_PRESS_MS = 900
         const val CLONE_BUTTON_LONG_PRESS_MS = 900
+        const val SETTING_TOGGLE_LONG_PRESS_MS = 900
+        const val SETTING_TOGGLE_FEEDBACK_MS = 220
+        const val SETTING_TOGGLE_ANIMATION_MS = 260
+        const val SCHEDULE_MODE_TOGGLE_SUPPRESSION_MS = 750L
         const val PERIODIC_DEVICE_TIME_CHECK_INTERVAL_MS = 1_800_000L
     }
 }

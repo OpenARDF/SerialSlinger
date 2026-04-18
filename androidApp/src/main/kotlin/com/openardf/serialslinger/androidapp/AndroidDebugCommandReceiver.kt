@@ -310,6 +310,7 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                 AndroidSessionController.runStartTimeSubmit(
                     context = context,
                     startTimeInput = startTime,
+                    defaultEventLengthMinutes = 6 * 60,
                     requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
                     source = "adb",
                 ) { result ->

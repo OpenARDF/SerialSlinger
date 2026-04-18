@@ -216,6 +216,92 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun derivesRelativeTimeSelectionForWholeHoursUsingToth() {
+        val selection = DesktopInputSupport.deriveRelativeTimeSelection(
+            baseCompact = "260410140000",
+            targetCompact = "260410170000",
+        )
+
+        assertEquals(
+            DesktopInputSupport.RelativeTimeSelection(hours = 3, minutes = 0, useTopOfHour = true),
+            selection,
+        )
+    }
+
+    @Test
+    fun derivesRelativeTimeSelectionRoundedToNearestFiveMinutes() {
+        val selection = DesktopInputSupport.deriveRelativeTimeSelection(
+            baseCompact = "260410140000",
+            targetCompact = "260410153200",
+        )
+
+        assertEquals(DesktopInputSupport.RelativeTimeSelection(hours = 1, minutes = 30), selection)
+    }
+
+    @Test
+    fun formatsRelativeTimeSelectionForDisplayAndCommand() {
+        val selection = DesktopInputSupport.RelativeTimeSelection(hours = 2, minutes = 15, useTopOfHour = false)
+
+        assertEquals("+2:15", DesktopInputSupport.formatRelativeTimeSelection(selection))
+        assertEquals("+2:15", DesktopInputSupport.formatRelativeTimeCommand(selection))
+    }
+
+    @Test
+    fun formatsRelativeTimeSelectionWithTothDisplayAndWholeHourCommand() {
+        val selection = DesktopInputSupport.RelativeTimeSelection(hours = 4, minutes = 0, useTopOfHour = true)
+
+        assertEquals("+4 TOTH", DesktopInputSupport.formatRelativeTimeSelection(selection))
+        assertEquals("+4", DesktopInputSupport.formatRelativeTimeCommand(selection))
+    }
+
+    @Test
+    fun formatsExactWholeHourSelectionDifferentlyFromToth() {
+        val selection = DesktopInputSupport.RelativeTimeSelection(hours = 6, minutes = 0, useTopOfHour = false)
+
+        assertEquals("+6:0", DesktopInputSupport.formatRelativeTimeSelection(selection))
+        assertEquals("+6:0", DesktopInputSupport.formatRelativeTimeCommand(selection))
+    }
+
+    @Test
+    fun formatsDefaultEventLengthForDisplay() {
+        assertEquals("6h 00m", DesktopInputSupport.formatDefaultEventLength(6 * 60))
+        assertEquals("45m", DesktopInputSupport.formatDefaultEventLength(45))
+    }
+
+    @Test
+    fun calculatesFinishTimeFromStartAndDefaultEventLength() {
+        assertEquals(
+            "260410220000",
+            DesktopInputSupport.finishTimeCompactFromStart(
+                startTimeCompact = "260410160000",
+                defaultEventLengthMinutes = 6 * 60,
+            ),
+        )
+    }
+
+    @Test
+    fun derivesRelativeSelectionForDefaultEventLength() {
+        assertEquals(
+            DesktopInputSupport.RelativeTimeSelection(hours = 6, minutes = 0, useTopOfHour = false),
+            DesktopInputSupport.relativeTimeSelectionForDuration(6 * 60),
+        )
+        assertEquals(
+            DesktopInputSupport.RelativeTimeSelection(hours = 1, minutes = 30, useTopOfHour = false),
+            DesktopInputSupport.relativeTimeSelectionForDuration(90),
+        )
+    }
+
+    @Test
+    fun rejectsDefaultEventLengthOutsideSupportedRange() {
+        assertFailsWith<IllegalArgumentException> {
+            DesktopInputSupport.validateDefaultEventLengthMinutes(5)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DesktopInputSupport.validateDefaultEventLengthMinutes((24 * 60) + 5)
+        }
+    }
+
+    @Test
     fun roundsSubsecondTimesWithoutFallingBackOneSecond() {
         val compact = DesktopInputSupport.formatRoundedCompactTimestamp(
             LocalDateTime.of(2026, 4, 11, 12, 0, 5, 750_000_000),

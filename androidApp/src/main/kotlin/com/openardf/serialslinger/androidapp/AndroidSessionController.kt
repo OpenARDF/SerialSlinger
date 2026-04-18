@@ -19,6 +19,7 @@ import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
+import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
@@ -57,6 +58,7 @@ data class AndroidUiState(
     val latestSubmitSummary: String,
     val timeWorkflowNotice: String?,
     val scheduleDerivedDataPending: Boolean,
+    val canClone: Boolean,
 )
 
 private data class ScheduleImpactSummary(
@@ -98,9 +100,20 @@ private data class TimeSyncOperationResult(
 
 private data class RelativeScheduleSubmitResult(
     val state: DeviceSessionState,
-    val commandSent: String,
+    val commandsSent: List<String>,
     val responseLines: List<String>,
     val reloadResult: DeviceLoadResult,
+    val traceEntries: List<SerialTraceEntry>,
+)
+
+data class CloneSubmitResult(
+    val state: DeviceSessionState,
+    val writeCommandCount: Int,
+    val writeResponseLineCount: Int,
+    val refreshCommandCount: Int,
+    val refreshResponseLineCount: Int,
+    val syncAttemptCount: Int,
+    val syncSucceeded: Boolean,
     val traceEntries: List<SerialTraceEntry>,
 )
 
@@ -141,6 +154,7 @@ object AndroidSessionController {
     private var scheduleDerivedDataPending: Boolean = false
     private var probeInFlight: Boolean = false
     private var deviceTimeOffset: Duration? = null
+    private var cloneTemplateSettings: DeviceSettings? = null
 
     fun initialize(context: Context) {
         synchronized(this) {
@@ -187,6 +201,7 @@ object AndroidSessionController {
                 latestSubmitSummary = latestSubmitSummary,
                 timeWorkflowNotice = timeWorkflowNotice,
                 scheduleDerivedDataPending = scheduleDerivedDataPending,
+                canClone = canCloneLocked(),
             )
         }
     }
@@ -252,6 +267,152 @@ object AndroidSessionController {
         notifyListeners()
     }
 
+    fun runCloneTimedEventSettings(
+        context: Context,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<CloneSubmitResult>) -> Unit)? = null,
+    ) {
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+        val templateSettings = synchronized(this) { cloneTemplateSettings }
+        if (sessionState == null || sessionState.snapshot == null || templateSettings == null) {
+            val error = IllegalStateException("Load a SignalSlinger snapshot before using Clone.")
+            synchronized(this) {
+                latestSubmitSummary = "Clone failed.\n${error.message}"
+                statusText = "Clone failed."
+                statusIsError = true
+            }
+            emitCommandLog("clone", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        synchronized(this) {
+            latestSubmitSummary = "Submitting Clone..."
+            statusText = "Submitting Clone..."
+            statusIsError = false
+            markScheduleDerivedDataPendingLocked()
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-clone-submit") {
+            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
+            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
+            val result =
+                if (usbDevice == null) {
+                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
+                } else {
+                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
+                    try {
+                        transport.connect()
+                        val targetRefresh = DeviceSessionController.refreshFromDevice(sessionState, transport, startEditing = true)
+                        val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
+                        val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
+                        val validated = editable.toValidatedDeviceSettings()
+                        val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
+                        val submitResult = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
+                        val verificationFailures = submitResult.verifications.filter { !it.verified }
+                        val refreshed = DeviceSessionController.refreshFromDevice(submitResult.state, transport, startEditing = true)
+                        var finalState = refreshed.state
+                        var syncOperation: TimeSyncOperationResult? = null
+                        if (verificationFailures.isEmpty() && refreshed.state.snapshot?.capabilities?.supportsScheduling == true) {
+                            syncOperation =
+                                performAlignedTimeSync(
+                                    transport = transport,
+                                    state = refreshed.state,
+                                    snapshot = requireNotNull(refreshed.state.snapshot),
+                                )
+                            finalState = syncOperation.finalAttempt.state
+                        }
+                        Result.success(
+                            CloneSubmitResult(
+                                state = finalState,
+                                writeCommandCount = writePlan.changes.size,
+                                writeResponseLineCount = submitResult.linesReceived.size,
+                                refreshCommandCount = refreshed.commandsSent.size,
+                                refreshResponseLineCount = refreshed.linesReceived.size,
+                                syncAttemptCount = syncOperation?.attempts?.size ?: 0,
+                                syncSucceeded = syncOperation?.succeeded ?: true,
+                                traceEntries =
+                                    buildList {
+                                        addAll(targetRefresh.traceEntries)
+                                        addAll(submitResult.submitTraceEntries)
+                                        addAll(submitResult.readbackTraceEntries)
+                                        addAll(refreshed.traceEntries)
+                                        syncOperation?.let { addAll(buildSyncTraceEntries(it)) }
+                                    },
+                            ),
+                        )
+                    } catch (error: Throwable) {
+                        Result.failure(error)
+                    } finally {
+                        transport.disconnect()
+                    }
+                }
+
+            synchronized(this) {
+                if (result.isSuccess) {
+                    val cloneResult = result.getOrThrow()
+                    latestSessionViewState = AndroidSessionViewState(
+                        state = cloneResult.state,
+                        traceEntries = cloneResult.traceEntries,
+                    )
+                    latestLoadedDeviceName = usbDevice?.deviceName
+                    cloneResult.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+                    applySnapshotDrafts(cloneResult.state.snapshot, refreshClockDisplayAnchor = cloneResult.syncAttemptCount == 0)
+                    timeWorkflowNotice = null
+                    clearScheduleDerivedDataPendingLocked()
+                    latestSubmitSummary = renderCloneSubmitSummary(cloneResult)
+                    latestProbeSummary = "Latest load remains available above. Clone completed."
+                    statusText =
+                        if (cloneResult.syncSucceeded) {
+                            "Clone succeeded."
+                        } else {
+                            "Clone completed, but time sync needs attention."
+                        }
+                    statusIsError = !cloneResult.syncSucceeded
+                } else {
+                    latestSubmitSummary = buildString {
+                        appendLine("Clone failed.")
+                        append(result.exceptionOrNull()?.message ?: "Unknown error")
+                    }.trim()
+                    statusText = "Clone failed."
+                    statusIsError = true
+                    clearScheduleDerivedDataPendingLocked()
+                }
+            }
+
+            emitCommandLog("clone", source, success = result.isSuccess, summary = synchronized(this) { latestSubmitSummary })
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(result) } }
+        }
+    }
+
+    fun reloadCloneTemplateFromAttachedDevice(
+        context: Context,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
+    ) {
+        runProbe(
+            context = context,
+            requestedDeviceName = requestedDeviceName,
+            source = source,
+        ) { result ->
+            synchronized(this) {
+                result.getOrNull()?.state?.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+                if (result.isSuccess) {
+                    latestSubmitSummary = "Clone template reloaded from attached device."
+                    statusText = "Clone template reloaded from attached device."
+                    statusIsError = false
+                }
+            }
+            notifyListeners()
+            onComplete?.invoke(result)
+        }
+    }
+
     private fun displayedDeviceTimeCompactLocked(systemNow: LocalDateTime): String? {
         return when {
             deviceTimeOffset != null -> JvmTimeSupport.formatTruncatedCompactTimestamp(systemNow.plus(requireNotNull(deviceTimeOffset)))
@@ -265,6 +426,44 @@ object AndroidSessionController {
 
     private fun clearScheduleDerivedDataPendingLocked() {
         scheduleDerivedDataPending = false
+    }
+
+    private fun canCloneLocked(): Boolean {
+        if (probeInFlight || scheduleDerivedDataPending) {
+            return false
+        }
+        val snapshot = latestSessionViewState?.state?.snapshot ?: return false
+        val template = cloneTemplateSettings ?: return false
+        if (!snapshot.capabilities.supportsScheduling) {
+            return false
+        }
+        return hasRequiredCloneEventData(template) && hasRequiredCloneEventData(snapshot.settings)
+    }
+
+    private fun hasRequiredCloneEventData(settings: DeviceSettings): Boolean {
+        if (settings.eventType == EventType.NONE) {
+            return false
+        }
+        if (settings.stationId.isBlank()) {
+            return false
+        }
+        if (settings.startTimeCompact == null || settings.finishTimeCompact == null) {
+            return false
+        }
+        val frequencyVisibility = EventProfileSupport.timedEventFrequencyVisibility(settings.eventType)
+        if (frequencyVisibility.showFrequency1 && settings.lowFrequencyHz == null) {
+            return false
+        }
+        if (frequencyVisibility.showFrequency2 && settings.mediumFrequencyHz == null) {
+            return false
+        }
+        if (frequencyVisibility.showFrequency3 && settings.highFrequencyHz == null) {
+            return false
+        }
+        if (frequencyVisibility.showFrequencyB && settings.beaconFrequencyHz == null) {
+            return false
+        }
+        return true
     }
 
     fun clearLoadedSessionIfMatches(
@@ -343,6 +542,9 @@ object AndroidSessionController {
                         traceEntries = loadResult.traceEntries,
                     )
                     latestLoadedDeviceName = usbDevice?.deviceName
+                    if (cloneTemplateSettings == null) {
+                        loadResult.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+                    }
                     applySnapshotDrafts(loadResult.state.snapshot)
                     clockAnchor?.let { anchor ->
                         applyClockDisplayAnchor(
@@ -1973,6 +2175,7 @@ object AndroidSessionController {
             runStartTimeSubmit(
                 context = context,
                 startTimeInput = startTimeInput,
+                defaultEventLengthMinutes = 6 * 60,
                 requestedDeviceName = requestedDeviceName,
                 source = source,
             ) { startResult ->
@@ -2307,13 +2510,14 @@ object AndroidSessionController {
     fun runRelativeStartTimeSubmit(
         context: Context,
         offsetCommand: String,
+        finishOffsetCommand: String,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
     ) {
         runRelativeScheduleSubmit(
             context = context,
-            command = "CLK S $offsetCommand",
+            commands = listOf("CLK S $offsetCommand", "CLK F $finishOffsetCommand"),
             primaryField = SettingKey.START_TIME,
             statusPrefix = "Relative Start Time",
             requestedDeviceName = requestedDeviceName,
@@ -2331,7 +2535,7 @@ object AndroidSessionController {
     ) {
         runRelativeScheduleSubmit(
             context = context,
-            command = "CLK F $offsetCommand",
+            commands = listOf("CLK F $offsetCommand"),
             primaryField = SettingKey.FINISH_TIME,
             statusPrefix = "Relative Finish Time",
             requestedDeviceName = requestedDeviceName,
@@ -2343,6 +2547,7 @@ object AndroidSessionController {
     fun runStartTimeSubmit(
         context: Context,
         startTimeInput: String,
+        defaultEventLengthMinutes: Int,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -2424,8 +2629,15 @@ object AndroidSessionController {
                                 startTimeCompact = normalizedStartTime,
                                 currentTimeCompact = snapshot.settings.currentTimeCompact,
                             )
+                            val derivedFinishTime = resolvedStartTime?.let {
+                                JvmTimeSupport.formatCompactTimestamp(
+                                    JvmTimeSupport.parseCompactTimestamp(it)
+                                        .plusMinutes(validateDefaultEventLengthMinutes(defaultEventLengthMinutes).toLong()),
+                                )
+                            }
                             val editedSettings = editableSettings.copy(
                                 startTimeCompact = editableSettings.startTimeCompact.copy(editedValue = resolvedStartTime),
+                                finishTimeCompact = editableSettings.finishTimeCompact.copy(editedValue = derivedFinishTime),
                             )
                             Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
                         } catch (error: Throwable) {
@@ -3061,7 +3273,10 @@ object AndroidSessionController {
     ): String {
         return buildString {
             appendLine("$statusPrefix submitted.")
-            appendLine("Command sent: ${result.commandSent}")
+            appendLine("Commands sent: ${result.commandsSent.size}")
+            result.commandsSent.forEach { command ->
+                appendLine("TX $command")
+            }
             appendLine("Immediate response lines: ${result.responseLines.size}")
             appendLine("Reload commands sent: ${result.reloadResult.commandsSent.size}")
             appendLine("Reload response lines: ${result.reloadResult.linesReceived.size}")
@@ -3072,6 +3287,18 @@ object AndroidSessionController {
                     appendLine(line)
                 }
             }
+        }.trim()
+    }
+
+    private fun renderCloneSubmitSummary(result: CloneSubmitResult): String {
+        return buildString {
+            appendLine("Clone submitted.")
+            appendLine("Write commands sent: ${result.writeCommandCount}")
+            appendLine("Write response lines: ${result.writeResponseLineCount}")
+            appendLine("Reload commands sent: ${result.refreshCommandCount}")
+            appendLine("Reload response lines: ${result.refreshResponseLineCount}")
+            appendLine("Sync attempts: ${result.syncAttemptCount}")
+            append("Time sync status: ${if (result.syncSucceeded) "ok" else "attention needed"}")
         }.trim()
     }
 
@@ -3160,6 +3387,13 @@ object AndroidSessionController {
         return JvmTimeSupport.formatCompactTimestamp(compactTimestamp)
     }
 
+    private fun validateDefaultEventLengthMinutes(minutes: Int): Int {
+        require(minutes in 10..(24 * 60)) {
+            "Default Event Length must be between 10 minutes and 24 hours."
+        }
+        return minutes
+    }
+
     private fun updateDeviceTimeOffset(
         currentTimeCompact: String?,
         referenceTime: LocalDateTime = LocalDateTime.now(),
@@ -3199,6 +3433,52 @@ object AndroidSessionController {
         }
     }
 
+    private fun rememberCloneTemplateFrom(sourceSettings: DeviceSettings) {
+        val existingTemplate = cloneTemplateSettings
+        cloneTemplateSettings =
+            if (existingTemplate == null) {
+                sourceSettings
+            } else {
+                existingTemplate.copy(
+                    stationId = sourceSettings.stationId,
+                    eventType = sourceSettings.eventType,
+                    idCodeSpeedWpm = sourceSettings.idCodeSpeedWpm,
+                    patternCodeSpeedWpm = sourceSettings.patternCodeSpeedWpm,
+                    startTimeCompact = sourceSettings.startTimeCompact,
+                    finishTimeCompact = sourceSettings.finishTimeCompact,
+                    daysToRun = sourceSettings.daysToRun,
+                    lowFrequencyHz = sourceSettings.lowFrequencyHz,
+                    mediumFrequencyHz = sourceSettings.mediumFrequencyHz,
+                    highFrequencyHz = sourceSettings.highFrequencyHz,
+                    beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
+                )
+            }
+    }
+
+    private fun buildCloneEditableSettings(
+        targetBaseSettings: DeviceSettings,
+        templateSettings: DeviceSettings,
+    ): EditableDeviceSettings {
+        return EditableDeviceSettings.fromDeviceSettings(targetBaseSettings).copy(
+            stationId = SettingsField("stationId", "Station ID", targetBaseSettings.stationId, templateSettings.stationId),
+            eventType = SettingsField("eventType", "Event Type", targetBaseSettings.eventType, templateSettings.eventType),
+            idCodeSpeedWpm = SettingsField("idCodeSpeedWpm", "ID Speed", targetBaseSettings.idCodeSpeedWpm, templateSettings.idCodeSpeedWpm),
+            startTimeCompact = SettingsField("startTimeCompact", "Start Time", targetBaseSettings.startTimeCompact, templateSettings.startTimeCompact),
+            finishTimeCompact = SettingsField("finishTimeCompact", "Finish Time", targetBaseSettings.finishTimeCompact, templateSettings.finishTimeCompact),
+            daysToRun = SettingsField("daysToRun", "Days To Run", targetBaseSettings.daysToRun, templateSettings.daysToRun),
+            patternCodeSpeedWpm = SettingsField(
+                "patternCodeSpeedWpm",
+                "Pattern Speed",
+                targetBaseSettings.patternCodeSpeedWpm,
+                templateSettings.patternCodeSpeedWpm,
+            ),
+            lowFrequencyHz = SettingsField("lowFrequencyHz", "Frequency 1 (FRE 1)", targetBaseSettings.lowFrequencyHz, templateSettings.lowFrequencyHz),
+            mediumFrequencyHz = SettingsField("mediumFrequencyHz", "Frequency 2 (FRE 2)", targetBaseSettings.mediumFrequencyHz, templateSettings.mediumFrequencyHz),
+            highFrequencyHz = SettingsField("highFrequencyHz", "Frequency 3 (FRE 3)", targetBaseSettings.highFrequencyHz, templateSettings.highFrequencyHz),
+            beaconFrequencyHz = SettingsField("beaconFrequencyHz", "Frequency B (FRE B)", targetBaseSettings.beaconFrequencyHz, templateSettings.beaconFrequencyHz),
+        )
+    }
+
     private fun noOpSubmitResult(state: DeviceSessionState): DeviceSubmitResult {
         val snapshot = requireNotNull(state.snapshot) {
             "A loaded SignalSlinger snapshot is required for a no-op submit."
@@ -3220,7 +3500,7 @@ object AndroidSessionController {
 
     private fun runRelativeScheduleSubmit(
         context: Context,
-        command: String,
+        commands: List<String>,
         primaryField: SettingKey,
         statusPrefix: String,
         requestedDeviceName: String? = null,
@@ -3229,6 +3509,10 @@ object AndroidSessionController {
     ) {
         val sessionState = synchronized(this) { latestSessionViewState?.state }
         val snapshot = sessionState?.snapshot
+        val commandLogLabel =
+            commands.joinToString(separator = "_") { command ->
+                command.lowercase().replace(' ', '-')
+            }
         if (sessionState == null || snapshot == null) {
             val error = IllegalStateException("Load a SignalSlinger snapshot before submitting changes.")
             synchronized(this) {
@@ -3236,7 +3520,7 @@ object AndroidSessionController {
                 statusText = "$statusPrefix failed."
                 statusIsError = true
             }
-            emitCommandLog(command.lowercase().replace(' ', '-'), source, success = false, summary = error.message.orEmpty())
+            emitCommandLog(commandLogLabel, source, success = false, summary = error.message.orEmpty())
             notifyListeners()
             onComplete?.let { callback ->
                 mainHandler.post { callback(Result.failure(error)) }
@@ -3251,7 +3535,7 @@ object AndroidSessionController {
                 statusText = "$statusPrefix failed."
                 statusIsError = true
             }
-            emitCommandLog(command.lowercase().replace(' ', '-'), source, success = false, summary = error.message.orEmpty())
+            emitCommandLog(commandLogLabel, source, success = false, summary = error.message.orEmpty())
             notifyListeners()
             onComplete?.let { callback ->
                 mainHandler.post { callback(Result.failure(error)) }
@@ -3278,7 +3562,7 @@ object AndroidSessionController {
                     try {
                         transport.connect()
                         val sentAtMs = System.currentTimeMillis()
-                        transport.sendCommands(listOf(command))
+                        transport.sendCommands(commands)
                         val responseLines = transport.readAvailableLines()
                         val receivedAtMs = System.currentTimeMillis()
                         val deviceError = responseLines.firstOrNull { it.contains("* Err:") }
@@ -3299,12 +3583,12 @@ object AndroidSessionController {
                             Result.success(
                                 RelativeScheduleSubmitResult(
                                     state = refreshedState,
-                                    commandSent = command,
+                                    commandsSent = commands,
                                     responseLines = responseLines,
                                     reloadResult = reloadResult,
                                     traceEntries =
                                         buildList {
-                                            add(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command))
+                                            addAll(commands.map { command -> SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command) })
                                             addAll(responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) })
                                             addAll(reloadResult.traceEntries)
                                         },
@@ -3346,7 +3630,7 @@ object AndroidSessionController {
             }
 
             emitCommandLog(
-                command = command.lowercase().replace(' ', '-'),
+                command = commandLogLabel,
                 source = source,
                 success = result.isSuccess,
                 summary = synchronized(this) { latestSubmitSummary },

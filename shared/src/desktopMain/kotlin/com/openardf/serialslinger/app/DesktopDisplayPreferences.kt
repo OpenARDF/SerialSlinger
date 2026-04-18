@@ -17,12 +17,19 @@ enum class TimeSetMode {
     SYSTEM_CLOCK,
 }
 
+enum class ScheduleTimeInputMode {
+    ABSOLUTE,
+    RELATIVE,
+}
+
 data class DesktopDisplayPreferences(
     val frequencyDisplayUnit: FrequencyDisplayUnit = FrequencyDisplayUnit.MHZ,
     val temperatureDisplayUnit: TemperatureDisplayUnit = TemperatureDisplayUnit.CELSIUS,
     val logVisible: Boolean = false,
     val rawSerialVisible: Boolean = true,
     val timeSetMode: TimeSetMode = TimeSetMode.SYSTEM_CLOCK,
+    val scheduleTimeInputMode: ScheduleTimeInputMode = ScheduleTimeInputMode.ABSOLUTE,
+    val defaultEventLengthMinutes: Int = 6 * 60,
 )
 
 interface DesktopDisplayPreferencesStore {
@@ -38,6 +45,8 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
     private const val keyLogVisible = "logVisible"
     private const val keyRawSerialVisible = "rawSerialVisible"
     private const val keyTimeSetMode = "timeSetMode"
+    private const val keyScheduleTimeInputMode = "scheduleTimeInputMode"
+    private const val keyDefaultEventLengthMinutes = "defaultEventLengthMinutes"
     private val preferences: Preferences = Preferences.userRoot().node(nodePath)
 
     override fun load(): DesktopDisplayPreferences {
@@ -56,6 +65,11 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
                 key = keyTimeSetMode,
                 defaultValue = TimeSetMode.SYSTEM_CLOCK,
             ),
+            scheduleTimeInputMode = loadEnum(
+                key = keyScheduleTimeInputMode,
+                defaultValue = ScheduleTimeInputMode.ABSOLUTE,
+            ),
+            defaultEventLengthMinutes = preferences.getInt(keyDefaultEventLengthMinutes, 6 * 60).coerceIn(10, 24 * 60),
         )
     }
 
@@ -65,6 +79,8 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
         this.preferences.putBoolean(keyLogVisible, preferences.logVisible)
         this.preferences.putBoolean(keyRawSerialVisible, preferences.rawSerialVisible)
         this.preferences.put(keyTimeSetMode, preferences.timeSetMode.name)
+        this.preferences.put(keyScheduleTimeInputMode, preferences.scheduleTimeInputMode.name)
+        this.preferences.putInt(keyDefaultEventLengthMinutes, preferences.defaultEventLengthMinutes.coerceIn(10, 24 * 60))
         this.preferences.flush()
     }
 

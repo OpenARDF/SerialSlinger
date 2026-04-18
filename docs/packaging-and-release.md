@@ -50,10 +50,10 @@ The intended release flow is:
 
 1. run `npm run jdeploy:release-preflight`
 2. merge the desired release state to `main`
-3. create and push a tag like `v1.0.91`
+3. create and push a tag like `v1.0.92`
 4. let the GitHub Actions workflow publish the release artifacts
 
-The chosen public package identity is `serialslinger`, and the shared public and app version line is `1.0.91`.
+The chosen public package identity is `serialslinger`, and the shared public and app version line is `1.0.92`.
 
 The publish guard is still enforced by [scripts/check-jdeploy-publish.mjs](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/scripts/check-jdeploy-publish.mjs) through `package.json`'s `prepublishOnly` hook. A real publish will stop until `SERIALSLINGER_ALLOW_JDEPLOY_PUBLISH=1` is intentionally set.
 

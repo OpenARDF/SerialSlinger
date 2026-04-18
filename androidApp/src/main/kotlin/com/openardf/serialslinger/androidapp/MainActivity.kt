@@ -78,7 +78,8 @@ class MainActivity : Activity() {
 
     private data class RelativeTimeSelection(
         val hours: Int,
-        val minutes: Int?,
+        val minutes: Int,
+        val useTopOfHour: Boolean = false,
     )
 
     private lateinit var usbManager: UsbManager
@@ -89,9 +90,11 @@ class MainActivity : Activity() {
     private var temperatureDisplayUnit: AndroidTemperatureDisplayUnit = AndroidTemperatureDisplayUnit.CELSIUS
     private var deviceTimeSetMode: AndroidDeviceTimeSetMode = AndroidDeviceTimeSetMode.AUTOMATIC
     private var scheduleTimeInputMode: AndroidScheduleTimeInputMode = AndroidScheduleTimeInputMode.ABSOLUTE
+    private var defaultEventLengthMinutes: Int = 6 * 60
     private var rawSerialVisible: Boolean = true
     private var systemTimeVisible: Boolean = false
     private var deviceDataVisible: Boolean = true
+    private var loggingToolsVisible: Boolean = true
     private val autoDetectHandler = Handler(Looper.getMainLooper())
     private val clockDisplayHandler = Handler(Looper.getMainLooper())
     private var autoDetectGeneration: Int = 0
@@ -107,6 +110,8 @@ class MainActivity : Activity() {
     private var scheduleDerivedDataPending: Boolean = false
     private var scheduleTimeToggleTargets: List<Pair<View, TextView?>> = emptyList()
     private var headerStatusMessageView: TextView? = null
+    private var relativeStartDisplaySelectionOverride: RelativeTimeSelection? = null
+    private var relativeFinishDisplaySelectionOverride: RelativeTimeSelection? = null
 
     private val refreshListener: () -> Unit = { runOnUiThread { renderContent() } }
     private val clockTickRunnable =
@@ -204,6 +209,7 @@ class MainActivity : Activity() {
         rawSerialVisible = uiPreferences.getBoolean(PREF_RAW_SERIAL_VISIBLE, true)
         systemTimeVisible = uiPreferences.getBoolean(PREF_SYSTEM_TIME_VISIBLE, false)
         deviceDataVisible = uiPreferences.getBoolean(PREF_DEVICE_DATA_VISIBLE, true)
+        loggingToolsVisible = uiPreferences.getBoolean(PREF_LOGGING_TOOLS_VISIBLE, true)
         frequencyDisplayUnit =
             AndroidFrequencyDisplayUnit.valueOf(
                 uiPreferences.getString(PREF_FREQUENCY_DISPLAY_UNIT, AndroidFrequencyDisplayUnit.MHZ.name)
@@ -224,6 +230,8 @@ class MainActivity : Activity() {
                 uiPreferences.getString(PREF_SCHEDULE_TIME_INPUT_MODE, AndroidScheduleTimeInputMode.ABSOLUTE.name)
                     ?: AndroidScheduleTimeInputMode.ABSOLUTE.name,
             )
+        defaultEventLengthMinutes =
+            uiPreferences.getInt(PREF_DEFAULT_EVENT_LENGTH_MINUTES, 6 * 60).coerceIn(10, 24 * 60)
         usbManager = getSystemService(UsbManager::class.java)
         val spacingPx = (16 * resources.displayMetrics.density).toInt()
 
@@ -788,7 +796,7 @@ class MainActivity : Activity() {
         startTimeField =
             if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
                 val initialSelection =
-                    deriveRelativeTimeSelection(
+                    relativeEditorSelectionForStart(
                         baseCompact = AndroidSessionController.displayedDeviceTimeCompact(),
                         targetCompact = loadedSettings.startTimeCompact,
                     )
@@ -801,11 +809,14 @@ class MainActivity : Activity() {
                         title = "Relative Start Time",
                         initialSelection = initialSelection,
                     ) { selection ->
+                        relativeStartDisplaySelectionOverride = selection
+                        relativeFinishDisplaySelectionOverride = defaultEventLengthRelativeSelection()
                         val formattedSelection = formatRelativeTimeSelection(selection)
                         startTimeField.setText(formattedSelection)
                         AndroidSessionController.runRelativeStartTimeSubmit(
                             context = applicationContext,
                             offsetCommand = formatRelativeTimeCommand(selection),
+                            finishOffsetCommand = formatRelativeTimeCommand(defaultEventLengthRelativeSelection()),
                         )
                     }
                 }
@@ -816,11 +827,13 @@ class MainActivity : Activity() {
                     textSizeSp = 14f,
                 ) {
                     pickDateTime(initialValue = startTimeField.text.toString()) { selected ->
+                        clearRelativeScheduleDisplayOverrides()
                         val formattedTimestamp = formatDisplayTimestamp(selected)
                         startTimeField.setText(formattedTimestamp)
                         AndroidSessionController.runStartTimeSubmit(
                             context = applicationContext,
                             startTimeInput = formattedTimestamp,
+                            defaultEventLengthMinutes = defaultEventLengthMinutes,
                         )
                     }
                 }
@@ -846,21 +859,18 @@ class MainActivity : Activity() {
             val absoluteStartRow =
                 compactLabeledRow(
                     "Start",
-                    absoluteStartField!!,
+                    absoluteStartField,
                     captureLabelView = { absoluteStartLabelView = it },
                 )
             timedEventCard.addView(absoluteStartRow)
-            installScheduleTimeModeToggle(absoluteStartField!!, absoluteStartLabelView, "Start Time", absoluteStartRow)
+            installScheduleTimeModeToggle(absoluteStartField, absoluteStartLabelView, "Start Time", absoluteStartRow)
         }
 
         lateinit var finishTimeField: EditText
         finishTimeField =
             if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
                 val initialSelection =
-                    deriveRelativeTimeSelection(
-                        baseCompact = loadedSettings.startTimeCompact,
-                        targetCompact = loadedSettings.finishTimeCompact,
-                    )
+                    relativeEditorSelectionForFinish()
                 pickerField(
                     text = formatRelativeTimeSelection(initialSelection),
                     hint = "Finish Time",
@@ -870,6 +880,7 @@ class MainActivity : Activity() {
                         title = "Relative Finish Time",
                         initialSelection = initialSelection,
                     ) { selection ->
+                        relativeFinishDisplaySelectionOverride = selection
                         val formattedSelection = formatRelativeTimeSelection(selection)
                         finishTimeField.setText(formattedSelection)
                         AndroidSessionController.runRelativeFinishTimeSubmit(
@@ -885,6 +896,7 @@ class MainActivity : Activity() {
                     textSizeSp = 14f,
                 ) {
                     pickDateTime(initialValue = finishTimeField.text.toString()) { selected ->
+                        clearRelativeScheduleDisplayOverrides()
                         val formattedTimestamp = formatDisplayTimestamp(selected)
                         finishTimeField.setText(formattedTimestamp)
                         AndroidSessionController.runFinishTimeSubmit(
@@ -915,11 +927,11 @@ class MainActivity : Activity() {
             val absoluteFinishRow =
                 compactLabeledRow(
                     "Finish",
-                    absoluteFinishField!!,
+                    absoluteFinishField,
                     captureLabelView = { absoluteFinishLabelView = it },
                 )
             timedEventCard.addView(absoluteFinishRow)
-            installScheduleTimeModeToggle(absoluteFinishField!!, absoluteFinishLabelView, "Finish Time", absoluteFinishRow)
+            installScheduleTimeModeToggle(absoluteFinishField, absoluteFinishLabelView, "Finish Time", absoluteFinishRow)
         }
         scheduleTimeToggleTargets =
             buildList {
@@ -1438,64 +1450,75 @@ class MainActivity : Activity() {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     addView(
-                        TextView(this@MainActivity).apply {
-                            text = "SerialSlinger:"
-                            setTypeface(Typeface.DEFAULT_BOLD)
-                            textSize = 18f
-                            layoutParams =
-                                LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
-                                    val endMargin = (10 * resources.displayMetrics.density).toInt()
-                                    marginEnd = endMargin
-                                }
-                        },
-                    )
-                    addView(
-                        statusView(
-                            text = connectionText,
-                            isError = uiState.statusIsError,
-                            onClick =
-                                uiState.latestLoadedDeviceName?.let { deviceName ->
-                                    {
-                                        AndroidSessionController.runProbe(
-                                            context = applicationContext,
-                                            requestedDeviceName = deviceName,
-                                        )
-                                    }
+                        LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                            layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
+                            addView(
+                                TextView(this@MainActivity).apply {
+                                    text = "SerialSlinger:"
+                                    setTypeface(Typeface.DEFAULT_BOLD)
+                                    textSize = 18f
+                                    layoutParams =
+                                        LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                                            val endMargin = (10 * resources.displayMetrics.density).toInt()
+                                            marginEnd = endMargin
+                                        }
                                 },
-                        ).apply {
-                            layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
-                            setPadding(0, 0, 0, (6 * resources.displayMetrics.density).toInt())
+                            )
+                            addView(
+                                statusView(
+                                    text = connectionText,
+                                    isError = uiState.statusIsError,
+                                    onClick =
+                                        uiState.latestLoadedDeviceName?.let { deviceName ->
+                                            {
+                                                AndroidSessionController.runProbe(
+                                                    context = applicationContext,
+                                                    requestedDeviceName = deviceName,
+                                                )
+                                            }
+                                        },
+                                ).apply {
+                                    layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
+                                    setPadding(0, 0, 0, (6 * resources.displayMetrics.density).toInt())
+                                },
+                            )
                         },
                     )
+                    addView(headerCloneButton(uiState))
                     addView(
-                        View(this@MainActivity).apply {
-                            layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
+                        LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL or Gravity.END
+                            layoutParams = LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
+                            headerMessage?.let { message ->
+                                addView(
+                                    TextView(this@MainActivity).apply {
+                                        text = message
+                                        textSize = 13f
+                                        gravity = Gravity.END
+                                        textAlignment = View.TEXT_ALIGNMENT_VIEW_END
+                                        setTextColor(if (uiState.statusIsError) Color.parseColor("#9E1C1C") else Color.parseColor("#475569"))
+                                        layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
+                                        val startPadding = (12 * resources.displayMetrics.density).toInt()
+                                        val bottomPadding = (6 * resources.displayMetrics.density).toInt()
+                                        setPadding(startPadding, 0, 0, bottomPadding)
+                                        headerStatusMessageView = this
+                                    },
+                                )
+                            }
                         },
                     )
-                    headerMessage?.let { message ->
-                        addView(
-                            TextView(this@MainActivity).apply {
-                                text = message
-                                textSize = 13f
-                                gravity = Gravity.END
-                                textAlignment = View.TEXT_ALIGNMENT_VIEW_END
-                                setTextColor(if (uiState.statusIsError) Color.parseColor("#9E1C1C") else Color.parseColor("#475569"))
-                                layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
-                                val startPadding = (12 * resources.displayMetrics.density).toInt()
-                                val bottomPadding = (6 * resources.displayMetrics.density).toInt()
-                                setPadding(startPadding, 0, 0, bottomPadding)
-                                headerStatusMessageView = this
-                            },
-                        )
-                    }
                 },
             )
             addView(
                 LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
-                    addView(weightedButton("View") { showViewDialog(uiState) })
                     addView(weightedButton("Settings") { showSettingsDialog() })
-                    addView(weightedButton("Tools") { showToolsDialog(uiState) })
+                    if (loggingToolsVisible) {
+                        addView(weightedButton("Tools") { showToolsDialog(uiState) })
+                    }
                 },
             )
         }
@@ -1640,9 +1663,10 @@ class MainActivity : Activity() {
             addView(
                 LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
-                    addView(weightedButton("View") { showViewDialog(uiState) })
                     addView(weightedButton("Settings") { showSettingsDialog() })
-                    addView(weightedButton("Tools") { showToolsDialog(uiState) })
+                    if (loggingToolsVisible) {
+                        addView(weightedButton("Tools") { showToolsDialog(uiState) })
+                    }
                 },
             )
         }
@@ -1727,6 +1751,10 @@ class MainActivity : Activity() {
                 "Temperature Units (${if (temperatureDisplayUnit == AndroidTemperatureDisplayUnit.CELSIUS) "Celsius" else "Fahrenheit"})",
                 "Device Time Setting (${if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) "Manual" else "Automatic"})",
                 "Schedule Time Setting (${if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"})",
+                "Default Event Length (${formatDefaultEventLength(defaultEventLengthMinutes)})",
+                "${if (systemTimeVisible) "Hide" else "Show"} System Time",
+                "${if (deviceDataVisible) "Hide" else "Show"} Device Data",
+                "${if (loggingToolsVisible) "Hide" else "Show"} Logging Tools",
                 "About (Ver $appVersionLabel)",
             )
         AlertDialog.Builder(this)
@@ -1737,7 +1765,11 @@ class MainActivity : Activity() {
                     1 -> showTemperatureSettingsDialog()
                     2 -> showDeviceTimeSettingDialog()
                     3 -> showScheduleTimeInputSettingDialog()
-                    4 -> showAboutDialog()
+                    4 -> showDefaultEventLengthDialog()
+                    5 -> setSystemTimeVisible(!systemTimeVisible)
+                    6 -> setDeviceDataVisible(!deviceDataVisible)
+                    7 -> setLoggingToolsVisible(!loggingToolsVisible)
+                    8 -> showAboutDialog()
                 }
                 dialog.dismiss()
             }
@@ -1804,11 +1836,87 @@ class MainActivity : Activity() {
                     } else {
                         AndroidScheduleTimeInputMode.RELATIVE
                     }
+                if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.ABSOLUTE) {
+                    clearRelativeScheduleDisplayOverrides()
+                }
                 saveScheduleTimeInputModePreference()
                 renderContent()
                 dialog.dismiss()
             }
             .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showDefaultEventLengthDialog() {
+        val dialogHorizontalPadding = (16 * resources.displayMetrics.density).toInt()
+        val previewView =
+            sectionBody("").apply {
+                setTextColor(Color.parseColor("#2F5EA6"))
+                setTypeface(Typeface.DEFAULT_BOLD)
+                setPadding(dialogHorizontalPadding, 0, dialogHorizontalPadding, (12 * resources.displayMetrics.density).toInt())
+            }
+        val pickerLayout =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dialogHorizontalPadding, 0, dialogHorizontalPadding, 0)
+                addView(previewView)
+            }
+
+        val initialHours = (defaultEventLengthMinutes / 60).coerceIn(0, 24)
+        val initialMinutes = (defaultEventLengthMinutes % 60).coerceIn(0, 55)
+        val hourDigits = initialHours.toString().padStart(2, '0')
+        val tensSpinner = digitSpinner((0..2).toList(), hourDigits[0].digitToInt())
+        val onesSpinner = digitSpinner((0..9).toList(), hourDigits[1].digitToInt())
+        val minuteOptions = (0..55 step 5).map { it.toString().padStart(2, '0') }
+        val minuteSpinner = dialogSelectionSpinner(minuteOptions, initialMinutes.toString().padStart(2, '0'), emphasized = true)
+
+        val row =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                addView(tensSpinner)
+                addView(onesSpinner)
+                addView(pickerContextLabel("h", emphasized = true))
+                addView(minuteSpinner)
+                addView(pickerContextLabel("m", emphasized = true))
+            }
+        pickerLayout.addView(row, 0)
+        pickerLayout.addView(
+            sectionBody("Range: 10 minutes to 24 hours."),
+        )
+
+        val currentMinutes: () -> Int = {
+            val rawHours = ((tensSpinner.selectedItem as Int) * 10) + (onesSpinner.selectedItem as Int)
+            val boundedHours = rawHours.coerceIn(0, 24)
+            if (boundedHours != rawHours) {
+                val boundedText = boundedHours.toString().padStart(2, '0')
+                setSpinnerSelectionByValue(tensSpinner, (0..2).toList(), boundedText[0].digitToInt())
+                setSpinnerSelectionByValue(onesSpinner, (0..9).toList(), boundedText[1].digitToInt())
+            }
+            (boundedHours * 60) + (minuteSpinner.selectedItem as String).toInt()
+        }
+
+        val refreshSelection = {
+            val minutes = currentMinutes()
+            previewView.text =
+                if (minutes in 10..(24 * 60)) {
+                    "Default finish offset: ${formatDefaultEventLength(minutes)}"
+                } else {
+                    "Choose between 10 minutes and 24 hours."
+                }
+        }
+        wireDigitSpinner(tensSpinner, refreshSelection)
+        wireDigitSpinner(onesSpinner, refreshSelection)
+        wireImmediateSelectionSpinner(minuteSpinner, initialMinutes.toString().padStart(2, '0')) { _ -> refreshSelection() }
+        refreshSelection.invoke()
+
+        AlertDialog.Builder(this)
+            .setTitle("Default Event Length")
+            .setView(pickerLayout)
+            .setPositiveButton("OK") { _, _ ->
+                setDefaultEventLengthMinutes(currentMinutes())
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
@@ -2068,6 +2176,64 @@ class MainActivity : Activity() {
                 AndroidDeviceTimeSetMode.AUTOMATIC
             },
         )
+    }
+
+    private fun setDefaultEventLengthMinutes(minutes: Int) {
+        val validatedMinutes = validateDefaultEventLengthMinutes(minutes)
+        if (defaultEventLengthMinutes == validatedMinutes) {
+            return
+        }
+        defaultEventLengthMinutes = validatedMinutes
+        relativeFinishDisplaySelectionOverride = defaultEventLengthRelativeSelection()
+        saveDefaultEventLengthPreference()
+        AndroidSessionController.recordStatus(
+            "Default Event Length is now ${formatDefaultEventLength(validatedMinutes)}.",
+            isError = false,
+        )
+        renderContent()
+        clockDisplayHandler.post { animateHeaderStatusFeedback() }
+    }
+
+    private fun setSystemTimeVisible(isVisible: Boolean) {
+        if (systemTimeVisible == isVisible) {
+            return
+        }
+        systemTimeVisible = isVisible
+        saveSystemTimeVisiblePreference()
+        AndroidSessionController.recordStatus(
+            "System Time is now ${if (isVisible) "shown" else "hidden"}.",
+            isError = false,
+        )
+        renderContent()
+        clockDisplayHandler.post { animateHeaderStatusFeedback() }
+    }
+
+    private fun setDeviceDataVisible(isVisible: Boolean) {
+        if (deviceDataVisible == isVisible) {
+            return
+        }
+        deviceDataVisible = isVisible
+        saveDeviceDataVisiblePreference()
+        AndroidSessionController.recordStatus(
+            "Device Data is now ${if (isVisible) "shown" else "hidden"}.",
+            isError = false,
+        )
+        renderContent()
+        clockDisplayHandler.post { animateHeaderStatusFeedback() }
+    }
+
+    private fun setLoggingToolsVisible(isVisible: Boolean) {
+        if (loggingToolsVisible == isVisible) {
+            return
+        }
+        loggingToolsVisible = isVisible
+        saveLoggingToolsVisiblePreference()
+        AndroidSessionController.recordStatus(
+            "Logging Tools are now ${if (isVisible) "shown" else "hidden"}.",
+            isError = false,
+        )
+        renderContent()
+        clockDisplayHandler.post { animateHeaderStatusFeedback() }
     }
 
     private fun animateToggleFeedback(
@@ -2728,7 +2894,7 @@ class MainActivity : Activity() {
         val tensSpinner = digitSpinner((0..9).toList(), hourDigits[1].digitToInt())
         val onesSpinner = digitSpinner((0..9).toList(), hourDigits[2].digitToInt())
         val minuteOptions = listOf("TOTH") + (0..55 step 5).map { it.toString().padStart(2, '0') }
-        val initialMinuteOption = initialSelection.minutes?.toString()?.padStart(2, '0') ?: "TOTH"
+        val initialMinuteOption = if (initialSelection.useTopOfHour) "TOTH" else initialSelection.minutes.toString().padStart(2, '0')
         val minuteSpinner = dialogSelectionSpinner(minuteOptions, initialMinuteOption, emphasized = true)
 
         val row =
@@ -2760,7 +2926,8 @@ class MainActivity : Activity() {
             val minuteChoice = minuteSpinner.selectedItem as String
             RelativeTimeSelection(
                 hours = boundedHours,
-                minutes = if (minuteChoice == "TOTH") null else minuteChoice.toInt(),
+                minutes = if (minuteChoice == "TOTH") 0 else minuteChoice.toInt(),
+                useTopOfHour = minuteChoice == "TOTH",
             )
         }
 
@@ -2772,6 +2939,7 @@ class MainActivity : Activity() {
         wireDigitSpinner(onesSpinner, refreshSelection)
         wireImmediateSelectionSpinner(minuteSpinner, initialMinuteOption) { _ -> refreshSelection() }
         refreshSelection.invoke()
+        pickerLayout.addView(sectionBody("TOTH = Top of the Hour"))
 
         AlertDialog.Builder(this)
             .setTitle(title)
@@ -2808,8 +2976,59 @@ class MainActivity : Activity() {
         uiPreferences.edit().putBoolean(PREF_DEVICE_DATA_VISIBLE, deviceDataVisible).apply()
     }
 
+    private fun saveLoggingToolsVisiblePreference() {
+        uiPreferences.edit().putBoolean(PREF_LOGGING_TOOLS_VISIBLE, loggingToolsVisible).apply()
+    }
+
     private fun saveScheduleTimeInputModePreference() {
         uiPreferences.edit().putString(PREF_SCHEDULE_TIME_INPUT_MODE, scheduleTimeInputMode.name).apply()
+    }
+
+    private fun saveDefaultEventLengthPreference() {
+        uiPreferences.edit().putInt(PREF_DEFAULT_EVENT_LENGTH_MINUTES, defaultEventLengthMinutes.coerceIn(10, 24 * 60)).apply()
+    }
+
+    private fun relativeEditorSelectionForStart(
+        baseCompact: String?,
+        targetCompact: String?,
+    ): RelativeTimeSelection {
+        return relativeStartDisplaySelectionOverride ?: deriveRelativeTimeSelection(baseCompact, targetCompact)
+    }
+
+    private fun relativeEditorSelectionForFinish(): RelativeTimeSelection {
+        return relativeFinishDisplaySelectionOverride ?: defaultEventLengthRelativeSelection()
+    }
+
+    private fun defaultEventLengthRelativeSelection(): RelativeTimeSelection {
+        val validatedMinutes = validateDefaultEventLengthMinutes(defaultEventLengthMinutes)
+        return RelativeTimeSelection(
+            hours = validatedMinutes / 60,
+            minutes = validatedMinutes % 60,
+            useTopOfHour = false,
+        )
+    }
+
+    private fun clearRelativeScheduleDisplayOverrides() {
+        relativeStartDisplaySelectionOverride = null
+        relativeFinishDisplaySelectionOverride = null
+    }
+
+    private fun validateDefaultEventLengthMinutes(minutes: Int): Int {
+        require(minutes in 10..(24 * 60)) {
+            "Default Event Length must be between 10 minutes and 24 hours."
+        }
+        return minutes
+    }
+
+    private fun formatDefaultEventLength(minutes: Int): String {
+        val validatedMinutes = validateDefaultEventLengthMinutes(minutes)
+        val hours = validatedMinutes / 60
+        val remainderMinutes = validatedMinutes % 60
+        return if (hours > 0) {
+            "${hours}h ${remainderMinutes.toString().padStart(2, '0')}m"
+        } else {
+            "${remainderMinutes}m"
+        }
     }
 
     private fun deriveRelativeTimeSelection(
@@ -2819,34 +3038,34 @@ class MainActivity : Activity() {
         val base = baseCompact?.let(JvmTimeSupport::normalizeCurrentTimeCompactForDisplay)?.let(JvmTimeSupport::parseCompactTimestamp)
         val target = targetCompact?.let(JvmTimeSupport::normalizeCurrentTimeCompactForDisplay)?.let(JvmTimeSupport::parseCompactTimestamp)
         if (base == null || target == null || !target.isAfter(base)) {
-            return RelativeTimeSelection(hours = 0, minutes = null)
+            return RelativeTimeSelection(hours = 0, minutes = 0, useTopOfHour = true)
         }
         val totalMinutes = java.time.Duration.between(base, target).toMinutes().coerceAtLeast(0)
         val hours = (totalMinutes / 60).toInt().coerceIn(0, 480)
         val minutes = (totalMinutes % 60).toInt()
         val roundedMinutes = ((minutes + 2) / 5) * 5
         return if (roundedMinutes >= 60) {
-            RelativeTimeSelection(hours = (hours + 1).coerceIn(0, 480), minutes = null)
+            RelativeTimeSelection(hours = (hours + 1).coerceIn(0, 480), minutes = 0, useTopOfHour = true)
         } else if (roundedMinutes == 0) {
-            RelativeTimeSelection(hours = hours, minutes = null)
+            RelativeTimeSelection(hours = hours, minutes = 0, useTopOfHour = true)
         } else {
-            RelativeTimeSelection(hours = hours, minutes = roundedMinutes)
+            RelativeTimeSelection(hours = hours, minutes = roundedMinutes, useTopOfHour = false)
         }
     }
 
     private fun formatRelativeTimeSelection(selection: RelativeTimeSelection): String {
-        return if (selection.minutes == null) {
+        return if (selection.useTopOfHour) {
             "+${selection.hours} TOTH"
         } else {
-            "+${selection.hours}:${selection.minutes.toString().padStart(2, '0')}"
+            "+${selection.hours}:${selection.minutes}"
         }
     }
 
     private fun formatRelativeTimeCommand(selection: RelativeTimeSelection): String {
-        return if (selection.minutes == null) {
+        return if (selection.useTopOfHour) {
             "+${selection.hours}"
         } else {
-            "+${selection.hours}:${selection.minutes.toString().padStart(2, '0')}"
+            "+${selection.hours}:${selection.minutes}"
         }
     }
 
@@ -2914,6 +3133,65 @@ class MainActivity : Activity() {
                     this.marginEnd = horizontalMargin
                 }
             setOnClickListener { onClick() }
+        }
+
+    private fun headerCloneButton(uiState: AndroidUiState): Button =
+        Button(this).apply {
+            text = "Clone"
+            setBackgroundColor(Color.parseColor("#1E40AF"))
+            setTextColor(Color.WHITE)
+            isEnabled = uiState.canClone
+            alpha = if (uiState.canClone) 1f else 0.55f
+            layoutParams =
+                LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                    val horizontalMargin = (8 * resources.displayMetrics.density).toInt()
+                    marginStart = horizontalMargin
+                    marginEnd = horizontalMargin
+                }
+            setOnClickListener {
+                AndroidSessionController.runCloneTimedEventSettings(
+                    context = applicationContext,
+                    requestedDeviceName = uiState.latestLoadedDeviceName,
+                )
+            }
+            contentDescription = "Clone timed event settings"
+            installLongPressGesture(this, allowShortTap = true) {
+                if (!isEnabled) {
+                    return@installLongPressGesture
+                }
+                animateFeedback(this, null, playSound = true)
+                clockDisplayHandler.postDelayed(
+                    {
+                        AndroidSessionController.reloadCloneTemplateFromAttachedDevice(
+                            context = applicationContext,
+                            requestedDeviceName = uiState.latestLoadedDeviceName,
+                        )
+                    },
+                    220L,
+                )
+            }
+        }
+
+    private fun cloneButton(latestLoadedDeviceName: String?): Button =
+        weightedButton("Clone") {
+            AndroidSessionController.runCloneTimedEventSettings(
+                context = applicationContext,
+                requestedDeviceName = latestLoadedDeviceName,
+            )
+        }.apply {
+            contentDescription = "Clone timed event settings"
+            installLongPressGesture(this, allowShortTap = true) {
+                animateFeedback(this, null, playSound = true)
+                clockDisplayHandler.postDelayed(
+                    {
+                        AndroidSessionController.reloadCloneTemplateFromAttachedDevice(
+                            context = applicationContext,
+                            requestedDeviceName = latestLoadedDeviceName,
+                        )
+                    },
+                    220L,
+                )
+            }
         }
 
     private fun sectionTitle(text: String): TextView =
@@ -3002,7 +3280,9 @@ class MainActivity : Activity() {
         private const val PREF_RAW_SERIAL_VISIBLE = "raw_serial_visible"
         private const val PREF_SYSTEM_TIME_VISIBLE = "system_time_visible"
         private const val PREF_DEVICE_DATA_VISIBLE = "device_data_visible"
+        private const val PREF_LOGGING_TOOLS_VISIBLE = "logging_tools_visible"
         private const val PREF_SCHEDULE_TIME_INPUT_MODE = "schedule_time_input_mode"
+        private const val PREF_DEFAULT_EVENT_LENGTH_MINUTES = "default_event_length_minutes"
         private const val PREF_FREQUENCY_DISPLAY_UNIT = "frequency_display_unit"
         private const val PREF_TEMPERATURE_DISPLAY_UNIT = "temperature_display_unit"
         private const val PREF_DEVICE_TIME_SET_MODE = "device_time_set_mode"
