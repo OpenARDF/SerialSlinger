@@ -58,6 +58,8 @@ data class AndroidUiState(
     val latestSubmitSummary: String,
     val timeWorkflowNotice: String?,
     val scheduleDerivedDataPending: Boolean,
+    val clockPhaseErrorMillis: Long?,
+    val hasClockPhaseWarning: Boolean,
     val canClone: Boolean,
 )
 
@@ -154,6 +156,8 @@ object AndroidSessionController {
     private var scheduleDerivedDataPending: Boolean = false
     private var probeInFlight: Boolean = false
     private var deviceTimeOffset: Duration? = null
+    private var lastClockPhaseErrorMillis: Long? = null
+    private var cachedManualWriteDelayMillis: Long? = null
     private var cloneTemplateSettings: DeviceSettings? = null
 
     fun initialize(context: Context) {
@@ -201,6 +205,8 @@ object AndroidSessionController {
                 latestSubmitSummary = latestSubmitSummary,
                 timeWorkflowNotice = timeWorkflowNotice,
                 scheduleDerivedDataPending = scheduleDerivedDataPending,
+                clockPhaseErrorMillis = currentClockSkewMillisLocked(),
+                hasClockPhaseWarning = hasClockPhaseWarningLocked(),
                 canClone = canCloneLocked(),
             )
         }
@@ -237,7 +243,7 @@ object AndroidSessionController {
             val snapshot = latestSessionViewState?.state?.snapshot ?: return ""
             return JvmTimeSupport.formatDaysToRunRemainingSummary(
                 totalDaysToRun = snapshot.settings.daysToRun,
-                daysToRunRemaining = null,
+                daysToRunRemaining = snapshot.status.daysRemaining,
                 currentTimeCompact = displayedDeviceTimeCompactLocked(systemNow),
                 startTimeCompact = snapshot.settings.startTimeCompact,
                 finishTimeCompact = snapshot.settings.finishTimeCompact,
@@ -257,6 +263,8 @@ object AndroidSessionController {
             latestLoadedDeviceName = null
             applySnapshotDrafts(null)
             deviceTimeOffset = null
+            lastClockPhaseErrorMillis = null
+            cachedManualWriteDelayMillis = null
             timeWorkflowNotice = null
             scheduleDerivedDataPending = false
             latestProbeSummary = "No SignalSlinger is currently attached."
@@ -438,6 +446,23 @@ object AndroidSessionController {
             return false
         }
         return hasRequiredCloneEventData(template) && hasRequiredCloneEventData(snapshot.settings)
+    }
+
+    private fun hasClockPhaseWarningLocked(): Boolean {
+        return currentClockSkewMillisLocked()?.let { abs(it) > 500L } == true
+    }
+
+    private fun currentClockSkewMillisLocked(systemNow: LocalDateTime = LocalDateTime.now()): Long? {
+        val exactMeasuredSkew = lastClockPhaseErrorMillis
+        if (exactMeasuredSkew != null) {
+            return exactMeasuredSkew
+        }
+
+        val displayedDeviceTime = displayedDeviceTimeCompactLocked(systemNow)
+            ?.let(JvmTimeSupport::normalizeCurrentTimeCompactForDisplay)
+            ?.let(JvmTimeSupport::parseCompactTimestamp)
+            ?: return null
+        return Duration.between(displayedDeviceTime, systemNow).toMillis()
     }
 
     private fun hasRequiredCloneEventData(settings: DeviceSettings): Boolean {
@@ -2434,9 +2459,7 @@ object AndroidSessionController {
 
         thread(name = "serialslinger-android-current-time-submit") {
             val result =
-                if (normalizedCurrentTime == snapshot.settings.currentTimeCompact) {
-                    Result.success(noOpSubmitResult(sessionState))
-                } else {
+                run {
                     val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
                     val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
                     if (usbDevice == null) {
@@ -2445,10 +2468,22 @@ object AndroidSessionController {
                         val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
                         try {
                             transport.connect()
-                            val editedSettings = editableSettings.copy(
-                                currentTimeCompact = editableSettings.currentTimeCompact.copy(editedValue = normalizedCurrentTime),
-                            )
-                            Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
+                            val estimatedWriteDelayMillis = synchronized(this@AndroidSessionController) { cachedManualWriteDelayMillis } ?: 0L
+                            val adjustedCurrentTime =
+                                JvmTimeSupport.formatCompactTimestamp(
+                                    JvmTimeSupport.adjustManualTimeTargetForWrite(
+                                        selectedTime = JvmTimeSupport.parseCompactTimestamp(normalizedCurrentTime),
+                                        estimatedWriteDelayMillis = estimatedWriteDelayMillis,
+                                    ),
+                                )
+                            if (adjustedCurrentTime == snapshot.settings.currentTimeCompact) {
+                                Result.success(noOpSubmitResult(sessionState))
+                            } else {
+                                val editedSettings = editableSettings.copy(
+                                    currentTimeCompact = editableSettings.currentTimeCompact.copy(editedValue = adjustedCurrentTime),
+                                )
+                                Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
+                            }
                         } catch (error: Throwable) {
                             Result.failure(error)
                         } finally {
@@ -3029,6 +3064,9 @@ object AndroidSessionController {
 
         Thread.sleep(80L)
         val samples = observeClockPhaseSamples(transport = transport, maxSamples = 4)
+        synchronized(this) {
+            cachedManualWriteDelayMillis = estimateManualWriteDelayMillis(samples)
+        }
         var updatedState = result.state
         samples.forEach { sample ->
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, sample.responseLines)
@@ -3075,6 +3113,13 @@ object AndroidSessionController {
                 }
             }
         }
+    }
+
+    private fun estimateManualWriteDelayMillis(samples: List<ClockReadSample>): Long? {
+        if (samples.isEmpty()) {
+            return null
+        }
+        return (JvmTimeSupport.medianMillis(samples.map { it.roundTripMillis }) / 2).coerceAtLeast(0L)
     }
 
     private fun performAlignedTimeSync(
@@ -3407,6 +3452,7 @@ object AndroidSessionController {
         phaseErrorMillis: Long? = null,
         referenceTime: LocalDateTime = LocalDateTime.now(),
     ) {
+        lastClockPhaseErrorMillis = phaseErrorMillis
         deviceTimeOffset = phaseErrorMillis?.let { Duration.ofMillis(-it) }
         if (deviceTimeOffset == null) {
             updateDeviceTimeOffset(currentTimeCompact = currentTimeCompact, referenceTime = referenceTime)

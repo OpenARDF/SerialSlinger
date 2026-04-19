@@ -139,6 +139,13 @@ object DesktopInputSupport {
         return JvmTimeSupport.validateCurrentTimeForWrite(currentTimeCompact)
     }
 
+    fun adjustManualTimeTargetForWrite(
+        selectedTime: LocalDateTime,
+        estimatedWriteDelayMillis: Long,
+    ): LocalDateTime {
+        return JvmTimeSupport.adjustManualTimeTargetForWrite(selectedTime, estimatedWriteDelayMillis)
+    }
+
     fun validateStartTimeForWrite(startTimeCompact: String?): String? {
         return JvmTimeSupport.validateStartTimeForWrite(startTimeCompact)
     }

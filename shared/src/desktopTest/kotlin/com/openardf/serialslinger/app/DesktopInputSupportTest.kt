@@ -40,6 +40,22 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun adjustsManualTimeTargetForwardWhenMeasuredWriteDelayRoundsPastHalfSecond() {
+        val selected = LocalDateTime.of(2026, 4, 10, 14, 0, 0)
+        val adjusted = JvmTimeSupport.adjustManualTimeTargetForWrite(selected, estimatedWriteDelayMillis = 700L)
+
+        assertEquals(LocalDateTime.of(2026, 4, 10, 14, 0, 1), adjusted)
+    }
+
+    @Test
+    fun keepsManualTimeTargetUnchangedWhenMeasuredWriteDelayRoundsDown() {
+        val selected = LocalDateTime.of(2026, 4, 10, 14, 0, 0)
+        val adjusted = JvmTimeSupport.adjustManualTimeTargetForWrite(selected, estimatedWriteDelayMillis = 300L)
+
+        assertEquals(selected, adjusted)
+    }
+
+    @Test
     fun describesEventStatusUsesLiveRemainingTimeInsteadOfStaticSummary() {
         val label = DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = true,

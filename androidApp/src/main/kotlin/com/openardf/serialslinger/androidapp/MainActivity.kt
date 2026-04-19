@@ -626,7 +626,8 @@ class MainActivity : Activity() {
             pickerField(
                 text = uiState.draftCurrentTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.currentTimeCompact),
                 hint = "Device Time",
-                textSizeSp = 14f,
+                textSizeSp = timestampFieldTextSizeSp(),
+                emphasizedInputStyle = deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL,
             ) {
                 if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) {
                     pickDateTime(
@@ -646,14 +647,26 @@ class MainActivity : Activity() {
             }
         var currentTimeLabelField: TextView? = null
         val currentTimeRow =
-            compactLabeledRow(
-                "Device Time",
-                currentTimeField,
-                captureLabelView = { labelView ->
-                    currentTimeLabelView = labelView
-                    currentTimeLabelField = labelView
-                },
-            )
+            if (deviceDataVisible) {
+                stackedLabeledRow(
+                    deviceTimeRowLabel(),
+                    currentTimeField,
+                    captureLabelView = { labelView ->
+                        currentTimeLabelView = labelView
+                        currentTimeLabelField = labelView
+                    },
+                )
+            } else {
+                compactLabeledRow(
+                    deviceTimeRowLabel(),
+                    currentTimeField,
+                    labelWidthDp = 132,
+                    captureLabelView = { labelView ->
+                        currentTimeLabelView = labelView
+                        currentTimeLabelField = labelView
+                    },
+                )
+            }
         deviceSettingsCard.addView(currentTimeRow)
         installDeviceTimeSettingToggle(currentTimeField, currentTimeLabelField, currentTimeRow)
         currentTimeDisplayField = currentTimeField
@@ -687,28 +700,37 @@ class MainActivity : Activity() {
                 readOnlyField(frequencyPresentation.currentBankId?.label ?: "<not inferred>"),
             ),
         )
-        deviceSettingsCard.addView(
-            compactLabeledRow(
-                "Ext. Bat. Ctrl",
-                if (snapshot?.capabilities?.supportsExternalBatteryControl == true) {
-                    enumSpinner(
-                        options = ExternalBatteryControlMode.entries.toList(),
+        val externalBatteryControlField =
+            if (snapshot?.capabilities?.supportsExternalBatteryControl == true) {
+                enumSpinner(
+                    options = ExternalBatteryControlMode.entries.toList(),
+                    selectedValue = loadedSettings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF,
+                ).also { batteryModeSpinner ->
+                    wireImmediateSelectionSpinner(
+                        spinner = batteryModeSpinner,
                         selectedValue = loadedSettings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF,
-                    ).also { batteryModeSpinner ->
-                        wireImmediateSelectionSpinner(
-                            spinner = batteryModeSpinner,
-                            selectedValue = loadedSettings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF,
-                        ) { selectedMode ->
-                            AndroidSessionController.runExternalBatteryControlSubmit(
-                                context = applicationContext,
-                                mode = selectedMode,
-                            )
-                        }
+                    ) { selectedMode ->
+                        AndroidSessionController.runExternalBatteryControlSubmit(
+                            context = applicationContext,
+                            mode = selectedMode,
+                        )
                     }
-                } else {
-                    readOnlyField(loadedSettings.externalBatteryControlMode?.uiLabel.orUnknown())
-                },
-            ),
+                }
+            } else {
+                readOnlyField(loadedSettings.externalBatteryControlMode?.uiLabel.orUnknown())
+            }
+        deviceSettingsCard.addView(
+            if (deviceDataVisible) {
+                stackedLabeledRow(
+                    "Ext. Bat. Ctrl",
+                    externalBatteryControlField,
+                )
+            } else {
+                compactLabeledRow(
+                    "Ext. Bat. Ctrl",
+                    externalBatteryControlField,
+                )
+            },
         )
         if (loadedSettings.externalBatteryControlMode == ExternalBatteryControlMode.CHARGE_ONLY) {
             deviceSettingsCard.addView(compactAlertRow("Transmitter Disabled"))
@@ -803,7 +825,7 @@ class MainActivity : Activity() {
                 pickerField(
                     text = formatRelativeTimeSelection(initialSelection),
                     hint = "Start Time",
-                    textSizeSp = 14f,
+                    textSizeSp = timestampFieldTextSizeSp(),
                 ) {
                     showRelativeTimePickerDialog(
                         title = "Relative Start Time",
@@ -824,7 +846,7 @@ class MainActivity : Activity() {
                 pickerField(
                     text = uiState.draftStartTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.startTimeCompact),
                     hint = "Start Time",
-                    textSizeSp = 14f,
+                    textSizeSp = timestampFieldTextSizeSp(),
                 ) {
                     pickDateTime(initialValue = startTimeField.text.toString()) { selected ->
                         clearRelativeScheduleDisplayOverrides()
@@ -842,11 +864,19 @@ class MainActivity : Activity() {
         var absoluteStartField: TextView? = null
         var absoluteStartLabelView: TextView? = null
         val startTimeRow =
-            compactLabeledRow(
-                "Start Time",
-                startTimeField,
-                captureLabelView = { startTimeLabelView = it },
-            )
+            if (deviceDataVisible) {
+                stackedLabeledRow(
+                    "Start Time",
+                    startTimeField,
+                    captureLabelView = { startTimeLabelView = it },
+                )
+            } else {
+                compactLabeledRow(
+                    "Start Time",
+                    startTimeField,
+                    captureLabelView = { startTimeLabelView = it },
+                )
+            }
         timedEventCard.addView(startTimeRow)
         installScheduleTimeModeToggle(startTimeField, startTimeLabelView, "Start Time", startTimeRow)
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
@@ -874,7 +904,7 @@ class MainActivity : Activity() {
                 pickerField(
                     text = formatRelativeTimeSelection(initialSelection),
                     hint = "Finish Time",
-                    textSizeSp = 14f,
+                    textSizeSp = timestampFieldTextSizeSp(),
                 ) {
                     showRelativeTimePickerDialog(
                         title = "Relative Finish Time",
@@ -893,7 +923,7 @@ class MainActivity : Activity() {
                 pickerField(
                     text = uiState.draftFinishTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.finishTimeCompact),
                     hint = "Finish Time",
-                    textSizeSp = 14f,
+                    textSizeSp = timestampFieldTextSizeSp(),
                 ) {
                     pickDateTime(initialValue = finishTimeField.text.toString()) { selected ->
                         clearRelativeScheduleDisplayOverrides()
@@ -910,11 +940,19 @@ class MainActivity : Activity() {
         var absoluteFinishField: TextView? = null
         var absoluteFinishLabelView: TextView? = null
         val finishTimeRow =
-            compactLabeledRow(
-                "Finish Time",
-                finishTimeField,
-                captureLabelView = { finishTimeLabelView = it },
-            )
+            if (deviceDataVisible) {
+                stackedLabeledRow(
+                    "Finish Time",
+                    finishTimeField,
+                    captureLabelView = { finishTimeLabelView = it },
+                )
+            } else {
+                compactLabeledRow(
+                    "Finish Time",
+                    finishTimeField,
+                    captureLabelView = { finishTimeLabelView = it },
+                )
+            }
         timedEventCard.addView(finishTimeRow)
         installScheduleTimeModeToggle(finishTimeField, finishTimeLabelView, "Finish Time", finishTimeRow)
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
@@ -948,15 +986,22 @@ class MainActivity : Activity() {
             readOnlyField(
                 if (uiState.scheduleDerivedDataPending) "Updating..." else derivedEventStatus,
                 textSizeSp = 13f,
-                singleLine = true,
+                maxLines = 2,
             )
         eventStatusDisplayField = eventStatusField
         timedEventCard.addView(
-            compactLabeledRow(
-                "Event Status",
-                eventStatusField,
-                labelWidthDp = 108,
-            ),
+            if (deviceDataVisible) {
+                stackedLabeledRow(
+                    "Event Status",
+                    eventStatusField,
+                )
+            } else {
+                compactLabeledRow(
+                    "Event Status",
+                    eventStatusField,
+                    labelWidthDp = 108,
+                )
+            },
         )
         timedEventCard.addView(compactLabeledRow("Lasts", readOnlyField(durationSummary)))
 
@@ -1153,6 +1198,12 @@ class MainActivity : Activity() {
         val normalFieldColor = Color.parseColor("#1F2937")
         currentTimeLabelView?.setTextColor(if (deviceTimeOutOfSync) warningColor else normalLabelColor)
         currentTimeDisplayField?.setTextColor(if (deviceTimeOutOfSync) warningColor else normalFieldColor)
+        currentTimeDisplayField?.hint =
+            if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) {
+                "Tap to sync Device Time"
+            } else {
+                "Device Time"
+            }
         systemTimeDisplayField?.text = formatDisplayTimestamp(LocalDateTime.now().withNano(0))
         val currentSchedulePending = AndroidSessionController.isScheduleDerivedDataPending()
         scheduleDerivedDataPending = currentSchedulePending
@@ -1603,6 +1654,37 @@ class MainActivity : Activity() {
 
             field.layoutParams =
                 LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)
+            addView(field)
+        }
+
+    private fun stackedLabeledRow(
+        label: String,
+        field: View,
+        captureLabelView: ((TextView) -> Unit)? = null,
+    ): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams =
+                LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                    val bottomMargin = (10 * resources.displayMetrics.density).toInt()
+                    this.bottomMargin = bottomMargin
+                }
+
+            addView(
+                TextView(this@MainActivity).apply {
+                    text = label
+                    setTypeface(Typeface.DEFAULT_BOLD)
+                    textSize = 13f
+                    layoutParams =
+                        LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                            val bottomMargin = (4 * resources.displayMetrics.density).toInt()
+                            this.bottomMargin = bottomMargin
+                        }
+                    captureLabelView?.invoke(this)
+                },
+            )
+
+            field.layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
             addView(field)
         }
 
@@ -2797,6 +2879,7 @@ class MainActivity : Activity() {
         text: String,
         textSizeSp: Float = 15f,
         singleLine: Boolean = false,
+        maxLines: Int? = null,
     ): TextView =
         TextView(this).apply {
             this.text = text
@@ -2804,6 +2887,9 @@ class MainActivity : Activity() {
             setTextColor(Color.parseColor("#1F2937"))
             if (singleLine) {
                 setSingleLine(true)
+            } else {
+                setHorizontallyScrolling(false)
+                maxLines?.let { this.maxLines = it }
             }
             val horizontalPadding = (10 * resources.displayMetrics.density).toInt()
             val verticalPadding = (8 * resources.displayMetrics.density).toInt()
@@ -2819,6 +2905,7 @@ class MainActivity : Activity() {
         text: String,
         hint: String,
         textSizeSp: Float = 15f,
+        emphasizedInputStyle: Boolean = true,
         onPick: () -> Unit,
     ): EditText =
         EditText(this).apply {
@@ -2830,7 +2917,7 @@ class MainActivity : Activity() {
             isFocusableInTouchMode = false
             isCursorVisible = false
             setSingleLine()
-            setBackgroundColor(Color.WHITE)
+            applyPickerFieldPresentation(emphasizedInputStyle)
             setOnClickListener { onPick() }
             layoutParams =
                 LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
@@ -2838,6 +2925,33 @@ class MainActivity : Activity() {
                     this.bottomMargin = bottomMargin
                 }
         }
+
+    private fun EditText.applyPickerFieldPresentation(emphasizedInputStyle: Boolean) {
+        val horizontalPadding = (10 * resources.displayMetrics.density).toInt()
+        val verticalPadding = (8 * resources.displayMetrics.density).toInt()
+        setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+        if (emphasizedInputStyle) {
+            setBackgroundColor(Color.WHITE)
+            setTextColor(Color.parseColor("#1F2937"))
+            alpha = 1f
+        } else {
+            background = null
+            setTextColor(Color.parseColor("#4B5563"))
+            alpha = 1f
+        }
+    }
+
+    private fun deviceTimeRowLabel(): String {
+        return if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) {
+            "Device Time (Tap to Sync)"
+        } else {
+            "Device Time (Manual)"
+        }
+    }
+
+    private fun timestampFieldTextSizeSp(): Float {
+        return if (deviceDataVisible) 14f else 15f
+    }
 
     private fun dismissKeyboard(view: View) {
         val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
@@ -3149,8 +3263,8 @@ class MainActivity : Activity() {
                     marginEnd = horizontalMargin
                 }
             setOnClickListener {
-                AndroidSessionController.runCloneTimedEventSettings(
-                    context = applicationContext,
+                maybeRunCloneWithClockWarning(
+                    uiState = AndroidSessionController.snapshotUiState(),
                     requestedDeviceName = uiState.latestLoadedDeviceName,
                 )
             }
@@ -3174,8 +3288,8 @@ class MainActivity : Activity() {
 
     private fun cloneButton(latestLoadedDeviceName: String?): Button =
         weightedButton("Clone") {
-            AndroidSessionController.runCloneTimedEventSettings(
-                context = applicationContext,
+            maybeRunCloneWithClockWarning(
+                uiState = AndroidSessionController.snapshotUiState(),
                 requestedDeviceName = latestLoadedDeviceName,
             )
         }.apply {
@@ -3193,6 +3307,98 @@ class MainActivity : Activity() {
                 )
             }
         }
+
+    private fun maybeRunCloneWithClockWarning(
+        uiState: AndroidUiState,
+        requestedDeviceName: String?,
+    ) {
+        if (!uiState.hasClockPhaseWarning) {
+            AndroidSessionController.runCloneTimedEventSettings(
+                context = applicationContext,
+                requestedDeviceName = requestedDeviceName,
+            )
+            return
+        }
+
+        val phaseSummary = uiState.clockPhaseErrorMillis?.let(JvmTimeSupport::formatSignedDurationMillis) ?: "unavailable"
+        val padding = (16 * resources.displayMetrics.density).toInt()
+        val buttonSpacing = (8 * resources.displayMetrics.density).toInt()
+        lateinit var dialog: AlertDialog
+        val container =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(padding, padding / 2, padding, 0)
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text =
+                            "Device Time differs noticeably from Android system time.\n\n" +
+                                "Measured phase error: $phaseSummary\n\n" +
+                                "Syncing the clock before cloning is strongly recommended."
+                        textSize = 15f
+                        setTextColor(Color.parseColor("#1F2937"))
+                    },
+                )
+                addView(
+                    LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(0, padding, 0, 0)
+                        addView(
+                            Button(this@MainActivity).apply {
+                                text = "Continue Clone"
+                                setOnClickListener {
+                                    dialog.dismiss()
+                                    AndroidSessionController.runCloneTimedEventSettings(
+                                        context = applicationContext,
+                                        requestedDeviceName = requestedDeviceName,
+                                    )
+                                }
+                            },
+                            LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                                bottomMargin = buttonSpacing
+                            },
+                        )
+                        addView(
+                            Button(this@MainActivity).apply {
+                                text = "Sync then Clone"
+                                setOnClickListener {
+                                    dialog.dismiss()
+                                    AndroidSessionController.runCurrentTimeSystemSync(
+                                        context = applicationContext,
+                                        requestedDeviceName = requestedDeviceName,
+                                    ) { result ->
+                                        if (result.isSuccess) {
+                                            AndroidSessionController.runCloneTimedEventSettings(
+                                                context = applicationContext,
+                                                requestedDeviceName = requestedDeviceName,
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                                bottomMargin = buttonSpacing
+                            },
+                        )
+                        addView(
+                            Button(this@MainActivity).apply {
+                                text = "Cancel"
+                                setOnClickListener {
+                                    dialog.dismiss()
+                                }
+                            },
+                            LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT),
+                        )
+                    },
+                )
+            }
+
+        dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Device Time Warning")
+                .setView(container)
+                .create()
+        dialog.show()
+    }
 
     private fun sectionTitle(text: String): TextView =
         TextView(this).apply {

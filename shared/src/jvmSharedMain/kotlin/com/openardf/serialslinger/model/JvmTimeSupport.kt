@@ -59,6 +59,14 @@ object JvmTimeSupport {
         }.withNano(0)
     }
 
+    fun adjustManualTimeTargetForWrite(
+        selectedTime: LocalDateTime,
+        estimatedWriteDelayMillis: Long,
+    ): LocalDateTime {
+        val compensated = selectedTime.plus(Duration.ofMillis(estimatedWriteDelayMillis.coerceAtLeast(0L)))
+        return roundToSecond(compensated)
+    }
+
     fun isManualEventStateSummary(eventStateSummary: String?): Boolean {
         val summaryLower = eventStateSummary?.trim()?.lowercase().orEmpty()
         return summaryLower.contains("user launched") || summaryLower.contains("running forever")
@@ -395,9 +403,54 @@ object JvmTimeSupport {
     fun formatSignedDurationMillis(durationMillis: Long): String {
         val sign = if (durationMillis < 0) "-" else "+"
         val absMillis = abs(durationMillis)
-        val seconds = absMillis / 1_000
+        val totalSeconds = absMillis / 1_000
         val milliseconds = absMillis % 1_000
-        return "$sign${seconds}.${milliseconds.toString().padStart(3, '0')}s"
+        val days = totalSeconds / 86_400
+        val hours = (totalSeconds % 86_400) / 3_600
+        val minutes = (totalSeconds % 3_600) / 60
+        val seconds = totalSeconds % 60
+
+        return buildString {
+            append(sign)
+            when {
+                days > 0 -> {
+                    append(days)
+                    append("d ")
+                    append(hours.toString().padStart(2, '0'))
+                    append("h ")
+                    append(minutes.toString().padStart(2, '0'))
+                    append("m ")
+                    append(seconds)
+                    append('.')
+                    append(milliseconds.toString().padStart(3, '0'))
+                    append('s')
+                }
+                hours > 0 -> {
+                    append(hours)
+                    append("h ")
+                    append(minutes.toString().padStart(2, '0'))
+                    append("m ")
+                    append(seconds)
+                    append('.')
+                    append(milliseconds.toString().padStart(3, '0'))
+                    append('s')
+                }
+                minutes > 0 -> {
+                    append(minutes)
+                    append("m ")
+                    append(seconds)
+                    append('.')
+                    append(milliseconds.toString().padStart(3, '0'))
+                    append('s')
+                }
+                else -> {
+                    append(seconds)
+                    append('.')
+                    append(milliseconds.toString().padStart(3, '0'))
+                    append('s')
+                }
+            }
+        }
     }
 
     fun medianMillis(values: List<Long>): Long {

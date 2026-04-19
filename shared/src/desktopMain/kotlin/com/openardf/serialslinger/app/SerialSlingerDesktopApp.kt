@@ -164,6 +164,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         FINISH,
     }
 
+    private enum class ClockWarningChoice {
+        CANCEL,
+        SYNC_THEN_CONTINUE,
+        CONTINUE,
+    }
+
     private val cloneAccentColor = Color(0x1E, 0x40, 0xAF)
     private val cloneAccentBorderColor = Color(0x93, 0xC5, 0xFD)
     private val cloneAccentBackground = Color(0xEF, 0xF6, 0xFF)
@@ -192,6 +198,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var busyDialogShowTimer: Timer? = null
     private var pendingImmediateEdit: PendingImmediateEdit? = null
     @Volatile private var busyProgressState: BusyProgressState? = null
+    private var cachedManualWriteDelayMillis: Long? = null
     private val rawCommandField = JTextField()
     private val rawSerialRowPanel = JPanel(BorderLayout(8, 0)).apply {
         add(JLabel("Raw Serial"), BorderLayout.WEST)
@@ -571,14 +578,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun buildMenuBar(): JMenuBar {
         return JMenuBar().apply {
             add(
-                JMenu("View").apply {
-                    showRawSerialMenuItem = JCheckBoxMenuItem("Show Raw Serial Entry", displayPreferences.rawSerialVisible).apply {
-                        addActionListener { setRawSerialVisible(isSelected) }
-                    }
-                    add(showRawSerialMenuItem)
-                },
-            )
-            add(
                 JMenu("Settings").apply {
                     add(
                         JMenu("Device Time Setting").apply {
@@ -680,6 +679,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             add(
                 JMenu("Tools").apply {
+                    showRawSerialMenuItem = JCheckBoxMenuItem("Show Raw Serial Entry", displayPreferences.rawSerialVisible).apply {
+                        addActionListener { setRawSerialVisible(isSelected) }
+                    }
+                    add(showRawSerialMenuItem)
                     showLogMenuItem = JCheckBoxMenuItem("Show Session Log", displayPreferences.logVisible).apply {
                         addActionListener { setLogVisible(isSelected) }
                     }
@@ -1454,6 +1457,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         loadedSnapshot = updatedState?.snapshot
         consecutiveDeviceTimeCheckNoResponseCount = 0
         clockPhaseWarningActive = false
+        lastClockPhaseErrorMillis = null
         appendLog(
             "Port Monitor",
             listOf(
@@ -2266,7 +2270,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun cloneTimedEventSettings() {
+    private fun cloneTimedEventSettings(skipClockWarning: Boolean = false) {
         val transport = currentTransport
         val state = currentState
         val templateSettings = cloneTemplateSettings
@@ -2274,12 +2278,34 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
             return
         }
-        maybeShowCloneClockReminder(
-            "Device time is not synchronized with system time.\n\n" +
-                "Syncing before cloning is typical protocol and strongly recommended, " +
-                "but Clone will continue if you choose not to sync first.",
-            "Clone Reminder",
-        )
+        if (!skipClockWarning) {
+            when (
+                maybeShowCloneClockReminder(
+                    message = "Device time is not synchronized with system time.\n\n" +
+                        "Syncing before cloning is typical protocol and strongly recommended.",
+                    title = "Clone Reminder",
+                    continueActionLabel = "Continue Clone",
+                    syncActionLabel = "Sync then Clone",
+                )
+            ) {
+                ClockWarningChoice.CONTINUE -> Unit
+                ClockWarningChoice.SYNC_THEN_CONTINUE -> {
+                    syncDeviceTimeToSystem {
+                        if (it) {
+                            Timer(1) { cloneTimedEventSettings(skipClockWarning = true) }.apply {
+                                isRepeats = false
+                                start()
+                            }
+                        }
+                    }
+                    return
+                }
+                ClockWarningChoice.CANCEL -> {
+                    setStatus("Clone cancelled so device time can be synchronized first.")
+                    return
+                }
+            }
+        }
         updateCloneTemplateLabel(
             "Clone template locked. Display shows attached device state.",
             Color(0x9A, 0x67, 0x11),
@@ -2436,12 +2462,32 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
             return
         }
-        maybeShowCloneClockReminder(
-            "Device time is not synchronized with system time.\n\n" +
-                "Syncing before reloading the clone template is typical protocol and strongly recommended, " +
-                "but this reload will continue if you choose not to sync first.",
-            "Clone Template Reminder",
-        )
+        when (
+            maybeShowCloneClockReminder(
+                message = "Device time is not synchronized with system time.\n\n" +
+                    "Syncing before reloading the clone template is typical protocol and strongly recommended.",
+                title = "Clone Template Reminder",
+                continueActionLabel = "Continue Reload",
+                syncActionLabel = "Sync then Reload",
+            )
+        ) {
+            ClockWarningChoice.CONTINUE -> Unit
+            ClockWarningChoice.SYNC_THEN_CONTINUE -> {
+                syncDeviceTimeToSystem {
+                    if (it) {
+                        Timer(1) { reloadCloneTemplateFromAttachedDevice() }.apply {
+                            isRepeats = false
+                            start()
+                        }
+                    }
+                }
+                return
+            }
+            ClockWarningChoice.CANCEL -> {
+                setStatus("Clone template reload cancelled so device time can be synchronized first.")
+                return
+            }
+        }
 
         runInBackground("Reloading clone template from attached device...") {
             val refreshedConnection = loadPort(portPath).copy(
@@ -4509,6 +4555,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         Thread.sleep(80L)
         val samples = observeClockPhaseSamples(transport, maxSamples = 4)
+        cachedManualWriteDelayMillis = estimateManualWriteDelayMillis(samples)
         var updatedState = DeviceSessionState(
             connectionState = ConnectionState.CONNECTED,
             snapshot = loadedSnapshot,
@@ -4739,49 +4786,65 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun syncDeviceTimeToSystem() {
+    private fun syncDeviceTimeToSystem(onComplete: (Boolean) -> Unit = {}) {
         val transport = currentTransport
         val state = currentState
         val snapshot = loadedSnapshot
         if (transport == null || state == null || snapshot == null) {
             JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            onComplete(false)
             return
         }
         if (!snapshot.capabilities.supportsScheduling) {
             JOptionPane.showMessageDialog(this, "This firmware version does not report scheduling/time support.")
+            onComplete(false)
             return
         }
 
         runInBackground("Syncing device time to system time...") {
-            val syncProgressTotal = estimatedSyncProgressUnits()
-            setBusyProgress(0, syncProgressTotal, "Preparing sync")
-            val syncResult = performAlignedTimeSync(
-                transport = transport,
-                state = state,
-                snapshot = snapshot,
-                onProgress = { completed, label ->
-                    setBusyProgress(completed, syncProgressTotal, label)
-                },
-            )
-            setBusyProgress(syncProgressTotal, syncProgressTotal, "Done")
-            val finalAttempt = syncResult.finalAttempt
-            currentState = finalAttempt.state
-            loadedSnapshot = finalAttempt.state.snapshot
-            deviceTimeOffset = Duration.ofMillis(-(finalAttempt.phaseErrorMillis ?: 0L))
-            lastDeviceTimeCheckAtMs = System.currentTimeMillis()
+            try {
+                val syncProgressTotal = estimatedSyncProgressUnits()
+                setBusyProgress(0, syncProgressTotal, "Preparing sync")
+                val syncResult = performAlignedTimeSync(
+                    transport = transport,
+                    state = state,
+                    snapshot = snapshot,
+                    onProgress = { completed, label ->
+                        setBusyProgress(completed, syncProgressTotal, label)
+                    },
+                )
+                setBusyProgress(syncProgressTotal, syncProgressTotal, "Done")
+                val finalAttempt = syncResult.finalAttempt
+                currentState = finalAttempt.state
+                loadedSnapshot = finalAttempt.state.snapshot
+                deviceTimeOffset = Duration.ofMillis(-(finalAttempt.phaseErrorMillis ?: 0L))
+                lastDeviceTimeCheckAtMs = System.currentTimeMillis()
 
-            SwingUtilities.invokeLater {
-                applySnapshotToForm(finalAttempt.state.snapshot, recalculateClockOffset = false)
-                appendSyncLog(
-                    attempts = syncResult.attempts,
-                    latencySamples = syncResult.latencySamples,
-                )
-                updateClockPhaseWarning(finalAttempt.phaseErrorMillis)
-                setStatus(
-                    finalAttempt.phaseErrorMillis?.let { phase ->
-                        "Device time synchronized. Measured phase error ${DesktopInputSupport.formatSignedDurationMillis(phase)}."
-                    } ?: "Device time synchronized.",
-                )
+                SwingUtilities.invokeLater {
+                    applySnapshotToForm(finalAttempt.state.snapshot, recalculateClockOffset = false)
+                    appendSyncLog(
+                        attempts = syncResult.attempts,
+                        latencySamples = syncResult.latencySamples,
+                    )
+                    updateClockPhaseWarning(finalAttempt.phaseErrorMillis)
+                    setStatus(
+                        finalAttempt.phaseErrorMillis?.let { phase ->
+                            "Device time synchronized. Measured phase error ${DesktopInputSupport.formatSignedDurationMillis(phase)}."
+                        } ?: "Device time synchronized.",
+                    )
+                    Timer(1) { onComplete(true) }.apply {
+                        isRepeats = false
+                        start()
+                    }
+                }
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    Timer(1) { onComplete(false) }.apply {
+                        isRepeats = false
+                        start()
+                    }
+                }
+                throw exception
             }
         }
     }
@@ -4956,15 +5019,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         selectedBaseTime: java.time.LocalDateTime,
         selectedAt: java.time.LocalDateTime,
     ): ManualTimeSetResult {
-        val latencySamples = emptyList<ClockReadSample>()
-        val appliedDeviceTime = selectedBaseTime
+        val estimatedWriteDelayMillis = cachedManualWriteDelayMillis ?: 0L
+        val appliedDeviceTime = DesktopInputSupport.adjustManualTimeTargetForWrite(selectedBaseTime, estimatedWriteDelayMillis)
         val attempt = performSyncAttempt(
             transport = transport,
             state = state,
             snapshot = snapshot,
             targetTime = appliedDeviceTime,
             dispatchTime = java.time.LocalDateTime.now(),
-            estimatedOneWayDelayMillis = 0L,
+            estimatedOneWayDelayMillis = estimatedWriteDelayMillis,
         )
         val expectedOffset = Duration.between(selectedAt, selectedBaseTime)
         val deviationMillis = DesktopInputSupport.estimateClockPhaseErrorMillis(
@@ -4976,7 +5039,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             },
         )
         return ManualTimeSetResult(
-            latencySamples = latencySamples,
+            latencySamples = emptyList(),
             attempt = attempt,
             appliedDeviceTime = appliedDeviceTime,
             deviationMillis = deviationMillis,
@@ -5081,6 +5144,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (snapshot == null) {
             systemTimeField.text = DesktopInputSupport.formatSystemTimestamp(displayNow)
             setInformationalFieldText(currentTimeField, "Not read")
+            currentTimeField.toolTipText = null
+            systemTimeField.toolTipText = null
             setInformationalFieldText(startsInField, "Not read")
             setInformationalFieldText(lastsField, "Not read")
             disableEventButton.isEnabled = false
@@ -5091,7 +5156,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val displayedDeviceTimeCompact = displayedDeviceTimeCompact(sampledSystemNow)
 
         systemTimeField.text = DesktopInputSupport.formatSystemTimestamp(displayNow)
-        setInformationalFieldText(currentTimeField, DesktopInputSupport.formatCompactTimestampOrNotSet(displayedDeviceTimeCompact), unreadPlaceholder = false)
+        val clockWarningActive = hasClockPhaseWarning()
+        val phaseErrorSummary = lastClockPhaseErrorMillis?.let {
+            "Measured phase error: ${DesktopInputSupport.formatSignedDurationMillis(it)}"
+        }
+        setInformationalFieldText(
+            currentTimeField,
+            DesktopInputSupport.formatCompactTimestampOrNotSet(displayedDeviceTimeCompact),
+            unreadPlaceholder = false,
+            alert = clockWarningActive,
+        )
+        currentTimeField.toolTipText = if (clockWarningActive) {
+            phaseErrorSummary
+        } else {
+            null
+        }
+        systemTimeField.toolTipText = phaseErrorSummary
         setInformationalFieldText(startsInField, DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = snapshot.status.eventEnabled,
             eventStateSummary = snapshot.status.eventStateSummary,
@@ -5124,6 +5204,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         loadedSnapshot = null
         clearRelativeScheduleDisplayOverrides()
         deviceTimeOffset = null
+        cachedManualWriteDelayMillis = null
         stationIdField.text = ""
         eventTypeCombo.selectedItem = null
         syncFoxRoleOptions(EventType.NONE, null)
@@ -5320,6 +5401,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setStatus("SignalSlinger stopped responding on ${portPath}.")
         consecutiveDeviceTimeCheckNoResponseCount = 0
         clockPhaseWarningActive = false
+        lastClockPhaseErrorMillis = null
         refreshAvailablePorts(silent = true)
         updateDisplayedClockFields()
     }
@@ -5366,10 +5448,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun updateClockPhaseWarning(phaseErrorMillis: Long?) {
         val portPath = currentConnectedPortPath.orEmpty()
         lastClockPhaseErrorMillis = phaseErrorMillis
-        val shouldWarn = phaseErrorMillis != null && kotlin.math.abs(phaseErrorMillis) > 500L
+        val shouldWarn = hasClockPhaseWarning(phaseErrorMillis)
         clockPhaseWarningActive = shouldWarn
         when {
-            shouldWarn && displayPreferences.timeSetMode != TimeSetMode.MANUAL -> showConnectionIndicator(
+            shouldWarn -> showConnectionIndicator(
                 ConnectionIndicatorState.SEARCHING,
                 "Connected to SignalSlinger on $portPath. Device clock appears out of sync with system time.",
             )
@@ -5383,16 +5465,35 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun maybeShowCloneClockReminder(
         message: String,
         title: String,
-    ) {
+        continueActionLabel: String,
+        syncActionLabel: String,
+    ): ClockWarningChoice {
         if (loadedSnapshot?.capabilities?.supportsScheduling != true || !clockPhaseWarningActive) {
-            return
+            return ClockWarningChoice.CONTINUE
         }
-        JOptionPane.showMessageDialog(
+        val phaseSummary = lastClockPhaseErrorMillis?.let {
+            "Measured phase error: ${DesktopInputSupport.formatSignedDurationMillis(it)}"
+        } ?: "Measured phase error: unavailable"
+        val options = arrayOf("Cancel", syncActionLabel, continueActionLabel)
+        val selection = JOptionPane.showOptionDialog(
             this,
-            message,
+            "$message\n\n$phaseSummary",
             title,
-            JOptionPane.INFORMATION_MESSAGE,
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+            null,
+            options,
+            options[1],
         )
+        return when (selection) {
+            1 -> ClockWarningChoice.SYNC_THEN_CONTINUE
+            2 -> ClockWarningChoice.CONTINUE
+            else -> ClockWarningChoice.CANCEL
+        }
+    }
+
+    private fun hasClockPhaseWarning(phaseErrorMillis: Long? = lastClockPhaseErrorMillis): Boolean {
+        return phaseErrorMillis != null && kotlin.math.abs(phaseErrorMillis) > 500L
     }
 
     private fun createDateTimeSpinner(
@@ -5822,6 +5923,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
             }
         }
+    }
+
+    private fun estimateManualWriteDelayMillis(samples: List<ClockReadSample>): Long? {
+        if (samples.isEmpty()) {
+            return null
+        }
+        return (DesktopInputSupport.medianMillis(samples.map { it.roundTripMillis }) / 2).coerceAtLeast(0L)
     }
 
     private fun performSyncAttempt(
