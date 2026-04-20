@@ -17,6 +17,7 @@ import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.ClockPhaseSample
+import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
 import com.openardf.serialslinger.model.WritePlanner
@@ -2553,11 +2554,11 @@ object AndroidSessionController {
     ) {
         runRelativeScheduleSubmit(
             context = context,
-            commands = buildList {
-                add("CLK S $offsetCommand")
-                add("CLK F $finishOffsetCommand")
-                preservedDaysToRun?.let { add("CLK D $it") }
-            },
+            commands = ScheduleSubmitSupport.relativeStartCommands(
+                offsetCommand = offsetCommand,
+                finishOffsetCommand = finishOffsetCommand,
+                preservedDaysToRun = preservedDaysToRun,
+            ),
             primaryField = SettingKey.START_TIME,
             statusPrefix = "Relative Start Time",
             requestedDeviceName = requestedDeviceName,
@@ -2574,7 +2575,7 @@ object AndroidSessionController {
     ) {
         runRelativeScheduleSubmit(
             context = context,
-            commands = listOf("CLK S ="),
+            commands = ScheduleSubmitSupport.disableEventCommands(),
             primaryField = SettingKey.START_TIME,
             statusPrefix = "Disable Event",
             requestedDeviceName = requestedDeviceName,
@@ -2593,10 +2594,10 @@ object AndroidSessionController {
     ) {
         runRelativeScheduleSubmit(
             context = context,
-            commands = buildList {
-                add("CLK F $offsetCommand")
-                preservedDaysToRun?.let { add("CLK D $it") }
-            },
+            commands = ScheduleSubmitSupport.relativeFinishCommands(
+                offsetCommand = offsetCommand,
+                preservedDaysToRun = preservedDaysToRun,
+            ),
             primaryField = SettingKey.FINISH_TIME,
             statusPrefix = "Relative Finish Time",
             requestedDeviceName = requestedDeviceName,
@@ -2678,34 +2679,30 @@ object AndroidSessionController {
         thread(name = "serialslinger-android-start-time-submit") {
             val result =
                 try {
-                    val resolvedStartTime = JvmTimeSupport.resolveStartTimeForChange(
-                        startTimeCompact = normalizedStartTime,
-                        currentTimeCompact = snapshot.settings.currentTimeCompact,
+                    val normalizedRequestedFinishTime =
+                        requestedFinishTimeInput
+                            ?.trim()
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.let { requestedFinishInput ->
+                                JvmTimeSupport.parseOptionalCompactTimestamp(requestedFinishInput)
+                                    ?: error("Finish Time must not be blank.")
+                            }
+                    val editRequest = ScheduleSubmitSupport.absoluteStartEdit(
+                        currentSettings = snapshot.settings,
+                        normalizedStartTime = normalizedStartTime,
+                        requestedFinishTimeCompact = normalizedRequestedFinishTime,
+                        defaultEventLengthMinutes = if (normalizedRequestedFinishTime == null) {
+                            validateDefaultEventLengthMinutes(defaultEventLengthMinutes)
+                        } else {
+                            null
+                        },
+                        preserveDaysToRun = preserveDaysToRun,
                     )
-                    val resolvedFinishTime =
-                        resolvedStartTime?.let { startTimeCompact ->
-                            requestedFinishTimeInput
-                                ?.trim()
-                                ?.takeIf { it.isNotEmpty() }
-                                ?.let { requestedFinishInput ->
-                                    val normalizedFinishTime =
-                                        JvmTimeSupport.parseOptionalCompactTimestamp(requestedFinishInput)
-                                            ?: error("Finish Time must not be blank.")
-                                    JvmTimeSupport.resolveScheduleForFinishTimeChange(
-                                        startTimeCompact = startTimeCompact,
-                                        finishTimeCompact = normalizedFinishTime,
-                                        currentTimeCompact = snapshot.settings.currentTimeCompact,
-                                    ).finishTimeCompact
-                                }
-                                ?: JvmTimeSupport.finishTimeCompactFromStart(
-                                    startTimeCompact = startTimeCompact,
-                                    duration = Duration.ofMinutes(validateDefaultEventLengthMinutes(defaultEventLengthMinutes).toLong()),
-                                )
-                        }
 
                     if (
-                        resolvedStartTime == snapshot.settings.startTimeCompact &&
-                        resolvedFinishTime == snapshot.settings.finishTimeCompact
+                        editRequest.startTimeCompact == snapshot.settings.startTimeCompact &&
+                        editRequest.finishTimeCompact == snapshot.settings.finishTimeCompact &&
+                        editRequest.forceWriteKeys.isEmpty()
                     ) {
                         Result.success(noOpSubmitResult(sessionState))
                     } else {
@@ -2718,15 +2715,15 @@ object AndroidSessionController {
                             try {
                                 transport.connect()
                                 val editedSettings = editableSettings.copy(
-                                    startTimeCompact = editableSettings.startTimeCompact.copy(editedValue = resolvedStartTime),
-                                    finishTimeCompact = editableSettings.finishTimeCompact.copy(editedValue = resolvedFinishTime),
+                                    startTimeCompact = editableSettings.startTimeCompact.copy(editedValue = editRequest.startTimeCompact),
+                                    finishTimeCompact = editableSettings.finishTimeCompact.copy(editedValue = editRequest.finishTimeCompact),
                                 )
                                 Result.success(
                                     DeviceSessionController.submitEdits(
                                         sessionState,
                                         editedSettings,
                                         transport,
-                                        forceWriteKeys = if (preserveDaysToRun) setOf(SettingKey.DAYS_TO_RUN) else emptySet(),
+                                        forceWriteKeys = editRequest.forceWriteKeys,
                                     ),
                                 )
                             } catch (error: Throwable) {
@@ -2860,46 +2857,52 @@ object AndroidSessionController {
 
         thread(name = "serialslinger-android-finish-time-submit") {
             val result =
-                if (normalizedFinishTime == snapshot.settings.finishTimeCompact) {
+                runCatching {
+                    val editRequest = ScheduleSubmitSupport.absoluteFinishEdit(
+                        currentSettings = snapshot.settings,
+                        normalizedFinishTime = normalizedFinishTime,
+                        preserveDaysToRun = preserveDaysToRun,
+                    )
+                    if (
+                        editRequest.finishTimeCompact == snapshot.settings.finishTimeCompact &&
+                        editRequest.startTimeCompact == snapshot.settings.startTimeCompact &&
+                        editRequest.forceWriteKeys.isEmpty()
+                    ) {
                     Result.success(noOpSubmitResult(sessionState))
-                } else {
-                    val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-                    val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-                    if (usbDevice == null) {
-                        Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
                     } else {
-                        val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                        try {
-                            transport.connect()
-                            val resolvedSchedule = JvmTimeSupport.resolveScheduleForFinishTimeChange(
-                                startTimeCompact = snapshot.settings.startTimeCompact,
-                                finishTimeCompact = normalizedFinishTime,
-                                currentTimeCompact = snapshot.settings.currentTimeCompact,
-                            )
-                            val editedSettings =
-                                editableSettings.copy(
-                                    startTimeCompact = editableSettings.startTimeCompact.copy(
-                                        editedValue = resolvedSchedule.startTimeCompact,
-                                    ),
-                                    finishTimeCompact = editableSettings.finishTimeCompact.copy(
-                                        editedValue = resolvedSchedule.finishTimeCompact,
+                        val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
+                        val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
+                        if (usbDevice == null) {
+                            Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
+                        } else {
+                            val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
+                            try {
+                                transport.connect()
+                                val editedSettings =
+                                    editableSettings.copy(
+                                        startTimeCompact = editableSettings.startTimeCompact.copy(
+                                            editedValue = editRequest.startTimeCompact,
+                                        ),
+                                        finishTimeCompact = editableSettings.finishTimeCompact.copy(
+                                            editedValue = editRequest.finishTimeCompact,
+                                        ),
+                                    )
+                                Result.success(
+                                    DeviceSessionController.submitEdits(
+                                        sessionState,
+                                        editedSettings,
+                                        transport,
+                                        forceWriteKeys = editRequest.forceWriteKeys,
                                     ),
                                 )
-                            Result.success(
-                                DeviceSessionController.submitEdits(
-                                    sessionState,
-                                    editedSettings,
-                                    transport,
-                                    forceWriteKeys = if (preserveDaysToRun) setOf(SettingKey.DAYS_TO_RUN) else emptySet(),
-                                ),
-                            )
-                        } catch (error: Throwable) {
-                            Result.failure(error)
-                        } finally {
-                            transport.disconnect()
+                            } catch (error: Throwable) {
+                                Result.failure(error)
+                            } finally {
+                                transport.disconnect()
+                            }
                         }
                     }
-                }
+                }.getOrElse { error -> Result.failure(error) }
 
             synchronized(this) {
                 if (result.isSuccess) {

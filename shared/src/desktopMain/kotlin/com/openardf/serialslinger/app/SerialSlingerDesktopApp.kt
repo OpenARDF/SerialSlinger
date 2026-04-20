@@ -8,6 +8,7 @@ import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
+import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
 import com.openardf.serialslinger.model.StartTimeAdjustmentOption
@@ -3030,31 +3031,32 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
                 },
             ) { daysChoice ->
-                val derivedFinishTime = DesktopInputSupport.finishTimeCompactFromStart(
-                    startTimeCompact = normalizedStartTime,
-                    duration = chosenDuration,
+                val editRequest = ScheduleSubmitSupport.absoluteStartEdit(
+                    currentSettings = connectedTimedSettings,
+                    normalizedStartTime = normalizedStartTime,
+                    requestedFinishTimeCompact = DesktopInputSupport.finishTimeCompactFromStart(
+                        startTimeCompact = normalizedStartTime,
+                        duration = chosenDuration,
+                    ),
+                    preserveDaysToRun = daysChoice == StartTimeDaysToRunChoice.PRESERVE,
                 )
-                val forceWriteKeys = when (daysChoice) {
-                    StartTimeDaysToRunChoice.PRESERVE -> setOf(SettingKey.DAYS_TO_RUN)
-                    StartTimeDaysToRunChoice.RESET -> emptySet()
-                }
                 applyImmediateEdit(
                     "Start Time",
                     updatesTimedEventTemplate = true,
-                    forceWriteKeys = forceWriteKeys,
+                    forceWriteKeys = editRequest.forceWriteKeys,
                 ) { base ->
                     EditableDeviceSettings.fromDeviceSettings(base).copy(
                         startTimeCompact = SettingsField(
                             "startTimeCompact",
                             "Start Time",
                             base.startTimeCompact,
-                            normalizedStartTime,
+                            editRequest.startTimeCompact,
                         ),
                         finishTimeCompact = SettingsField(
                             "finishTimeCompact",
                             "Finish Time",
                             base.finishTimeCompact,
-                            derivedFinishTime,
+                            editRequest.finishTimeCompact,
                         ),
                     )
                 }
@@ -3087,26 +3089,28 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 restoreAbsoluteFinishTimeEditor(connectedTimedSettings.finishTimeCompact)
             },
         ) { daysChoice ->
-            val forceWriteKeys = when (daysChoice) {
-                StartTimeDaysToRunChoice.PRESERVE -> setOf(SettingKey.DAYS_TO_RUN)
-                StartTimeDaysToRunChoice.RESET -> emptySet()
-            }
+            val editRequest = ScheduleSubmitSupport.absoluteFinishEdit(
+                currentSettings = connectedTimedSettings,
+                normalizedFinishTime = normalizedFinishTime,
+                preserveDaysToRun = daysChoice == StartTimeDaysToRunChoice.PRESERVE,
+            )
             applyImmediateEdit(
                 "Finish Time",
                 updatesTimedEventTemplate = true,
-                forceWriteKeys = forceWriteKeys,
+                forceWriteKeys = editRequest.forceWriteKeys,
             ) { base ->
-                val validatedSchedule = DesktopInputSupport.resolveScheduleForFinishTimeChange(
-                    startTimeCompact = normalizedStartTimeSelectionForCommit(connectedTimedSettings.startTimeCompact),
-                    finishTimeCompact = normalizedFinishTime,
-                    currentTimeCompact = displayedDeviceTimeCompact(),
-                )
                 EditableDeviceSettings.fromDeviceSettings(base).copy(
+                    startTimeCompact = SettingsField(
+                        "startTimeCompact",
+                        "Start Time",
+                        base.startTimeCompact,
+                        editRequest.startTimeCompact,
+                    ),
                     finishTimeCompact = SettingsField(
                         "finishTimeCompact",
                         "Finish Time",
                         base.finishTimeCompact,
-                        validatedSchedule.finishTimeCompact,
+                        editRequest.finishTimeCompact,
                     ),
                 )
             }
@@ -3525,12 +3529,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 restoreRelativeFinishTimeEditor()
             },
         ) { daysChoice ->
-            val commands = buildList {
-                add("CLK F ${DesktopInputSupport.formatRelativeTimeCommand(selection)}")
-                if (daysChoice == StartTimeDaysToRunChoice.PRESERVE) {
-                    add("CLK D ${snapshot.settings.daysToRun}")
-                }
-            }
+            val commands = ScheduleSubmitSupport.relativeFinishCommands(
+                offsetCommand = DesktopInputSupport.formatRelativeTimeCommand(selection),
+                preservedDaysToRun = if (daysChoice == StartTimeDaysToRunChoice.PRESERVE) {
+                    snapshot.settings.daysToRun
+                } else {
+                    null
+                },
+            )
 
             showConnectionIndicator(
                 ConnectionIndicatorState.SEARCHING,
@@ -3798,7 +3804,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         val description = "Disable Event"
-        val commands = listOf("CLK S =")
+        val commands = ScheduleSubmitSupport.disableEventCommands()
         showConnectionIndicator(
             ConnectionIndicatorState.SEARCHING,
             "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
@@ -3905,11 +3911,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     ) {
         val description = "Relative Start Time"
         val chosenFinishSelection = DesktopInputSupport.relativeTimeSelectionForDuration(chosenDuration)
-        val commands = buildList {
-            add("CLK S ${DesktopInputSupport.formatRelativeTimeCommand(selection)}")
-            add("CLK F ${DesktopInputSupport.formatRelativeDurationCommand(chosenDuration)}")
-            preservedDaysToRun?.let { add("CLK D $it") }
-        }
+        val commands = ScheduleSubmitSupport.relativeStartCommands(
+            offsetCommand = DesktopInputSupport.formatRelativeTimeCommand(selection),
+            finishOffsetCommand = DesktopInputSupport.formatRelativeDurationCommand(chosenDuration),
+            preservedDaysToRun = preservedDaysToRun,
+        )
 
         showConnectionIndicator(
             ConnectionIndicatorState.SEARCHING,
