@@ -2546,15 +2546,37 @@ object AndroidSessionController {
         context: Context,
         offsetCommand: String,
         finishOffsetCommand: String,
+        preservedDaysToRun: Int? = null,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
     ) {
         runRelativeScheduleSubmit(
             context = context,
-            commands = listOf("CLK S $offsetCommand", "CLK F $finishOffsetCommand"),
+            commands = buildList {
+                add("CLK S $offsetCommand")
+                add("CLK F $finishOffsetCommand")
+                preservedDaysToRun?.let { add("CLK D $it") }
+            },
             primaryField = SettingKey.START_TIME,
             statusPrefix = "Relative Start Time",
+            requestedDeviceName = requestedDeviceName,
+            source = source,
+            onComplete = onComplete,
+        )
+    }
+
+    fun runDisableEventViaStartTimeCommand(
+        context: Context,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
+    ) {
+        runRelativeScheduleSubmit(
+            context = context,
+            commands = listOf("CLK S ="),
+            primaryField = SettingKey.START_TIME,
+            statusPrefix = "Disable Event",
             requestedDeviceName = requestedDeviceName,
             source = source,
             onComplete = onComplete,
@@ -2564,13 +2586,17 @@ object AndroidSessionController {
     fun runRelativeFinishTimeSubmit(
         context: Context,
         offsetCommand: String,
+        preservedDaysToRun: Int? = null,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
     ) {
         runRelativeScheduleSubmit(
             context = context,
-            commands = listOf("CLK F $offsetCommand"),
+            commands = buildList {
+                add("CLK F $offsetCommand")
+                preservedDaysToRun?.let { add("CLK D $it") }
+            },
             primaryField = SettingKey.FINISH_TIME,
             statusPrefix = "Relative Finish Time",
             requestedDeviceName = requestedDeviceName,
@@ -2583,6 +2609,8 @@ object AndroidSessionController {
         context: Context,
         startTimeInput: String,
         defaultEventLengthMinutes: Int,
+        requestedFinishTimeInput: String? = null,
+        preserveDaysToRun: Boolean = false,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -2649,38 +2677,67 @@ object AndroidSessionController {
 
         thread(name = "serialslinger-android-start-time-submit") {
             val result =
-                if (normalizedStartTime == snapshot.settings.startTimeCompact) {
-                    Result.success(noOpSubmitResult(sessionState))
-                } else {
-                    val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-                    val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-                    if (usbDevice == null) {
-                        Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                    } else {
-                        val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                        try {
-                            transport.connect()
-                            val resolvedStartTime = JvmTimeSupport.resolveStartTimeForChange(
-                                startTimeCompact = normalizedStartTime,
-                                currentTimeCompact = snapshot.settings.currentTimeCompact,
-                            )
-                            val derivedFinishTime = resolvedStartTime?.let {
-                                JvmTimeSupport.formatCompactTimestamp(
-                                    JvmTimeSupport.parseCompactTimestamp(it)
-                                        .plusMinutes(validateDefaultEventLengthMinutes(defaultEventLengthMinutes).toLong()),
+                try {
+                    val resolvedStartTime = JvmTimeSupport.resolveStartTimeForChange(
+                        startTimeCompact = normalizedStartTime,
+                        currentTimeCompact = snapshot.settings.currentTimeCompact,
+                    )
+                    val resolvedFinishTime =
+                        resolvedStartTime?.let { startTimeCompact ->
+                            requestedFinishTimeInput
+                                ?.trim()
+                                ?.takeIf { it.isNotEmpty() }
+                                ?.let { requestedFinishInput ->
+                                    val normalizedFinishTime =
+                                        JvmTimeSupport.parseOptionalCompactTimestamp(requestedFinishInput)
+                                            ?: error("Finish Time must not be blank.")
+                                    JvmTimeSupport.resolveScheduleForFinishTimeChange(
+                                        startTimeCompact = startTimeCompact,
+                                        finishTimeCompact = normalizedFinishTime,
+                                        currentTimeCompact = snapshot.settings.currentTimeCompact,
+                                    ).finishTimeCompact
+                                }
+                                ?: JvmTimeSupport.finishTimeCompactFromStart(
+                                    startTimeCompact = startTimeCompact,
+                                    duration = Duration.ofMinutes(validateDefaultEventLengthMinutes(defaultEventLengthMinutes).toLong()),
                                 )
+                        }
+
+                    if (
+                        resolvedStartTime == snapshot.settings.startTimeCompact &&
+                        resolvedFinishTime == snapshot.settings.finishTimeCompact
+                    ) {
+                        Result.success(noOpSubmitResult(sessionState))
+                    } else {
+                        val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
+                        val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
+                        if (usbDevice == null) {
+                            Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
+                        } else {
+                            val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
+                            try {
+                                transport.connect()
+                                val editedSettings = editableSettings.copy(
+                                    startTimeCompact = editableSettings.startTimeCompact.copy(editedValue = resolvedStartTime),
+                                    finishTimeCompact = editableSettings.finishTimeCompact.copy(editedValue = resolvedFinishTime),
+                                )
+                                Result.success(
+                                    DeviceSessionController.submitEdits(
+                                        sessionState,
+                                        editedSettings,
+                                        transport,
+                                        forceWriteKeys = if (preserveDaysToRun) setOf(SettingKey.DAYS_TO_RUN) else emptySet(),
+                                    ),
+                                )
+                            } catch (error: Throwable) {
+                                Result.failure(error)
+                            } finally {
+                                transport.disconnect()
                             }
-                            val editedSettings = editableSettings.copy(
-                                startTimeCompact = editableSettings.startTimeCompact.copy(editedValue = resolvedStartTime),
-                                finishTimeCompact = editableSettings.finishTimeCompact.copy(editedValue = derivedFinishTime),
-                            )
-                            Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                        } catch (error: Throwable) {
-                            Result.failure(error)
-                        } finally {
-                            transport.disconnect()
                         }
                     }
+                } catch (error: Throwable) {
+                    Result.failure(error)
                 }
 
             synchronized(this) {
@@ -2736,6 +2793,7 @@ object AndroidSessionController {
     fun runFinishTimeSubmit(
         context: Context,
         finishTimeInput: String,
+        preserveDaysToRun: Boolean = false,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -2827,7 +2885,14 @@ object AndroidSessionController {
                                         editedValue = resolvedSchedule.finishTimeCompact,
                                     ),
                                 )
-                            Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
+                            Result.success(
+                                DeviceSessionController.submitEdits(
+                                    sessionState,
+                                    editedSettings,
+                                    transport,
+                                    forceWriteKeys = if (preserveDaysToRun) setOf(SettingKey.DAYS_TO_RUN) else emptySet(),
+                                ),
+                            )
                         } catch (error: Throwable) {
                             Result.failure(error)
                         } finally {
@@ -2928,7 +2993,9 @@ object AndroidSessionController {
             appendLine("mediumFrequencyHz=${snapshot.settings.mediumFrequencyHz ?: "<unknown>"}")
             appendLine("highFrequencyHz=${snapshot.settings.highFrequencyHz ?: "<unknown>"}")
             appendLine("beaconFrequencyHz=${snapshot.settings.beaconFrequencyHz ?: "<unknown>"}")
+            appendLine("maximumTemperatureC=${snapshot.status.maximumTemperatureC ?: "<unknown>"}")
             appendLine("temperatureC=${snapshot.status.temperatureC ?: "<unknown>"}")
+            appendLine("minimumTemperatureC=${snapshot.status.minimumTemperatureC ?: "<unknown>"}")
             appendLine("internalBatteryVolts=${snapshot.status.internalBatteryVolts ?: "<unknown>"}")
             appendLine("externalBatteryVolts=${snapshot.status.externalBatteryVolts ?: "<unknown>"}")
             appendLine("eventEnabled=${snapshot.status.eventEnabled ?: "<unknown>"}")

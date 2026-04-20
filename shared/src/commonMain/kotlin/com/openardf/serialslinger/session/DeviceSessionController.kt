@@ -134,9 +134,10 @@ object DeviceSessionController {
         state: DeviceSessionState,
         editedSettings: EditableDeviceSettings,
         transport: DeviceTransport,
+        forceWriteKeys: Set<SettingKey> = emptySet(),
         progress: ((completed: Int, total: Int) -> Unit)? = null,
     ): DeviceSubmitResult {
-        val submission = DeviceSessionWorkflow.submitChanges(state, editedSettings)
+        val submission = DeviceSessionWorkflow.submitChanges(state, editedSettings, forceWriteKeys = forceWriteKeys)
         val submitLines = mutableListOf<String>()
         val submitTraceEntries = mutableListOf<SerialTraceEntry>()
         val validatedSettings = editedSettings.toValidatedDeviceSettings()

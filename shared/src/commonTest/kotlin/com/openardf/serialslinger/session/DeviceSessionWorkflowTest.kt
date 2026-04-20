@@ -36,6 +36,9 @@ class DeviceSessionWorkflowTest {
                 "* Running forever.",
                 "* Starts in: 23 hours 4 minutes 5 seconds",
                 "* Lasts: 2 hours 0 minutes 0 seconds",
+                "*   Cur Temp: 20.9C",
+                "*   Min Temp: 18.4C",
+                "*   Max Temp: 24.2C",
                 "* Int. Bat = 4.1 Volts",
                 "* Ext. Bat =12.8 Volts",
             ),
@@ -55,6 +58,9 @@ class DeviceSessionWorkflowTest {
         assertEquals(3.5, snapshot.settings.lowBatteryThresholdVolts)
         assertEquals(ExternalBatteryControlMode.CHARGE_AND_TRANSMIT, snapshot.settings.externalBatteryControlMode)
         assertTrue(snapshot.settings.transmissionsEnabled)
+        assertEquals(20.9, snapshot.status.temperatureC)
+        assertEquals(18.4, snapshot.status.minimumTemperatureC)
+        assertEquals(24.2, snapshot.status.maximumTemperatureC)
         assertEquals(4.1, snapshot.status.internalBatteryVolts)
         assertEquals(12.8, snapshot.status.externalBatteryVolts)
         assertEquals(1, snapshot.status.daysRemaining)

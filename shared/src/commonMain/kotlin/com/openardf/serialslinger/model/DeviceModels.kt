@@ -76,6 +76,8 @@ data class DeviceInfo(
 data class DeviceStatus(
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
     val temperatureC: Double? = null,
+    val minimumTemperatureC: Double? = null,
+    val maximumTemperatureC: Double? = null,
     val internalBatteryVolts: Double? = null,
     val externalBatteryVolts: Double? = null,
     val daysRemaining: Int? = null,

@@ -15,6 +15,8 @@ data class DeviceInfoPatch(
 
 data class DeviceStatusPatch(
     val temperatureC: Double? = null,
+    val minimumTemperatureC: Double? = null,
+    val maximumTemperatureC: Double? = null,
     val internalBatteryVolts: Double? = null,
     val externalBatteryVolts: Double? = null,
     val daysRemaining: Int? = null,
@@ -109,6 +111,9 @@ object SignalSlingerProtocolCodec {
     private val internalBatteryPattern = Regex("""^\* Int\. Bat\s*=\s*([0-9.]+)\s+Volts$""")
     private val externalBatteryPattern = Regex("""^\* Ext\. Bat\s*=\s*([0-9.]+)\s+Volts$""")
     private val temperaturePattern = Regex("""^\*\s*Temp:\s*(-?\d+(?:\.\d+)?)C$""")
+    private val currentTemperaturePattern = Regex("""^\*\s*Cur Temp:\s*(-?\d+(?:\.\d+)?)C$""")
+    private val maximumTemperaturePattern = Regex("""^\*\s*Max Temp:\s*(-?\d+(?:\.\d+)?)C$""")
+    private val minimumTemperaturePattern = Regex("""^\*\s*Min Temp:\s*(-?\d+(?:\.\d+)?)C$""")
     private val negativeEventStatePatterns = listOf(
         Regex("""^\*\s*Not scheduled$""", RegexOption.IGNORE_CASE),
         Regex("""^\*.*will not run.*$""", RegexOption.IGNORE_CASE),
@@ -300,6 +305,30 @@ object SignalSlingerProtocolCodec {
             return DeviceReportUpdate(
                 deviceStatusPatch = DeviceStatusPatch(
                     temperatureC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        currentTemperaturePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    temperatureC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        maximumTemperaturePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    maximumTemperatureC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        minimumTemperaturePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    minimumTemperatureC = match.groupValues[1].toDouble(),
                 ),
             )
         }

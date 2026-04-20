@@ -52,6 +52,61 @@ class WritePlannerTest {
         assertTrue(plan.changes.single().requiresVerification)
     }
 
+    @Test
+    fun changingStartTimePreservesExplicitFinishWriteWhenAbsoluteFinishMustStayTheSame() {
+        val original = sampleSettings().copy(
+            startTimeCompact = "260410150000",
+            finishTimeCompact = "260410170000",
+        )
+        val edited = original.copy(
+            startTimeCompact = "260410151000",
+            finishTimeCompact = "260410170000",
+        )
+
+        val plan = WritePlanner.create(original, edited)
+
+        assertEquals(
+            listOf(SettingKey.START_TIME, SettingKey.FINISH_TIME),
+            plan.changes.map { it.fieldKey },
+        )
+    }
+
+    @Test
+    fun forceWriteKeysCanRequestUnchangedDaysToRun() {
+        val original = sampleSettings().copy(daysToRun = 3)
+        val edited = original.copy(
+            startTimeCompact = "260410151000",
+            daysToRun = 3,
+        )
+
+        val plan = WritePlanner.create(original, edited, forceWriteKeys = setOf(SettingKey.DAYS_TO_RUN))
+
+        assertEquals(
+            listOf(SettingKey.START_TIME, SettingKey.DAYS_TO_RUN),
+            plan.changes.map { it.fieldKey },
+        )
+    }
+
+    @Test
+    fun forceWriteKeysCanPreserveDaysToRunWhenFinishTimeChanges() {
+        val original = sampleSettings().copy(
+            startTimeCompact = "260410150000",
+            finishTimeCompact = "260410170000",
+            daysToRun = 3,
+        )
+        val edited = original.copy(
+            finishTimeCompact = "260410180000",
+            daysToRun = 3,
+        )
+
+        val plan = WritePlanner.create(original, edited, forceWriteKeys = setOf(SettingKey.DAYS_TO_RUN))
+
+        assertEquals(
+            listOf(SettingKey.FINISH_TIME, SettingKey.DAYS_TO_RUN),
+            plan.changes.map { it.fieldKey },
+        )
+    }
+
     private fun sampleSettings(): DeviceSettings {
         return DeviceSettings(
             stationId = "N0CALL",

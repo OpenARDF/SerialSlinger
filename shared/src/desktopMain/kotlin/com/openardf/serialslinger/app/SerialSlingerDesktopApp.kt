@@ -10,6 +10,13 @@ import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
+import com.openardf.serialslinger.model.StartTimeAdjustmentOption
+import com.openardf.serialslinger.model.StartTimeAdjustmentOptionKind
+import com.openardf.serialslinger.model.StartTimeAdjustmentPlanner
+import com.openardf.serialslinger.model.StartTimeDaysToRunChoice
+import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
+import com.openardf.serialslinger.model.TemperatureAlertLevel
+import com.openardf.serialslinger.model.TemperatureAlertSupport
 import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
@@ -28,12 +35,15 @@ import java.awt.Dialog
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
+import java.awt.Container
 import java.awt.Dimension
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Insets
+import java.awt.KeyboardFocusManager
+import java.awt.Point
 import java.awt.RenderingHints
 import java.awt.Taskbar
 import java.awt.Toolkit
@@ -51,16 +61,19 @@ import java.util.Calendar
 import java.util.Date
 import javax.imageio.ImageIO
 import javax.swing.border.Border
+import javax.swing.AbstractButton
 import javax.swing.BoundedRangeModel
 import javax.swing.BorderFactory
 import javax.swing.BoxLayout
 import javax.swing.Box
+import javax.swing.AbstractAction
 import javax.swing.ButtonGroup
 import javax.swing.JCheckBoxMenuItem
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
 import javax.swing.JComboBox
+import javax.swing.JComponent
 import javax.swing.JDialog
 import javax.swing.JFrame
 import javax.swing.JList
@@ -72,6 +85,7 @@ import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
+import javax.swing.KeyStroke
 import javax.swing.JSpinner
 import javax.swing.JFormattedTextField
 import javax.swing.JEditorPane
@@ -127,6 +141,12 @@ private object SerialSlingerAppIcon {
     }
 }
 
+private data class StartTimeFinishAdjustmentChoice(
+    val label: String,
+    val duration: Duration? = null,
+    val disablesEvent: Boolean = false,
+)
+
 private class FieldAwareSpinnerDateModel(
     initialValue: Date,
     private val defaultCalendarField: Int,
@@ -176,6 +196,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val applyAccentColor = Color(0x16, 0x65, 0x34)
     private val applyAccentRolloverColor = Color(0x15, 0x80, 0x3D)
     private val unreadFieldForeground = Color(0x6B, 0x72, 0x80)
+    private val warningForeground = Color(0x9A, 0x34, 0x12)
     private val alertForeground = Color(0xB9, 0x1C, 0x1C)
     private val portModel = DefaultComboBoxModel<SignalSlingerPortProbe>()
     private val portComboBox = JComboBox(portModel)
@@ -191,6 +212,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val cloneTemplateLabel = JLabel("Clone template not set")
     private val headlineLabel = JLabel(" ")
     private val statusLabel = JLabel("Idle")
+    private var connectionIndicatorState: ConnectionIndicatorState = ConnectionIndicatorState.DISCONNECTED
+    private var connectionIndicatorMessage: String = "Not Connected"
+    private var thermalHeadlineWarningMessage: String? = null
     private var busyDialog: JDialog? = null
     private var busyDialogStatusLabel: JLabel? = null
     private var busyDialogProgressBar: JProgressBar? = null
@@ -250,6 +274,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val daysRemainingLabel = JLabel(" ")
     private val startsInField = JTextField()
     private val lastsField = JTextField()
+    private val lastsRowLabel = JLabel("Lasts")
     private val disableEventButton = JButton("Disable Event")
     private val currentFrequencyField = JTextField()
     private val currentBankField = JTextField()
@@ -267,7 +292,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val versionInfoField = JTextField()
     private val internalBatteryField = JTextField()
     private val externalBatteryField = JTextField()
-    private val temperatureField = JTextField()
+    private val currentTemperatureField = JTextField()
+    private val minimumTemperatureField = JTextField()
+    private val maximumTemperatureField = JTextField()
     private val syncTimeButton = JButton("Sync")
     private val setTimeButton = JButton("Set Time")
     private val currentTimeRowLabel = JLabel("Device Time")
@@ -277,8 +304,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val finishTimeRowLabel = JLabel("Finish Time")
     private val currentFrequencyRowLabel = JLabel("Frequency")
     private val currentBankRowLabel = JLabel("Memory Bank")
-    private val temperatureRowLabel = JLabel("Device Temperature")
+    private val currentTemperatureRowLabel = JLabel("Current Temperature")
+    private val minimumTemperatureRowLabel = JLabel("Minimum Temperature")
+    private val maximumTemperatureRowLabel = JLabel("Maximum Temperature")
     private val transmissionsRowLabel = JLabel("External device being controlled")
+    private val defaultRowLabelForeground = currentTimeRowLabel.foreground
     private val currentTimeRowPanel by lazy { buildCurrentTimeRow() }
     private val manualTimeRowPanel by lazy { buildManualTimeRow() }
     private val currentTimeRowSpacer = Box.createHorizontalStrut(8)
@@ -325,6 +355,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var suppressScheduleInteractionUntilMs: Long = 0L
     private var relativeStartDisplaySelectionOverride: DesktopInputSupport.RelativeTimeSelection? = null
     private var relativeFinishDisplaySelectionOverride: DesktopInputSupport.RelativeTimeSelection? = null
+    private var startTimeFinishAdjustmentDialogOpen: Boolean = false
+    private var startTimeDaysToRunDialogOpen: Boolean = false
     private var displayPreferences: DesktopDisplayPreferences = PreferencesDesktopDisplayPreferencesStore.load()
     private val knownProbeResults = linkedMapOf<String, SignalSlingerPortProbe>()
     private val portMemory: DesktopPortMemory = PreferencesDesktopPortMemory
@@ -388,7 +420,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         versionInfoField.isEditable = false
         internalBatteryField.isEditable = false
         externalBatteryField.isEditable = false
-        temperatureField.isEditable = false
+        currentTemperatureField.isEditable = false
+        minimumTemperatureField.isEditable = false
+        maximumTemperatureField.isEditable = false
         transmissionsField.isEditable = false
         configureInformationalField(currentTimeField)
         configureInformationalField(systemTimeField)
@@ -399,10 +433,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureInformationalField(versionInfoField)
         configureInformationalField(internalBatteryField)
         configureInformationalField(externalBatteryField)
-        configureInformationalField(temperatureField)
+        configureInformationalField(currentTemperatureField)
+        configureInformationalField(minimumTemperatureField)
+        configureInformationalField(maximumTemperatureField)
         configureInformationalField(transmissionsField)
         configureNullableDateTimeSpinner(startTimeSpinner, startTimeStatusLabel)
         configureNullableDateTimeSpinner(finishTimeSpinner, finishTimeStatusLabel)
+        configureDateTimeSpinnerArrowFieldPreservation(manualTimeSpinner)
+        configureDateTimeSpinnerKeyboardFieldPreservation(manualTimeSpinner)
         setDateTimeSpinnerValue(
             manualTimeSpinner,
             DesktopInputSupport.nextSyncTargetTime(minimumLeadMillis = 2_500L),
@@ -465,7 +503,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             cloneTimedEventSettings()
         }
         applyButton.toolTipText = "Make a change in a field, then click Apply."
-        applyButton.addActionListener { commitPendingImmediateEdit() }
+        applyButton.addActionListener { commitFocusedEditorThenPendingImmediateEdit() }
         syncTimeButton.addActionListener { syncDeviceTimeToSystem() }
         setTimeButton.addActionListener { setDeviceTimeToSelection() }
         spinnerEditorTextField(manualTimeSpinner).addActionListener {
@@ -906,7 +944,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     row = addRow(section, row, startTimeRowLabel, startTimeEditorHost)
                     row = addRow(section, row, finishTimeRowLabel, finishTimeEditorHost)
                     row = addRow(section, row, "Event Status", buildEventStatusRow())
-                    row = addRow(section, row, "Lasts", lastsField)
+                    row = addRow(section, row, lastsRowLabel, lastsField)
                     row = addRow(section, row, "Days To Run", buildDaysToRunRow())
                     row = addRow(section, row, frequency1Label, frequency1Field)
                     row = addRow(section, row, frequency2Label, frequency2Field)
@@ -919,7 +957,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 var row = 0
                 row = addRow(section, row, "Internal Battery", internalBatteryField)
                 row = addRow(section, row, "External Battery", externalBatteryField)
-                row = addRow(section, row, temperatureRowLabel, temperatureField)
+                row = addRow(section, row, maximumTemperatureRowLabel, maximumTemperatureField)
+                row = addRow(section, row, currentTemperatureRowLabel, currentTemperatureField)
+                row = addRow(section, row, minimumTemperatureRowLabel, minimumTemperatureField)
                 addRow(section, row, "Version", versionInfoField)
             })
             add(Box.createVerticalGlue())
@@ -1158,11 +1198,27 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         installComboCommitHandler(devicePatternSpeedField) { applyPatternSpeedChange() }
         installComboCommitHandler(timedPatternSpeedField) { applyPatternSpeedChange() }
         installComboCommitHandler(batteryThresholdField) { applyBatteryThresholdChange() }
-        installSpinnerCommitHandler(daysField, "Days To Run") { applyDaysToRunChange() }
-        installSpinnerCommitHandler(frequency1Field, "Frequency 1") { applyFrequency1Change() }
-        installSpinnerCommitHandler(frequency2Field, "Frequency 2") { applyFrequency2Change() }
-        installSpinnerCommitHandler(frequency3Field, "Frequency 3") { applyFrequency3Change() }
-        installSpinnerCommitHandler(frequencyBField, "Frequency B") { applyFrequencyBChange() }
+        installSpinnerCommitHandler(daysField, "Days To Run", hasMeaningfulChange = { true }) { applyDaysToRunChange() }
+        installSpinnerCommitHandler(
+            frequency1Field,
+            "Frequency 1",
+            hasMeaningfulChange = { selectedFrequencyHz(frequency1Field) != currentConnectedTimedSettings().lowFrequencyHz },
+        ) { applyFrequency1Change() }
+        installSpinnerCommitHandler(
+            frequency2Field,
+            "Frequency 2",
+            hasMeaningfulChange = { selectedFrequencyHz(frequency2Field) != currentConnectedTimedSettings().mediumFrequencyHz },
+        ) { applyFrequency2Change() }
+        installSpinnerCommitHandler(
+            frequency3Field,
+            "Frequency 3",
+            hasMeaningfulChange = { selectedFrequencyHz(frequency3Field) != currentConnectedTimedSettings().highFrequencyHz },
+        ) { applyFrequency3Change() }
+        installSpinnerCommitHandler(
+            frequencyBField,
+            "Frequency B",
+            hasMeaningfulChange = { selectedFrequencyHz(frequencyBField) != currentConnectedTimedSettings().beaconFrequencyHz },
+        ) { applyFrequencyBChange() }
 
         eventTypeCombo.addActionListener {
             if (!updatingForm) {
@@ -1179,8 +1235,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 applyBatteryModeChange()
             }
         }
-        installDateTimeCommitHandler(startTimeSpinner, "Start Time") { applyStartTimeChange() }
-        installDateTimeCommitHandler(finishTimeSpinner, "Finish Time") { applyFinishTimeChange() }
+        installDateTimeCommitHandler(
+            startTimeSpinner,
+            "Start Time",
+            hasMeaningfulChange = {
+                selectedDateTimeCompactForComparison(startTimeSpinner, currentConnectedTimedSettings().startTimeCompact) !=
+                    currentConnectedTimedSettings().startTimeCompact
+            },
+        ) { applyStartTimeChange() }
+        installDateTimeCommitHandler(
+            finishTimeSpinner,
+            "Finish Time",
+            hasMeaningfulChange = {
+                selectedDateTimeCompactForComparison(finishTimeSpinner, currentConnectedTimedSettings().finishTimeCompact) !=
+                    currentConnectedTimedSettings().finishTimeCompact
+            },
+        ) { applyFinishTimeChange() }
     }
 
     private fun installTextCommitHandler(field: JTextField, description: String, onCommit: () -> Unit) {
@@ -1192,7 +1262,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
                 private fun markPending() {
                     if (!updatingForm && field.isEditable && field.isEnabled) {
-                        rememberPendingImmediateEdit(description, onCommit)
+                        rememberPendingImmediateEdit(description, field, onCommit)
                     }
                 }
             },
@@ -1221,10 +1291,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun installSpinnerCommitHandler(spinner: JSpinner, description: String, onCommit: () -> Unit) {
+    private fun installSpinnerCommitHandler(
+        spinner: JSpinner,
+        description: String,
+        hasMeaningfulChange: () -> Boolean = { true },
+        onCommit: () -> Unit,
+    ) {
         fun markPending() {
             if (!updatingForm && spinner.isEnabled) {
-                rememberPendingImmediateEdit(description, onCommit)
+                rememberPendingImmediateEdit(description, spinner, onCommit)
             }
         }
 
@@ -1241,16 +1316,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     override fun changedUpdate(event: javax.swing.event.DocumentEvent?) = markPending()
                 },
             )
-            textField.addActionListener {
-                if (!updatingForm && spinner.isEnabled) {
-                    commitPendingImmediateEdit(orElse = onCommit)
-                }
+            val commitAction = {
+                commitSpinnerEditorAndPendingEdit(
+                    spinner = spinner,
+                    source = spinner,
+                    onCommit = onCommit,
+                    canCommit = { !updatingForm && spinner.isEnabled },
+                    hasMeaningfulChange = hasMeaningfulChange,
+                )
             }
+            registerSpinnerEditorCommitAction(textField, commitAction)
+            textField.addActionListener { commitAction() }
             textField.addFocusListener(
                 object : FocusAdapter() {
                     override fun focusLost(event: FocusEvent?) {
                         if (!updatingForm && spinner.isEnabled) {
-                            commitPendingImmediateEdit(orElse = onCommit)
+                            commitAction()
                         }
                     }
                 },
@@ -1266,7 +1347,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun installDateTimeCommitHandler(spinner: JSpinner, description: String, onCommit: () -> Unit) {
+    private fun installDateTimeCommitHandler(
+        spinner: JSpinner,
+        description: String,
+        hasMeaningfulChange: () -> Boolean = { true },
+        onCommit: () -> Unit,
+    ) {
         val textField = spinnerEditorTextField(spinner)
         textField.document.addDocumentListener(
             object : javax.swing.event.DocumentListener {
@@ -1276,40 +1362,98 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
                 private fun markPending() {
                     if (!updatingForm && !isDateTimeCommitSuppressed(spinner) && !shouldSuppressScheduleCommit(spinner)) {
-                        rememberPendingImmediateEdit(description, onCommit)
+                        rememberPendingImmediateEdit(description, spinner, onCommit)
                     }
                 }
             },
         )
-        textField.addActionListener {
-            if (!updatingForm && !isDateTimeCommitSuppressed(spinner) && !shouldSuppressScheduleCommit(spinner)) {
-                commitPendingImmediateEdit(orElse = onCommit)
-            }
+        val commitAction = {
+            commitSpinnerEditorAndPendingEdit(
+                spinner = spinner,
+                source = spinner,
+                onCommit = onCommit,
+                canCommit = {
+                    !updatingForm && !isDateTimeCommitSuppressed(spinner) && !shouldSuppressScheduleCommit(spinner)
+                },
+                hasMeaningfulChange = hasMeaningfulChange,
+            )
         }
+        registerSpinnerEditorCommitAction(textField, commitAction)
+        textField.addActionListener { commitAction() }
         textField.addFocusListener(
             object : FocusAdapter() {
                 override fun focusLost(event: FocusEvent?) {
                     if (!updatingForm && !isDateTimeCommitSuppressed(spinner) && !shouldSuppressScheduleCommit(spinner)) {
-                        commitPendingImmediateEdit(orElse = onCommit)
+                        commitAction()
                     }
                 }
             },
         )
     }
 
-    private fun shouldSuppressScheduleCommit(spinner: JSpinner): Boolean {
-        return spinner in listOf(startTimeSpinner, finishTimeSpinner) && isScheduleInteractionSuppressed()
+    private fun registerSpinnerEditorCommitAction(textField: JFormattedTextField, commitAction: () -> Unit) {
+        textField.inputMap.put(KeyStroke.getKeyStroke("ENTER"), SPINNER_EDITOR_COMMIT_ACTION_KEY)
+        textField.actionMap.put(
+            SPINNER_EDITOR_COMMIT_ACTION_KEY,
+            object : AbstractAction() {
+                override fun actionPerformed(event: java.awt.event.ActionEvent?) {
+                    commitAction()
+                }
+            },
+        )
     }
 
-    private fun rememberPendingImmediateEdit(description: String, onCommit: () -> Unit) {
+    private fun commitSpinnerEditorAndPendingEdit(
+        spinner: JSpinner,
+        source: Any,
+        onCommit: () -> Unit,
+        canCommit: () -> Boolean,
+        hasMeaningfulChange: () -> Boolean,
+    ) {
+        if (!canCommit()) {
+            return
+        }
+        try {
+            spinner.commitEdit()
+        } catch (_: Exception) {
+            // Let the existing field validation path surface the actual problem.
+        }
+        if (!hasMeaningfulChange()) {
+            clearPendingImmediateEdit(source)
+            return
+        }
+        commitPendingImmediateEdit(orElse = onCommit)
+    }
+
+    private fun commitFocusedEditorThenPendingImmediateEdit() {
+        val focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+        val commitAction = (focusOwner as? JFormattedTextField)
+            ?.actionMap
+            ?.get(SPINNER_EDITOR_COMMIT_ACTION_KEY)
+        if (commitAction != null) {
+            commitAction.actionPerformed(null)
+            return
+        }
+        commitPendingImmediateEdit()
+    }
+
+    private fun shouldSuppressScheduleCommit(spinner: JSpinner): Boolean {
+        return spinner in listOf(startTimeSpinner, finishTimeSpinner) &&
+            (isScheduleInteractionSuppressed() || startTimeFinishAdjustmentDialogOpen || startTimeDaysToRunDialogOpen)
+    }
+
+    private fun rememberPendingImmediateEdit(description: String, source: Any, onCommit: () -> Unit) {
         if (backgroundWorkInProgress) {
             return
         }
-        pendingImmediateEdit = PendingImmediateEdit(description, onCommit)
+        pendingImmediateEdit = PendingImmediateEdit(description, source, onCommit)
         updateApplyButtonState()
     }
 
-    private fun clearPendingImmediateEdit() {
+    private fun clearPendingImmediateEdit(source: Any? = null) {
+        if (source != null && pendingImmediateEdit?.source !== source) {
+            return
+        }
         pendingImmediateEdit = null
         updateApplyButtonState()
     }
@@ -1982,8 +2126,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         installFrequencySpinnerLongPressShortcut(frequency3Field, frequency3Label)
         installFrequencySpinnerLongPressShortcut(frequencyBField, frequencyBLabel)
         installSettingLongPressShortcut(
-            targets = listOf(temperatureField, temperatureRowLabel),
-            animatedTargets = listOf(temperatureField, temperatureRowLabel),
+            targets = listOf(currentTemperatureField, currentTemperatureRowLabel),
+            animatedTargets = listOf(currentTemperatureField, currentTemperatureRowLabel),
         ) { toggleTemperatureDisplayUnit() }
         val scheduleAnimatedTargets = listOf(
             startTimeRowLabel,
@@ -2559,6 +2703,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun applyImmediateEdit(
         description: String,
         updatesTimedEventTemplate: Boolean,
+        forceWriteKeys: Set<SettingKey> = emptySet(),
+        showBusyDialog: Boolean = true,
         buildEditable: (DeviceSettings) -> EditableDeviceSettings,
     ) {
         if (updatingForm || backgroundWorkInProgress) {
@@ -2586,7 +2732,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
-        val writePlan = WritePlanner.create(baseSettings, validatedSettings)
+        val writePlan = WritePlanner.create(baseSettings, validatedSettings, forceWriteKeys = forceWriteKeys)
         if (writePlan.changes.isEmpty()) {
             return
         }
@@ -2595,11 +2741,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             ConnectionIndicatorState.SEARCHING,
             "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
         )
-        runInBackground("Applying $description...") {
+        runInBackground("Applying $description...", showBusyDialog = showBusyDialog) {
             val result = DeviceSessionController.submitEdits(
                 state,
                 editable,
                 transport,
+                forceWriteKeys = forceWriteKeys,
                 progress = { completed, total ->
                     setBusyProgressRange(0, 75, completed, total, commandProgressLabel(completed, total))
                 },
@@ -2849,28 +2996,69 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (isScheduleInteractionSuppressed()) {
             return
         }
-        clearRelativeScheduleDisplayOverrides()
         val connectedTimedSettings = currentConnectedTimedSettings()
-        val normalizedStartTime = normalizedStartTimeSelectionForCommit(connectedTimedSettings.startTimeCompact) ?: return
-        val derivedFinishTime = DesktopInputSupport.finishTimeCompactFromStart(
-            startTimeCompact = normalizedStartTime,
-            defaultEventLengthMinutes = displayPreferences.defaultEventLengthMinutes,
+        val selectedStartTimeCompact = selectedDateTimeCompactForComparison(
+            startTimeSpinner,
+            connectedTimedSettings.startTimeCompact,
         )
-        applyImmediateEdit("Start Time", updatesTimedEventTemplate = true) { base ->
-            EditableDeviceSettings.fromDeviceSettings(base).copy(
-                startTimeCompact = SettingsField(
-                    "startTimeCompact",
+        if (selectedStartTimeCompact == connectedTimedSettings.startTimeCompact) {
+            clearPendingImmediateEdit(startTimeSpinner)
+            return
+        }
+        clearRelativeScheduleDisplayOverrides()
+        val normalizedStartTime = normalizedStartTimeSelectionForCommit(
+            originalStartTimeCompact = connectedTimedSettings.startTimeCompact,
+            selectedCompact = selectedStartTimeCompact,
+        ) ?: return
+        val currentDurationFinishTime = currentFinishTimeCompactForStartAdjustment(connectedTimedSettings.finishTimeCompact)
+        chooseStartTimeFinishAdjustmentDuration(
+            currentStartTimeCompact = connectedTimedSettings.startTimeCompact,
+            currentFinishTimeCompact = currentDurationFinishTime,
+            proposedStartTimeCompact = normalizedStartTime,
+            onCancel = {
+                restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
+            },
+        ) { choice ->
+            if (choice.disablesEvent) {
+                disableEventViaStartTimeCommand()
+                return@chooseStartTimeFinishAdjustmentDuration
+            }
+            val chosenDuration = choice.duration ?: return@chooseStartTimeFinishAdjustmentDuration
+            chooseStartTimeDaysToRunHandling(
+                currentDaysToRun = connectedTimedSettings.daysToRun,
+                onCancel = {
+                    restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
+                },
+            ) { daysChoice ->
+                val derivedFinishTime = DesktopInputSupport.finishTimeCompactFromStart(
+                    startTimeCompact = normalizedStartTime,
+                    duration = chosenDuration,
+                )
+                val forceWriteKeys = when (daysChoice) {
+                    StartTimeDaysToRunChoice.PRESERVE -> setOf(SettingKey.DAYS_TO_RUN)
+                    StartTimeDaysToRunChoice.RESET -> emptySet()
+                }
+                applyImmediateEdit(
                     "Start Time",
-                    base.startTimeCompact,
-                    normalizedStartTime,
-                ),
-                finishTimeCompact = SettingsField(
-                    "finishTimeCompact",
-                    "Finish Time",
-                    base.finishTimeCompact,
-                    derivedFinishTime,
-                ),
-            )
+                    updatesTimedEventTemplate = true,
+                    forceWriteKeys = forceWriteKeys,
+                ) { base ->
+                    EditableDeviceSettings.fromDeviceSettings(base).copy(
+                        startTimeCompact = SettingsField(
+                            "startTimeCompact",
+                            "Start Time",
+                            base.startTimeCompact,
+                            normalizedStartTime,
+                        ),
+                        finishTimeCompact = SettingsField(
+                            "finishTimeCompact",
+                            "Finish Time",
+                            base.finishTimeCompact,
+                            derivedFinishTime,
+                        ),
+                    )
+                }
+            }
         }
     }
 
@@ -2878,31 +3066,59 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (isScheduleInteractionSuppressed()) {
             return
         }
-        clearRelativeScheduleDisplayOverrides()
         val connectedTimedSettings = currentConnectedTimedSettings()
+        val selectedFinishTimeCompact = selectedDateTimeCompactForComparison(
+            finishTimeSpinner,
+            connectedTimedSettings.finishTimeCompact,
+        )
+        if (selectedFinishTimeCompact == connectedTimedSettings.finishTimeCompact) {
+            clearPendingImmediateEdit(finishTimeSpinner)
+            return
+        }
+        clearRelativeScheduleDisplayOverrides()
         val normalizedFinishTime = normalizedFinishTimeSelectionForCommit(
             originalStartTimeCompact = connectedTimedSettings.startTimeCompact,
             originalFinishTimeCompact = connectedTimedSettings.finishTimeCompact,
+            selectedCompact = selectedFinishTimeCompact,
         ) ?: return
-        applyImmediateEdit("Finish Time", updatesTimedEventTemplate = true) { base ->
-            val validatedSchedule = DesktopInputSupport.resolveScheduleForFinishTimeChange(
-                startTimeCompact = normalizedStartTimeSelectionForCommit(connectedTimedSettings.startTimeCompact),
-                finishTimeCompact = normalizedFinishTime,
-                currentTimeCompact = displayedDeviceTimeCompact(),
-            )
-            EditableDeviceSettings.fromDeviceSettings(base).copy(
-                finishTimeCompact = SettingsField(
-                    "finishTimeCompact",
-                    "Finish Time",
-                    base.finishTimeCompact,
-                    validatedSchedule.finishTimeCompact,
-                ),
-            )
+        chooseStartTimeDaysToRunHandling(
+            currentDaysToRun = connectedTimedSettings.daysToRun,
+            onCancel = {
+                restoreAbsoluteFinishTimeEditor(connectedTimedSettings.finishTimeCompact)
+            },
+        ) { daysChoice ->
+            val forceWriteKeys = when (daysChoice) {
+                StartTimeDaysToRunChoice.PRESERVE -> setOf(SettingKey.DAYS_TO_RUN)
+                StartTimeDaysToRunChoice.RESET -> emptySet()
+            }
+            applyImmediateEdit(
+                "Finish Time",
+                updatesTimedEventTemplate = true,
+                forceWriteKeys = forceWriteKeys,
+            ) { base ->
+                val validatedSchedule = DesktopInputSupport.resolveScheduleForFinishTimeChange(
+                    startTimeCompact = normalizedStartTimeSelectionForCommit(connectedTimedSettings.startTimeCompact),
+                    finishTimeCompact = normalizedFinishTime,
+                    currentTimeCompact = displayedDeviceTimeCompact(),
+                )
+                EditableDeviceSettings.fromDeviceSettings(base).copy(
+                    finishTimeCompact = SettingsField(
+                        "finishTimeCompact",
+                        "Finish Time",
+                        base.finishTimeCompact,
+                        validatedSchedule.finishTimeCompact,
+                    ),
+                )
+            }
         }
     }
 
-    private fun normalizedStartTimeSelectionForCommit(originalStartTimeCompact: String?): String? {
-        val selectedCompact = takePendingDateTimeCompact(startTimeSpinner)
+    private fun normalizedStartTimeSelectionForCommit(
+        originalStartTimeCompact: String?,
+        selectedCompact: String? = null,
+    ): String? {
+        val selectedCompact = selectedCompact
+            ?: takePendingDateTimeCompact(startTimeSpinner)
             ?: selectedDateTimeCompact(startTimeSpinner, originalStartTimeCompact)
         val validatedSelected = try {
             DesktopInputSupport.validateStartTimeForWrite(selectedCompact)
@@ -2936,6 +3152,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun normalizedFinishTimeSelectionForCommit(
         originalStartTimeCompact: String?,
         originalFinishTimeCompact: String?,
+        selectedCompact: String? = null,
     ): String? {
         val validatedDeviceTime = try {
             DesktopInputSupport.validateCurrentTimeForWrite(displayedDeviceTimeCompact())
@@ -2949,7 +3166,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         val normalizedStart = normalizedStartTimeSelectionForCommit(originalStartTimeCompact) ?: return null
-        val selectedCompact = takePendingDateTimeCompact(finishTimeSpinner)
+        val selectedCompact = selectedCompact
+            ?: takePendingDateTimeCompact(finishTimeSpinner)
             ?: selectedDateTimeCompact(finishTimeSpinner, originalFinishTimeCompact)
         val validatedSelected = try {
             DesktopInputSupport.validateFinishTimeForWrite(selectedCompact)
@@ -2984,52 +3202,72 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun applyFrequency1Change() {
+        val selectedFrequency = selectedFrequencyHz(frequency1Field)
+        if (selectedFrequency == currentConnectedTimedSettings().lowFrequencyHz) {
+            clearPendingImmediateEdit(frequency1Field)
+            return
+        }
         applyImmediateEdit("Frequency 1", updatesTimedEventTemplate = true) { base ->
             EditableDeviceSettings.fromDeviceSettings(base).copy(
                 lowFrequencyHz = SettingsField(
                     "lowFrequencyHz",
                     "Frequency 1 (FRE 1)",
                     base.lowFrequencyHz,
-                    selectedFrequencyHz(frequency1Field),
+                    selectedFrequency,
                 ),
             )
         }
     }
 
     private fun applyFrequency2Change() {
+        val selectedFrequency = selectedFrequencyHz(frequency2Field)
+        if (selectedFrequency == currentConnectedTimedSettings().mediumFrequencyHz) {
+            clearPendingImmediateEdit(frequency2Field)
+            return
+        }
         applyImmediateEdit("Frequency 2", updatesTimedEventTemplate = true) { base ->
             EditableDeviceSettings.fromDeviceSettings(base).copy(
                 mediumFrequencyHz = SettingsField(
                     "mediumFrequencyHz",
                     "Frequency 2 (FRE 2)",
                     base.mediumFrequencyHz,
-                    selectedFrequencyHz(frequency2Field),
+                    selectedFrequency,
                 ),
             )
         }
     }
 
     private fun applyFrequency3Change() {
+        val selectedFrequency = selectedFrequencyHz(frequency3Field)
+        if (selectedFrequency == currentConnectedTimedSettings().highFrequencyHz) {
+            clearPendingImmediateEdit(frequency3Field)
+            return
+        }
         applyImmediateEdit("Frequency 3", updatesTimedEventTemplate = true) { base ->
             EditableDeviceSettings.fromDeviceSettings(base).copy(
                 highFrequencyHz = SettingsField(
                     "highFrequencyHz",
                     "Frequency 3 (FRE 3)",
                     base.highFrequencyHz,
-                    selectedFrequencyHz(frequency3Field),
+                    selectedFrequency,
                 ),
             )
         }
     }
 
     private fun applyFrequencyBChange() {
+        val selectedFrequency = selectedFrequencyHz(frequencyBField)
+        if (selectedFrequency == currentConnectedTimedSettings().beaconFrequencyHz) {
+            clearPendingImmediateEdit(frequencyBField)
+            return
+        }
         applyImmediateEdit("Frequency B", updatesTimedEventTemplate = true) { base ->
             EditableDeviceSettings.fromDeviceSettings(base).copy(
                 beaconFrequencyHz = SettingsField(
                     "beaconFrequencyHz",
                     "Frequency B (FRE B)",
                     base.beaconFrequencyHz,
-                    selectedFrequencyHz(frequencyBField),
+                    selectedFrequency,
                 ),
             )
         }
@@ -3242,14 +3480,435 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             ScheduleTimeField.START -> "Relative Start Time"
             ScheduleTimeField.FINISH -> "Relative Finish Time"
         }
-        val commands = when (field) {
-            ScheduleTimeField.START -> listOf(
-                "CLK S ${DesktopInputSupport.formatRelativeTimeCommand(selection)}",
-                "CLK F ${DesktopInputSupport.formatRelativeTimeCommand(defaultEventLengthRelativeSelection())}",
+        if (field == ScheduleTimeField.START) {
+            val proposedStartTimeCompact = DesktopInputSupport.relativeTargetTimeCompact(
+                baseCompact = displayedDeviceTimeCompact(),
+                selection = selection,
             )
-            ScheduleTimeField.FINISH -> listOf(
-                "CLK F ${DesktopInputSupport.formatRelativeTimeCommand(selection)}",
+            chooseStartTimeFinishAdjustmentDuration(
+                currentStartTimeCompact = snapshot.settings.startTimeCompact,
+                currentFinishTimeCompact = snapshot.settings.finishTimeCompact,
+                proposedStartTimeCompact = proposedStartTimeCompact,
+                onCancel = {
+                    restoreRelativeStartTimeEditor()
+                },
+            ) { choice ->
+                if (choice.disablesEvent) {
+                    clearRelativeScheduleDisplayOverrides()
+                    disableEventViaStartTimeCommand(transport, state)
+                    return@chooseStartTimeFinishAdjustmentDuration
+                }
+                val chosenStartDuration = choice.duration ?: return@chooseStartTimeFinishAdjustmentDuration
+                chooseStartTimeDaysToRunHandling(
+                    currentDaysToRun = snapshot.settings.daysToRun,
+                    onCancel = {
+                        restoreRelativeStartTimeEditor()
+                    },
+                ) { daysChoice ->
+                    applyRelativeStartTimeChange(
+                        selection = selection,
+                        chosenDuration = chosenStartDuration,
+                        transport = transport,
+                        state = state,
+                        preservedDaysToRun = when (daysChoice) {
+                            StartTimeDaysToRunChoice.PRESERVE -> snapshot.settings.daysToRun
+                            StartTimeDaysToRunChoice.RESET -> null
+                        },
+                    )
+                }
+            }
+            return
+        }
+        chooseStartTimeDaysToRunHandling(
+            currentDaysToRun = snapshot.settings.daysToRun,
+            onCancel = {
+                restoreRelativeFinishTimeEditor()
+            },
+        ) { daysChoice ->
+            val commands = buildList {
+                add("CLK F ${DesktopInputSupport.formatRelativeTimeCommand(selection)}")
+                if (daysChoice == StartTimeDaysToRunChoice.PRESERVE) {
+                    add("CLK D ${snapshot.settings.daysToRun}")
+                }
+            }
+
+            showConnectionIndicator(
+                ConnectionIndicatorState.SEARCHING,
+                "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
             )
+            runInBackground("Applying $description...") {
+                setBusyProgress(0, 100, "Sending relative schedule command")
+                val sentAtMs = System.currentTimeMillis()
+                transport.sendCommands(commands)
+                val responseLines = transport.readAvailableLines()
+                val receivedAtMs = System.currentTimeMillis()
+                extractDeviceError(responseLines)?.let { error ->
+                    throw IllegalStateException(error)
+                }
+
+                val updatedState = if (responseLines.isNotEmpty()) {
+                    DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+                } else {
+                    state
+                }
+
+                val refreshed = DeviceSessionController.refreshFromDevice(
+                    updatedState,
+                    transport,
+                    startEditing = true,
+                    progress = { completed, total ->
+                        setBusyProgressRange(20, 95, completed, total, commandProgressLabel(completed, total))
+                    },
+                )
+                setBusyProgress(97, 100, "Checking device time")
+                val refreshClockSample = postLoadClockSample(transport, refreshed.state.snapshot)
+                if (refreshClockSample != null) {
+                    setBusyProgress(100, 100, "Done")
+                } else {
+                    setBusyProgress(100, 100, "Done")
+                }
+                val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
+                currentState = refreshedWithClock.state
+                loadedSnapshot = refreshedWithClock.state.snapshot
+                refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+
+                SwingUtilities.invokeLater {
+                    relativeFinishDisplaySelectionOverride = selection
+                    refreshClockSample?.second?.let(::applyClockDisplayAnchor)
+                    applySnapshotToForm(
+                        refreshedWithClock.state.snapshot,
+                        recalculateClockOffset = refreshClockSample == null,
+                    )
+                    updateCloneTemplateLabel(
+                        "Clone template updated from current device.",
+                        Color(0x0B, 0x3D, 0x91),
+                    )
+                    appendRelativeScheduleLog(
+                        title = "Apply $description",
+                        commands = commands,
+                        sentAtMs = sentAtMs,
+                        responseLines = responseLines,
+                        receivedAtMs = receivedAtMs,
+                        refreshResult = refreshedWithClock,
+                    )
+                    showConnectionIndicator(
+                        ConnectionIndicatorState.CONNECTED,
+                        "Applied $description on ${currentConnectedPortPath.orEmpty()}.",
+                    )
+                    setStatus("Applied $description.")
+                }
+            }
+        }
+    }
+
+    private fun chooseStartTimeFinishAdjustmentDuration(
+        currentStartTimeCompact: String?,
+        currentFinishTimeCompact: String?,
+        proposedStartTimeCompact: String?,
+        onCancel: () -> Unit,
+        onSelected: (StartTimeFinishAdjustmentChoice) -> Unit,
+    ) {
+        val plannedOptions = StartTimeAdjustmentPlanner.plan(
+            currentStartTimeCompact = currentStartTimeCompact,
+            currentFinishTimeCompact = currentFinishTimeCompact,
+            proposedStartTimeCompact = proposedStartTimeCompact,
+            defaultEventLengthMinutes = displayPreferences.defaultEventLengthMinutes,
+        )
+        if (plannedOptions.size == 1) {
+            onSelected(plannedOptions.single().toDesktopStartTimeFinishAdjustmentChoice())
+            return
+        }
+        if (startTimeFinishAdjustmentDialogOpen) {
+            return
+        }
+        startTimeFinishAdjustmentDialogOpen = true
+        val selectedDuration = try {
+            val options = plannedOptions.map { it.toDesktopStartTimeFinishAdjustmentChoice() }
+            showStartTimeFinishAdjustmentDialog(options)
+        } finally {
+            startTimeFinishAdjustmentDialogOpen = false
+        }
+        if (selectedDuration != null) {
+            onSelected(selectedDuration)
+        } else {
+            onCancel()
+        }
+    }
+
+    private fun showStartTimeFinishAdjustmentDialog(
+        options: List<StartTimeFinishAdjustmentChoice>,
+    ): StartTimeFinishAdjustmentChoice? {
+        var selectedChoice: StartTimeFinishAdjustmentChoice? = null
+        val dialog = JDialog(this, "Adjust Finish Time", true).apply {
+            defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
+            isResizable = false
+        }
+
+        val content = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = BorderFactory.createEmptyBorder(14, 14, 14, 14)
+            add(JLabel("Choose desired event duration:").apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+            add(Box.createVerticalStrut(12))
+            options.forEach { option ->
+                add(
+                    JButton(option.label).apply {
+                        alignmentX = Component.LEFT_ALIGNMENT
+                        maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+                        addActionListener {
+                            selectedChoice = option
+                            dialog.dispose()
+                        }
+                    },
+                )
+                add(Box.createVerticalStrut(8))
+            }
+            add(
+                JButton("Cancel").apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+                    addActionListener { dialog.dispose() }
+                },
+            )
+        }
+
+        dialog.contentPane.add(content)
+        dialog.pack()
+        dialog.setLocationRelativeTo(this)
+        dialog.isVisible = true
+        return selectedChoice
+    }
+
+    private fun StartTimeAdjustmentOption.toDesktopStartTimeFinishAdjustmentChoice(): StartTimeFinishAdjustmentChoice {
+        return when (kind) {
+            StartTimeAdjustmentOptionKind.KEEP_EXISTING_DURATION -> StartTimeFinishAdjustmentChoice(
+                label = "Keep ${DesktopInputSupport.formatDurationCompact(duration!!)}",
+                duration = duration,
+            )
+            StartTimeAdjustmentOptionKind.ADJUST_FOR_DEFAULT_DURATION -> StartTimeFinishAdjustmentChoice(
+                label = "Adjust for ${DesktopInputSupport.formatDefaultEventLength(displayPreferences.defaultEventLengthMinutes)}",
+                duration = duration,
+            )
+            StartTimeAdjustmentOptionKind.LEAVE_FINISH_UNCHANGED -> StartTimeFinishAdjustmentChoice(
+                label = "Leave Finish unchanged (${DesktopInputSupport.formatDurationCompact(duration!!)})",
+                duration = duration,
+            )
+            StartTimeAdjustmentOptionKind.DISABLE_EVENT -> StartTimeFinishAdjustmentChoice(
+                label = "Disable Event",
+                disablesEvent = true,
+            )
+        }
+    }
+
+    private fun chooseStartTimeDaysToRunHandling(
+        currentDaysToRun: Int,
+        onCancel: () -> Unit,
+        onSelected: (StartTimeDaysToRunChoice) -> Unit,
+    ) {
+        val plan = StartTimeDaysToRunPlanner.plan(currentDaysToRun)
+        if (plan.autoChoice != null) {
+            runAfterModalUiSettles {
+                onSelected(plan.autoChoice)
+            }
+            return
+        }
+        val selectedChoiceIndex = showStartTimeDaysToRunDialog(plan.options.map { it.label })
+        if (selectedChoiceIndex != null) {
+            runAfterModalUiSettles {
+                onSelected(plan.options[selectedChoiceIndex].choice)
+            }
+        } else {
+            runAfterModalUiSettles {
+                onCancel()
+            }
+        }
+    }
+
+    private fun runAfterModalUiSettles(action: () -> Unit) {
+        SwingUtilities.invokeLater {
+            SwingUtilities.invokeLater {
+                action()
+            }
+        }
+    }
+
+    private fun showStartTimeDaysToRunDialog(optionLabels: List<String>): Int? {
+        var selectedChoiceIndex: Int? = null
+        val dialog = JDialog(this, "Days To Run", true).apply {
+            defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
+            isResizable = false
+        }
+        startTimeDaysToRunDialogOpen = true
+
+        val content = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = BorderFactory.createEmptyBorder(14, 14, 14, 14)
+            add(JLabel("Choose Days To Run handling:").apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+            add(Box.createVerticalStrut(12))
+            optionLabels.forEachIndexed { index, label ->
+                add(
+                    JButton(label).apply {
+                        alignmentX = Component.LEFT_ALIGNMENT
+                        maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+                        addActionListener {
+                            selectedChoiceIndex = index
+                            dialog.dispose()
+                        }
+                    },
+                )
+                add(Box.createVerticalStrut(8))
+            }
+            add(
+                JButton("Cancel").apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+                    addActionListener { dialog.dispose() }
+                },
+            )
+        }
+
+        dialog.contentPane.add(content)
+        dialog.pack()
+        dialog.setLocationRelativeTo(this)
+        try {
+            dialog.isVisible = true
+        } finally {
+            startTimeDaysToRunDialogOpen = false
+        }
+        return selectedChoiceIndex
+    }
+
+    private fun disableEventViaStartTimeCommand(
+        transport: DesktopSerialTransport? = currentTransport,
+        state: DeviceSessionState? = currentState,
+    ) {
+        if (updatingForm || backgroundWorkInProgress) {
+            return
+        }
+        val activeTransport = transport ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        val activeState = state ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+
+        val description = "Disable Event"
+        val commands = listOf("CLK S =")
+        showConnectionIndicator(
+            ConnectionIndicatorState.SEARCHING,
+            "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
+        )
+        runInBackground("Applying $description...") {
+            setBusyProgress(0, 100, "Sending schedule command")
+            val sentAtMs = System.currentTimeMillis()
+            activeTransport.sendCommands(commands)
+            val responseLines = activeTransport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
+            extractDeviceError(responseLines)?.let { error ->
+                throw IllegalStateException(error)
+            }
+
+            val updatedState = if (responseLines.isNotEmpty()) {
+                DeviceSessionWorkflow.ingestReportLines(activeState, responseLines)
+            } else {
+                activeState
+            }
+
+            val refreshed = DeviceSessionController.refreshFromDevice(
+                updatedState,
+                activeTransport,
+                startEditing = true,
+                progress = { completed, total ->
+                    setBusyProgressRange(20, 95, completed, total, commandProgressLabel(completed, total))
+                },
+            )
+            setBusyProgress(97, 100, "Checking device time")
+            val refreshClockSample = postLoadClockSample(activeTransport, refreshed.state.snapshot)
+            setBusyProgress(100, 100, "Done")
+            val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
+            currentState = refreshedWithClock.state
+            loadedSnapshot = refreshedWithClock.state.snapshot
+            refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+
+            SwingUtilities.invokeLater {
+                clearRelativeScheduleDisplayOverrides()
+                refreshClockSample?.second?.let(::applyClockDisplayAnchor)
+                applySnapshotToForm(
+                    refreshedWithClock.state.snapshot,
+                    recalculateClockOffset = refreshClockSample == null,
+                )
+                updateCloneTemplateLabel(
+                    "Clone template updated from current device.",
+                    Color(0x0B, 0x3D, 0x91),
+                )
+                appendRelativeScheduleLog(
+                    title = description,
+                    commands = commands,
+                    sentAtMs = sentAtMs,
+                    responseLines = responseLines,
+                    receivedAtMs = receivedAtMs,
+                    refreshResult = refreshedWithClock,
+                )
+                showConnectionIndicator(
+                    ConnectionIndicatorState.CONNECTED,
+                    "Applied $description on ${currentConnectedPortPath.orEmpty()}.",
+                )
+                setStatus("Event disabled.")
+            }
+        }
+    }
+
+    private fun currentFinishTimeCompactForStartAdjustment(originalFinishTimeCompact: String?): String? {
+        if (displayPreferences.scheduleTimeInputMode != ScheduleTimeInputMode.ABSOLUTE) {
+            return originalFinishTimeCompact
+        }
+        return runCatching {
+            selectedDateTimeCompact(finishTimeSpinner, originalFinishTimeCompact)
+        }.getOrDefault(originalFinishTimeCompact)
+    }
+
+    private fun restoreAbsoluteStartTimeEditor(startTimeCompact: String?) {
+        clearPendingDateTimeCompact(startTimeSpinner)
+        setDateTimeEditorValue(startTimeSpinner, startTimeStatusLabel, startTimeCompact)
+        clearPendingImmediateEdit()
+    }
+
+    private fun restoreRelativeStartTimeEditor() {
+        relativeStartDisplaySelectionOverride = null
+        refreshScheduleTimeEditorPresentation(loadedSnapshot)
+        clearPendingImmediateEdit()
+    }
+
+    private fun restoreAbsoluteFinishTimeEditor(finishTimeCompact: String?) {
+        clearPendingDateTimeCompact(finishTimeSpinner)
+        setDateTimeEditorValue(finishTimeSpinner, finishTimeStatusLabel, finishTimeCompact)
+        clearPendingImmediateEdit()
+    }
+
+    private fun restoreRelativeFinishTimeEditor() {
+        relativeFinishDisplaySelectionOverride = null
+        refreshScheduleTimeEditorPresentation(loadedSnapshot)
+        clearPendingImmediateEdit()
+    }
+
+    private fun applyRelativeStartTimeChange(
+        selection: DesktopInputSupport.RelativeTimeSelection,
+        chosenDuration: Duration,
+        transport: DesktopSerialTransport,
+        state: DeviceSessionState,
+        preservedDaysToRun: Int? = null,
+    ) {
+        val description = "Relative Start Time"
+        val chosenFinishSelection = DesktopInputSupport.relativeTimeSelectionForDuration(chosenDuration)
+        val commands = buildList {
+            add("CLK S ${DesktopInputSupport.formatRelativeTimeCommand(selection)}")
+            add("CLK F ${DesktopInputSupport.formatRelativeDurationCommand(chosenDuration)}")
+            preservedDaysToRun?.let { add("CLK D $it") }
         }
 
         showConnectionIndicator(
@@ -3282,26 +3941,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             setBusyProgress(97, 100, "Checking device time")
             val refreshClockSample = postLoadClockSample(transport, refreshed.state.snapshot)
-            if (refreshClockSample != null) {
-                setBusyProgress(100, 100, "Done")
-            } else {
-                setBusyProgress(100, 100, "Done")
-            }
+            setBusyProgress(100, 100, "Done")
             val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
             currentState = refreshedWithClock.state
             loadedSnapshot = refreshedWithClock.state.snapshot
             refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
 
             SwingUtilities.invokeLater {
-                when (field) {
-                    ScheduleTimeField.START -> {
-                        relativeStartDisplaySelectionOverride = selection
-                        relativeFinishDisplaySelectionOverride = defaultEventLengthRelativeSelection()
-                    }
-                    ScheduleTimeField.FINISH -> {
-                        relativeFinishDisplaySelectionOverride = selection
-                    }
-                }
+                relativeStartDisplaySelectionOverride = selection
+                relativeFinishDisplaySelectionOverride = chosenFinishSelection
                 refreshClockSample?.second?.let(::applyClockDisplayAnchor)
                 applySnapshotToForm(
                     refreshedWithClock.state.snapshot,
@@ -3416,10 +4064,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             ), unreadPlaceholder = false)
             setInformationalFieldText(internalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.internalBatteryVolts), unreadPlaceholder = false)
             setInformationalFieldText(externalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.externalBatteryVolts), unreadPlaceholder = false)
-            setInformationalFieldText(temperatureField, DesktopInputSupport.formatTemperatureOrWaiting(
-                snapshot.status.temperatureC,
-                displayPreferences.temperatureDisplayUnit,
-            ), unreadPlaceholder = false)
+            updateTemperatureRow(
+                rowLabel = maximumTemperatureRowLabel,
+                field = maximumTemperatureField,
+                temperatureC = snapshot.status.maximumTemperatureC,
+            )
+            updateTemperatureRow(
+                rowLabel = currentTemperatureRowLabel,
+                field = currentTemperatureField,
+                temperatureC = snapshot.status.temperatureC,
+            )
+            updateTemperatureRow(
+                rowLabel = minimumTemperatureRowLabel,
+                field = minimumTemperatureField,
+                temperatureC = snapshot.status.minimumTemperatureC,
+            )
+            updateThermalHeadlineWarning(snapshot.status.temperatureC)
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
             if (recalculateClockOffset) {
                 updateDeviceClockOffset(settings.currentTimeCompact)
@@ -4070,6 +4730,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun setScheduleTimeInputMode(mode: ScheduleTimeInputMode) {
+        if (startTimeFinishAdjustmentDialogOpen || startTimeDaysToRunDialogOpen) {
+            return
+        }
         if (displayPreferences.scheduleTimeInputMode == mode) {
             return
         }
@@ -4154,6 +4817,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun toggleScheduleTimeInputMode() {
+        if (startTimeFinishAdjustmentDialogOpen || startTimeDaysToRunDialogOpen) {
+            return
+        }
         setScheduleTimeInputMode(
             if (displayPreferences.scheduleTimeInputMode == ScheduleTimeInputMode.ABSOLUTE) {
                 ScheduleTimeInputMode.RELATIVE
@@ -4220,6 +4886,53 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun setStatus(status: String) {
         statusLabel.text = status
         busyDialogStatusLabel?.text = formatBusyDialogStatus(status)
+    }
+
+    private fun updateTemperatureRow(
+        rowLabel: JLabel,
+        field: JTextField,
+        temperatureC: Double?,
+    ) {
+        setInformationalFieldText(
+            field,
+            DesktopInputSupport.formatTemperatureOrWaiting(temperatureC, displayPreferences.temperatureDisplayUnit),
+            unreadPlaceholder = false,
+        )
+        val alertColor = when (TemperatureAlertSupport.alertLevel(temperatureC)) {
+            TemperatureAlertLevel.NORMAL -> null
+            TemperatureAlertLevel.WARNING -> warningForeground
+            TemperatureAlertLevel.DANGER -> alertForeground
+        }
+        rowLabel.foreground = alertColor ?: defaultRowLabelForeground
+        field.foreground = alertColor ?: defaultInformationalFieldForeground
+        field.disabledTextColor = field.foreground
+    }
+
+    private fun clearTemperatureRow(rowLabel: JLabel, field: JTextField) {
+        rowLabel.foreground = defaultRowLabelForeground
+        setInformationalFieldText(field, "Not read")
+    }
+
+    private fun updateThermalHeadlineWarning(currentTemperatureC: Double?) {
+        thermalHeadlineWarningMessage =
+            when (TemperatureAlertSupport.alertLevel(currentTemperatureC)) {
+                TemperatureAlertLevel.DANGER -> {
+                    "High Temperature Warning! Current temperature ${
+                        DesktopInputSupport.formatTemperatureOrWaiting(
+                            currentTemperatureC,
+                            displayPreferences.temperatureDisplayUnit,
+                        )
+                    }. Reduce device temperature before continuing."
+                }
+                TemperatureAlertLevel.NORMAL,
+                TemperatureAlertLevel.WARNING,
+                -> if (currentTemperatureC != null) {
+                    null
+                } else {
+                    thermalHeadlineWarningMessage
+                }
+            }
+        renderConnectionIndicator()
     }
 
     private fun scheduleBusyDialog(status: String) {
@@ -4418,6 +5131,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun showConnectionIndicator(state: ConnectionIndicatorState, message: String) {
+        connectionIndicatorState = state
+        connectionIndicatorMessage = message
+        renderConnectionIndicator()
+    }
+
+    private fun renderConnectionIndicator() {
+        val state = if (thermalHeadlineWarningMessage != null) {
+            ConnectionIndicatorState.DISCONNECTED
+        } else {
+            connectionIndicatorState
+        }
+        val message = thermalHeadlineWarningMessage ?: connectionIndicatorMessage
         headlineLabel.text = "${state.label}: $message"
         headlineLabel.foreground = state.foreground
         headlineLabel.background = state.background
@@ -5181,11 +5906,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             startsInFallback = snapshot.status.eventStartsInSummary,
             daysToRun = timedSettings.daysToRun,
         ), unreadPlaceholder = false)
-        setInformationalFieldText(lastsField, DesktopInputSupport.describeEventDuration(
+        val lastsAlertActive = DesktopInputSupport.eventDurationDiffersFromDefault(
             startTimeCompact = timedSettings.startTimeCompact,
             finishTimeCompact = timedSettings.finishTimeCompact,
-            fallback = snapshot.status.eventDurationSummary,
-        ), unreadPlaceholder = false)
+            defaultEventLengthMinutes = displayPreferences.defaultEventLengthMinutes,
+        )
+        lastsRowLabel.foreground = if (lastsAlertActive) alertForeground else defaultRowLabelForeground
+        setInformationalFieldText(
+            lastsField,
+            DesktopInputSupport.describeEventDuration(
+                startTimeCompact = timedSettings.startTimeCompact,
+                finishTimeCompact = timedSettings.finishTimeCompact,
+                fallback = snapshot.status.eventDurationSummary,
+            ),
+            unreadPlaceholder = false,
+            alert = lastsAlertActive,
+        )
         syncTimeButton.isEnabled =
             displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK &&
             currentTransport != null &&
@@ -5231,7 +5967,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setInformationalFieldText(versionInfoField, "Not read")
         setInformationalFieldText(internalBatteryField, "Not read")
         setInformationalFieldText(externalBatteryField, "Not read")
-        setInformationalFieldText(temperatureField, "Not read")
+        clearTemperatureRow(maximumTemperatureRowLabel, maximumTemperatureField)
+        clearTemperatureRow(currentTemperatureRowLabel, currentTemperatureField)
+        clearTemperatureRow(minimumTemperatureRowLabel, minimumTemperatureField)
+        lastsRowLabel.foreground = defaultRowLabelForeground
         updateDisplayedClockFields()
         updateWritableControlAvailability(backgroundWorkInProgress)
     }
@@ -5562,24 +6301,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         spinner: JSpinner,
         defaultCalendarField: Int = Calendar.MINUTE,
     ): Int {
-        val rememberedField = spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int
-        if (rememberedField != null) {
-            return rememberedField
+        val forcedField = spinner.getClientProperty(DATE_TIME_FORCED_STEP_FIELD_KEY) as? Int
+        if (forcedField != null) {
+            return forcedField
         }
         val textField = spinnerEditorTextField(spinner)
-        val anchor = if (textField.selectionStart == textField.selectionEnd) {
-            textField.caretPosition
-        } else {
-            textField.selectionStart
+        val rememberedField = (spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int) ?: defaultCalendarField
+        if (KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner === textField) {
+            return selectedDateTimeEditorFieldFromText(textField, rememberedField)
         }
-        return when (anchor) {
-            in 0..3 -> Calendar.YEAR
-            in 5..6 -> Calendar.MONTH
-            in 8..9 -> Calendar.DAY_OF_MONTH
-            in 11..12 -> Calendar.HOUR_OF_DAY
-            in 14..15 -> Calendar.MINUTE
-            else -> defaultCalendarField
-        }
+        return rememberedField
     }
 
     private fun stepDateTimeBySelectedField(
@@ -5695,13 +6426,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun takePendingDateTimeCompact(spinner: JSpinner): String? {
-        val pending = spinner.getClientProperty(DATE_TIME_PENDING_COMPACT_KEY) as? String
+        val pending = pendingDateTimeCompact(spinner)
         clearPendingDateTimeCompact(spinner)
         return pending
     }
 
+    private fun pendingDateTimeCompact(spinner: JSpinner): String? {
+        return spinner.getClientProperty(DATE_TIME_PENDING_COMPACT_KEY) as? String
+    }
+
     private fun clearPendingDateTimeCompact(spinner: JSpinner) {
         spinner.putClientProperty(DATE_TIME_PENDING_COMPACT_KEY, null)
+    }
+
+    private fun selectedDateTimeCompactForComparison(spinner: JSpinner, originalValue: String?): String? {
+        return pendingDateTimeCompact(spinner) ?: selectedDateTimeCompact(spinner, originalValue)
     }
 
     private fun selectedStartTimeForFinishConstraint(): LocalDateTime? {
@@ -5730,6 +6469,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun configureNullableDateTimeSpinner(spinner: JSpinner, statusLabel: JLabel) {
         spinner.putClientProperty(NULLABLE_TIMESTAMP_ACTIVE_KEY, false)
         spinner.putClientProperty(NULLABLE_TIMESTAMP_STATUS_LABEL_KEY, statusLabel)
+        configureDateTimeSpinnerArrowFieldPreservation(spinner)
+        configureDateTimeSpinnerKeyboardFieldPreservation(spinner)
         val textField = spinnerEditorTextField(spinner)
         spinner.addChangeListener {
             if (!updatingForm && isNullableDateTimeSpinnerActive(spinner)) {
@@ -5739,26 +6480,58 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         textField.addFocusListener(
             object : FocusAdapter() {
                 override fun focusGained(event: FocusEvent?) {
-                    if (!updatingForm) {
-                        positionDateTimeEditorCaret(spinner)
+                    if (updatingForm) {
+                        return
+                    }
+                    SwingUtilities.invokeLater {
+                        if (updatingForm || !textField.hasFocus()) {
+                            return@invokeLater
+                        }
+                        val explicitField = explicitlySelectedDateTimeEditorFieldFromText(textField)
+                        if (explicitField != null) {
+                            spinner.putClientProperty(DATE_TIME_ACTIVE_FIELD_KEY, explicitField)
+                        } else {
+                            positionDateTimeEditorCaret(spinner)
+                        }
                     }
                 }
             },
         )
         textField.addMouseListener(
             object : MouseAdapter() {
+                override fun mousePressed(event: MouseEvent?) {
+                    if (setSelectedDateTimeEditorFieldFromPoint(spinner, event?.point)) {
+                        event?.consume()
+                    }
+                }
+
                 override fun mouseReleased(event: MouseEvent?) {
-                    rememberSelectedDateTimeEditorField(spinner)
+                    val selectedField = dateTimeEditorFieldFromPoint(spinner, event?.point)
+                    if (selectedField != null) {
+                        event?.consume()
+                        SwingUtilities.invokeLater {
+                            if (!updatingForm && textField.hasFocus()) {
+                                setSelectedDateTimeEditorField(spinner, selectedField)
+                            }
+                        }
+                    } else {
+                        scheduleRememberSelectedDateTimeEditorField(spinner)
+                    }
                 }
             },
         )
         textField.addKeyListener(
             object : java.awt.event.KeyAdapter() {
                 override fun keyReleased(event: java.awt.event.KeyEvent?) {
-                    rememberSelectedDateTimeEditorField(spinner)
+                    scheduleRememberSelectedDateTimeEditorField(spinner)
                 }
             },
         )
+        textField.addCaretListener {
+            if (!updatingForm) {
+                scheduleRememberSelectedDateTimeEditorField(spinner)
+            }
+        }
         textField.document.addDocumentListener(
             object : javax.swing.event.DocumentListener {
                 override fun insertUpdate(event: javax.swing.event.DocumentEvent?) = onEdited()
@@ -5780,6 +6553,144 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             },
         )
         positionDateTimeEditorCaret(spinner)
+    }
+
+    private fun configureDateTimeSpinnerArrowFieldPreservation(spinner: JSpinner) {
+        installDateTimeSpinnerArrowFieldPreservation(spinner)
+        spinner.addPropertyChangeListener("UI") {
+            installDateTimeSpinnerArrowFieldPreservation(spinner)
+        }
+        spinner.addPropertyChangeListener("editor") {
+            installDateTimeSpinnerArrowFieldPreservation(spinner)
+        }
+    }
+
+    private fun installDateTimeSpinnerArrowFieldPreservation(spinner: JSpinner) {
+        fun visit(component: Component) {
+            if (component is AbstractButton) {
+                if (component.getClientProperty(DATE_TIME_ARROW_FIELD_PRESERVER_KEY) != true) {
+                    component.addMouseListener(
+                        object : MouseAdapter() {
+                            override fun mousePressed(event: MouseEvent?) {
+                                if (updatingForm) {
+                                    return
+                                }
+                                val selectedField =
+                                    spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int ?: Calendar.MINUTE
+                                setSelectedDateTimeEditorField(spinner, selectedField)
+                            }
+                        },
+                    )
+                    component.putClientProperty(DATE_TIME_ARROW_FIELD_PRESERVER_KEY, true)
+                }
+            }
+            if (component is Container) {
+                component.components.forEach(::visit)
+            }
+        }
+
+        spinner.components.forEach(::visit)
+    }
+
+    private fun configureDateTimeSpinnerKeyboardFieldPreservation(spinner: JSpinner) {
+        installDateTimeSpinnerKeyboardFieldPreservation(spinner)
+        spinner.addPropertyChangeListener("editor") {
+            installDateTimeSpinnerKeyboardFieldPreservation(spinner)
+        }
+    }
+
+    private fun installDateTimeSpinnerKeyboardFieldPreservation(spinner: JSpinner) {
+        val textField = spinnerEditorTextField(spinner)
+        if (textField.getClientProperty(DATE_TIME_KEYBOARD_STEP_HANDLER_INSTALLED_KEY) == true) {
+            return
+        }
+
+        fun registerStep(keyStroke: String, actionKey: String, forward: Boolean) {
+            textField.inputMap.put(KeyStroke.getKeyStroke(keyStroke), actionKey)
+            spinner.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(KeyStroke.getKeyStroke(keyStroke), actionKey)
+            textField.actionMap.put(
+                actionKey,
+                object : AbstractAction() {
+                    override fun actionPerformed(event: java.awt.event.ActionEvent?) {
+                        stepDateTimeSpinnerFromKeyboard(spinner, forward)
+                    }
+                },
+            )
+        }
+
+        fun registerMove(keyStroke: String, actionKey: String, forward: Boolean) {
+            textField.inputMap.put(KeyStroke.getKeyStroke(keyStroke), actionKey)
+            spinner.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(KeyStroke.getKeyStroke(keyStroke), actionKey)
+            textField.actionMap.put(
+                actionKey,
+                object : AbstractAction() {
+                    override fun actionPerformed(event: java.awt.event.ActionEvent?) {
+                        moveDateTimeSpinnerSelectionFromKeyboard(spinner, forward)
+                    }
+                },
+            )
+        }
+
+        registerStep("UP", DATE_TIME_INCREMENT_ACTION_KEY, true)
+        registerStep("KP_UP", DATE_TIME_INCREMENT_ACTION_KEY, true)
+        registerStep("DOWN", DATE_TIME_DECREMENT_ACTION_KEY, false)
+        registerStep("KP_DOWN", DATE_TIME_DECREMENT_ACTION_KEY, false)
+        registerMove("LEFT", DATE_TIME_PREVIOUS_FIELD_ACTION_KEY, false)
+        registerMove("KP_LEFT", DATE_TIME_PREVIOUS_FIELD_ACTION_KEY, false)
+        registerMove("RIGHT", DATE_TIME_NEXT_FIELD_ACTION_KEY, true)
+        registerMove("KP_RIGHT", DATE_TIME_NEXT_FIELD_ACTION_KEY, true)
+        textField.putClientProperty(DATE_TIME_KEYBOARD_STEP_HANDLER_INSTALLED_KEY, true)
+    }
+
+    private fun stepDateTimeSpinnerFromKeyboard(spinner: JSpinner, forward: Boolean) {
+        if (updatingForm || isDateTimeCommitSuppressed(spinner) || shouldSuppressScheduleCommit(spinner)) {
+            return
+        }
+
+        val textField = spinnerEditorTextField(spinner)
+        val currentField = spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int ?: Calendar.MINUTE
+        val selectedField = selectedDateTimeEditorFieldFromText(textField, currentField)
+        setSelectedDateTimeEditorField(spinner, selectedField)
+        val steppedValue = withForcedDateTimeStepField(spinner, selectedField) {
+            try {
+                spinner.commitEdit()
+            } catch (_: Exception) {
+                // Let the formatter keep its existing validation behavior.
+            }
+
+            (spinner.model as? SpinnerDateModel)?.calendarField = selectedField
+            if (forward) {
+                spinner.nextValue
+            } else {
+                spinner.previousValue
+            }
+        } ?: return
+        spinner.value = steppedValue
+        SwingUtilities.invokeLater {
+            if (!updatingForm && textField.hasFocus()) {
+                setSelectedDateTimeEditorField(spinner, selectedField)
+            }
+        }
+    }
+
+    private fun <T> withForcedDateTimeStepField(spinner: JSpinner, calendarField: Int, block: () -> T): T {
+        spinner.putClientProperty(DATE_TIME_FORCED_STEP_FIELD_KEY, calendarField)
+        return try {
+            block()
+        } finally {
+            spinner.putClientProperty(DATE_TIME_FORCED_STEP_FIELD_KEY, null)
+        }
+    }
+
+    private fun moveDateTimeSpinnerSelectionFromKeyboard(spinner: JSpinner, forward: Boolean) {
+        if (updatingForm) {
+            return
+        }
+        val textField = spinnerEditorTextField(spinner)
+        val currentField = spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int ?: Calendar.MINUTE
+        val selectedField = selectedDateTimeEditorFieldFromText(textField, currentField)
+        val targetField = adjacentDateTimeEditorField(spinner, selectedField, forward) ?: return
+        setSelectedDateTimeEditorField(spinner, targetField)
     }
 
     private fun setDateTimeEditorValue(spinner: JSpinner, statusLabel: JLabel, compactTimestamp: String?) {
@@ -5845,37 +6756,93 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun positionDateTimeEditorCaret(spinner: JSpinner) {
         SwingUtilities.invokeLater {
             val textField = spinnerEditorTextField(spinner)
-            val minuteIndex = textField.text.indexOf(':').let { colonIndex ->
-                if (colonIndex >= 0) colonIndex + 1 else textField.text.length
-            }
-            val clampedIndex = minuteIndex.coerceIn(0, textField.text.length)
-            spinner.putClientProperty(DATE_TIME_ACTIVE_FIELD_KEY, Calendar.MINUTE)
-            textField.select(clampedIndex, clampedIndex)
-            textField.caretPosition = clampedIndex
+            val selectedField = spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int ?: Calendar.MINUTE
+            val fieldRange = dateTimeEditorSelectionRangeForField(textField.text, selectedField)
+            val clampedStart = fieldRange.first.coerceIn(0, textField.text.length)
+            val clampedEnd = fieldRange.second.coerceIn(clampedStart, textField.text.length)
+            spinner.putClientProperty(DATE_TIME_ACTIVE_FIELD_KEY, selectedField)
+            textField.select(clampedStart, clampedEnd)
         }
     }
 
     private fun rememberSelectedDateTimeEditorField(spinner: JSpinner) {
+        val currentField = spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int ?: Calendar.MINUTE
         spinner.putClientProperty(
             DATE_TIME_ACTIVE_FIELD_KEY,
-            selectedDateTimeEditorFieldFromText(spinnerEditorTextField(spinner)),
+            selectedDateTimeEditorFieldFromText(spinnerEditorTextField(spinner), currentField),
         )
     }
 
-    private fun selectedDateTimeEditorFieldFromText(textField: JFormattedTextField): Int {
-        val anchor = if (textField.selectionStart == textField.selectionEnd) {
-            textField.caretPosition
-        } else {
-            textField.selectionStart
+    private fun scheduleRememberSelectedDateTimeEditorField(spinner: JSpinner) {
+        SwingUtilities.invokeLater {
+            if (!updatingForm) {
+                rememberSelectedDateTimeEditorField(spinner)
+            }
         }
-        return when (anchor) {
-            in 0..3 -> Calendar.YEAR
-            in 5..6 -> Calendar.MONTH
-            in 8..9 -> Calendar.DAY_OF_MONTH
-            in 11..12 -> Calendar.HOUR_OF_DAY
-            in 14..15 -> Calendar.MINUTE
-            else -> Calendar.MINUTE
+    }
+
+    private fun dateTimeEditorFieldFromPoint(spinner: JSpinner, point: Point?): Int? {
+        if (point == null) {
+            return null
         }
+        val textField = spinnerEditorTextField(spinner)
+        val offset = textField.viewToModel2D(point)
+        return DesktopDateTimeEditorSupport.fieldFromOffset(offset, null)
+    }
+
+    private fun setSelectedDateTimeEditorFieldFromPoint(spinner: JSpinner, point: Point?): Boolean {
+        if (updatingForm) {
+            return false
+        }
+        val selectedField = dateTimeEditorFieldFromPoint(spinner, point) ?: return false
+        setSelectedDateTimeEditorField(spinner, selectedField)
+        return true
+    }
+
+    private fun setSelectedDateTimeEditorField(spinner: JSpinner, calendarField: Int) {
+        val textField = spinnerEditorTextField(spinner)
+        spinner.putClientProperty(DATE_TIME_ACTIVE_FIELD_KEY, calendarField)
+        val fieldRange = DesktopDateTimeEditorSupport.selectionRangeForField(textField.text, calendarField)
+        val clampedStart = fieldRange.first.coerceIn(0, textField.text.length)
+        val clampedEnd = fieldRange.second.coerceIn(clampedStart, textField.text.length)
+        textField.select(clampedStart, clampedEnd)
+    }
+
+    private fun adjacentDateTimeEditorField(spinner: JSpinner, currentField: Int, forward: Boolean): Int? {
+        return DesktopDateTimeEditorSupport.adjacentField(
+            text = spinnerEditorTextField(spinner).text,
+            currentField = currentField,
+            forward = forward,
+        )
+    }
+
+    private fun dateTimeEditorSelectionRangeForField(text: String, calendarField: Int): Pair<Int, Int> {
+        return DesktopDateTimeEditorSupport.selectionRangeForField(text, calendarField)
+    }
+
+    private fun selectedDateTimeEditorFieldFromText(
+        textField: JFormattedTextField,
+        fallbackField: Int = Calendar.MINUTE,
+    ): Int {
+        return DesktopDateTimeEditorSupport.fieldFromSelection(
+            text = textField.text,
+            selectionStart = textField.selectionStart,
+            selectionEnd = textField.selectionEnd,
+            caretPosition = textField.caretPosition,
+            fallbackField = fallbackField,
+        )
+    }
+
+    private fun dateTimeEditorFieldFromOffset(offset: Int, fallbackField: Int? = Calendar.MINUTE): Int {
+        return DesktopDateTimeEditorSupport.fieldFromOffset(offset, fallbackField)
+    }
+
+    private fun explicitlySelectedDateTimeEditorFieldFromText(textField: JFormattedTextField): Int? {
+        return DesktopDateTimeEditorSupport.explicitFieldFromSelection(
+            text = textField.text,
+            selectionStart = textField.selectionStart,
+            selectionEnd = textField.selectionEnd,
+        )
     }
 
     private fun spinnerEditorTextField(spinner: JSpinner): JFormattedTextField {
@@ -6118,6 +7085,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private data class PendingImmediateEdit(
         val description: String,
+        val source: Any,
         val onCommit: () -> Unit,
     )
 
@@ -6214,6 +7182,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         const val SYNC_VERIFICATION_SAMPLE_MAX = 8
         const val SYNC_ATTEMPT_PROGRESS_UNITS = SYNC_SUBMIT_PROGRESS_UNITS + SYNC_VERIFICATION_SAMPLE_MAX
         const val SPINNER_COMMIT_HANDLER_INSTALLED_KEY = "serialslinger.spinnerCommitHandlerInstalled"
+        const val SPINNER_EDITOR_COMMIT_ACTION_KEY = "serialslinger.spinnerEditorCommitAction"
+        const val DATE_TIME_ARROW_FIELD_PRESERVER_KEY = "serialslinger.dateTimeArrowFieldPreserverInstalled"
+        const val DATE_TIME_KEYBOARD_STEP_HANDLER_INSTALLED_KEY = "serialslinger.dateTimeKeyboardStepInstalled"
+        const val DATE_TIME_INCREMENT_ACTION_KEY = "serialslinger.dateTimeIncrementAction"
+        const val DATE_TIME_DECREMENT_ACTION_KEY = "serialslinger.dateTimeDecrementAction"
+        const val DATE_TIME_NEXT_FIELD_ACTION_KEY = "serialslinger.dateTimeNextFieldAction"
+        const val DATE_TIME_PREVIOUS_FIELD_ACTION_KEY = "serialslinger.dateTimePreviousFieldAction"
+        const val DATE_TIME_FORCED_STEP_FIELD_KEY = "serialslinger.dateTimeForcedStepField"
         const val DATE_TIME_ACTIVE_FIELD_KEY = "serialslinger.dateTimeActiveField"
         const val DATE_TIME_PENDING_COMPACT_KEY = "serialslinger.dateTimePendingCompact"
         const val DATE_TIME_COMMIT_SUPPRESSED_KEY = "serialslinger.dateTimeCommitSuppressed"

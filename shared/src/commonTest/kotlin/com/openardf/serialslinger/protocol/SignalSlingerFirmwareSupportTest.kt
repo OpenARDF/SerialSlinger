@@ -13,6 +13,7 @@ class SignalSlingerFirmwareSupportTest {
         assertEquals("modern-1.2+", profile.id)
         assertTrue(profile.capabilities.supportsScheduling)
         assertTrue("TMP" in profile.fullLoadCommands)
+        assertTrue("FUN" in profile.fullLoadCommands)
         assertTrue("FOX" in profile.fullLoadCommands)
         assertTrue("CLK" in profile.fullLoadCommands)
         assertFalse("CLK T" in profile.fullLoadCommands)

@@ -95,6 +95,12 @@ object SignalSlingerFirmwareSupport {
         "FRE B",
         "BAT",
         "TMP",
+        // NOTE: This no-arg FUN read is intentionally part of the modern load plan because
+        // SignalSlinger firmware 1.2 and earlier returns Cur/Max/Min temperature values in the
+        // FUN settings report, while TMP only returns the current Temp line. This area is tightly
+        // coupled to firmware behavior and is more likely than most other commands to change or be
+        // deprecated in future firmware, so re-check the serial report contract before editing it.
+        "FUN",
     )
 
     private val legacyProfile = SignalSlingerFirmwareProfile(

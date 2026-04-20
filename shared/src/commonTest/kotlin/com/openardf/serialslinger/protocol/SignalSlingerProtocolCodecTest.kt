@@ -72,6 +72,17 @@ class SignalSlingerProtocolCodecTest {
     }
 
     @Test
+    fun parsesReportedMinimumAndMaximumTemperatureRepliesIntoDeviceStatus() {
+        val currentUpdate = SignalSlingerProtocolCodec.parseReportLine("*   Cur Temp: 42.5C")
+        val minimumUpdate = SignalSlingerProtocolCodec.parseReportLine("*   Min Temp: 38.5C")
+        val maximumUpdate = SignalSlingerProtocolCodec.parseReportLine("*   Max Temp: 47.0C")
+
+        assertEquals(42.5, currentUpdate?.deviceStatusPatch?.temperatureC)
+        assertEquals(38.5, minimumUpdate?.deviceStatusPatch?.minimumTemperatureC)
+        assertEquals(47.0, maximumUpdate?.deviceStatusPatch?.maximumTemperatureC)
+    }
+
+    @Test
     fun parsesFoxReplyIntoFoxRole() {
         val update = SignalSlingerProtocolCodec.parseReportLine("""* Fox:Classic Fox 1 "MOE"""")
 
@@ -186,6 +197,29 @@ class SignalSlingerProtocolCodecTest {
             listOf(
                 "CLK T 260410142233",
                 "CLK S 260410150000",
+                "CLK F 260410170000",
+            ),
+            commands,
+        )
+    }
+
+    @Test
+    fun encodesFinishWriteWhenStartChangesButAbsoluteFinishMustBePreserved() {
+        val original = sampleSettings().copy(
+            startTimeCompact = "260410150000",
+            finishTimeCompact = "260410170000",
+        )
+        val edited = original.copy(
+            startTimeCompact = "260410151000",
+            finishTimeCompact = "260410170000",
+        )
+
+        val writePlan = WritePlanner.create(original, edited)
+        val commands = SignalSlingerProtocolCodec.encodeWritePlan(writePlan, edited)
+
+        assertEquals(
+            listOf(
+                "CLK S 260410151000",
                 "CLK F 260410170000",
             ),
             commands,

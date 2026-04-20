@@ -4,6 +4,7 @@ import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
+import java.time.Duration
 import java.time.LocalDateTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -53,6 +54,23 @@ class DesktopInputSupportTest {
         val adjusted = JvmTimeSupport.adjustManualTimeTargetForWrite(selected, estimatedWriteDelayMillis = 300L)
 
         assertEquals(selected, adjusted)
+    }
+
+    @Test
+    fun relativeDurationSelectionRoundsUpPartialMinutes() {
+        val selection = DesktopInputSupport.relativeTimeSelectionForDuration(Duration.ofSeconds((2 * 60 * 60 + 61).toLong()))
+
+        assertEquals(2, selection.hours)
+        assertEquals(2, selection.minutes)
+        assertFalse(selection.useTopOfHour)
+    }
+
+    @Test
+    fun relativeDurationCommandRoundsUpPartialMinutes() {
+        assertEquals(
+            "+2:2",
+            DesktopInputSupport.formatRelativeDurationCommand(Duration.ofSeconds((2 * 60 * 60 + 61).toLong())),
+        )
     }
 
     @Test

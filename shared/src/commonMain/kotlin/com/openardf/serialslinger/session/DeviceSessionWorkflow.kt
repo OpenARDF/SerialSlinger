@@ -6,6 +6,7 @@ import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.DeviceStatus
 import com.openardf.serialslinger.model.EditableDeviceSettings
+import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.protocol.DeviceReportUpdate
@@ -77,13 +78,14 @@ object DeviceSessionWorkflow {
     fun submitChanges(
         state: DeviceSessionState,
         editedSettings: EditableDeviceSettings,
+        forceWriteKeys: Set<SettingKey> = emptySet(),
     ): DeviceSubmission {
         val snapshot = requireNotNull(state.snapshot) {
             "Cannot submit changes before a device snapshot has been loaded."
         }
 
         val validatedSettings = editedSettings.toValidatedDeviceSettings()
-        val writePlan = WritePlanner.create(snapshot.settings, validatedSettings)
+        val writePlan = WritePlanner.create(snapshot.settings, validatedSettings, forceWriteKeys = forceWriteKeys)
         val commands = SignalSlingerProtocolCodec.encodeWritePlan(writePlan, validatedSettings)
 
         return DeviceSubmission(
@@ -112,6 +114,8 @@ object DeviceSessionWorkflow {
             status = status.copy(
                 connectionState = connectionState,
                 temperatureC = update.deviceStatusPatch?.temperatureC ?: status.temperatureC,
+                minimumTemperatureC = update.deviceStatusPatch?.minimumTemperatureC ?: status.minimumTemperatureC,
+                maximumTemperatureC = update.deviceStatusPatch?.maximumTemperatureC ?: status.maximumTemperatureC,
                 internalBatteryVolts = update.deviceStatusPatch?.internalBatteryVolts ?: status.internalBatteryVolts,
                 externalBatteryVolts = update.deviceStatusPatch?.externalBatteryVolts ?: status.externalBatteryVolts,
                 daysRemaining = update.deviceStatusPatch?.daysRemaining ?: status.daysRemaining,

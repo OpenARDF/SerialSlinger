@@ -46,6 +46,11 @@ class DeviceSessionControllerTest {
                     "* Ext. Bat. Ctrl = ON",
                     "* Transmitter = Enabled",
                 ),
+                "FUN" to listOf(
+                    "*   Cur Temp: 20.9C",
+                    "*   Min Temp: 18.4C",
+                    "*   Max Temp: 24.2C",
+                ),
             ),
         )
 
@@ -58,6 +63,9 @@ class DeviceSessionControllerTest {
         assertEquals(FoxRole.CLASSIC_1, result.state.snapshot?.settings?.foxRole)
         assertEquals("TEST", result.state.snapshot?.settings?.patternText)
         assertEquals(3_570_000L, result.state.snapshot?.settings?.beaconFrequencyHz)
+        assertEquals(20.9, result.state.snapshot?.status?.temperatureC)
+        assertEquals(18.4, result.state.snapshot?.status?.minimumTemperatureC)
+        assertEquals(24.2, result.state.snapshot?.status?.maximumTemperatureC)
         assertEquals(4.1, result.state.snapshot?.status?.internalBatteryVolts)
         assertEquals(ConnectionState.CONNECTED, result.state.connectionState)
         assertEquals("W1FOX", result.state.editableSettings?.stationId?.editedValue)
@@ -110,6 +118,54 @@ class DeviceSessionControllerTest {
         assertEquals(emptyList(), result.state.pendingSubmitCommands)
         assertEquals(result.commandsSent.size + result.linesReceived.size, result.submitTraceEntries.size)
         assertEquals(result.readbackCommandsSent.size + result.readbackLinesReceived.size, result.readbackTraceEntries.size)
+    }
+
+    @Test
+    fun submitEditsCanForceDaysToRunWriteEvenWhenUnchanged() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "CLK S 260410151000" to listOf("* Start:Fri 10-apr-2026 15:10:00"),
+                "CLK F 260410170000" to listOf("* Finish:Fri 10-apr-2026 17:00:00"),
+                "CLK D 3" to listOf("* Days to run: 3"),
+                "VER" to listOf("* SW Ver: 1.2 HW Build: 3.5"),
+                "ID" to listOf("* ID: N0CALL"),
+                "CLK" to listOf(
+                    "* Start:Fri 10-apr-2026 15:10:00",
+                    "* Finish:Fri 10-apr-2026 17:00:00",
+                    "* Days to run: 3",
+                ),
+                "EVT" to listOf("* Event:Classic"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(FakeDeviceTransport(), sampleSettings().copy(
+            startTimeCompact = "260410150000",
+            finishTimeCompact = "260410170000",
+            daysToRun = 3,
+        ))
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            startTimeCompact = SettingsField("startTimeCompact", "Start Time", "260410150000", "260410151000"),
+            finishTimeCompact = SettingsField("finishTimeCompact", "Finish Time", "260410170000", "260410170000"),
+            daysToRun = SettingsField("daysToRun", "Days To Run", 3, 3),
+        )
+
+        val result = DeviceSessionController.submitEdits(
+            connected.state,
+            editable,
+            transport,
+            forceWriteKeys = setOf(SettingKey.DAYS_TO_RUN),
+        )
+
+        assertEquals(
+            listOf("CLK S 260410151000", "CLK F 260410170000", "CLK D 3"),
+            result.commandsSent,
+        )
+        assertEquals(3, result.state.snapshot?.settings?.daysToRun)
+        assertEquals(
+            listOf(SettingKey.START_TIME, SettingKey.FINISH_TIME, SettingKey.DAYS_TO_RUN),
+            result.verifications.map { it.fieldKey },
+        )
+        assertTrue(result.verifications.all { it.verified })
     }
 
     @Test

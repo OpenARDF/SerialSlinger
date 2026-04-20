@@ -6,6 +6,8 @@ import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.JvmTimeSupport
+import com.openardf.serialslinger.model.RelativeScheduleSelection
+import com.openardf.serialslinger.model.RelativeScheduleSupport
 import com.openardf.serialslinger.model.TimedEventFrequencyVisibility
 import com.openardf.serialslinger.model.ClockPhaseSample as SharedClockPhaseSample
 import java.time.Duration
@@ -38,6 +40,22 @@ object DesktopInputSupport {
         val minutes: Int,
         val useTopOfHour: Boolean = false,
     )
+
+    private fun RelativeScheduleSelection.toDesktopSelection(): RelativeTimeSelection {
+        return RelativeTimeSelection(
+            hours = hours,
+            minutes = minutes,
+            useTopOfHour = useTopOfHour,
+        )
+    }
+
+    private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection {
+        return RelativeScheduleSelection(
+            hours = hours,
+            minutes = minutes,
+            useTopOfHour = useTopOfHour,
+        )
+    }
 
     fun selectableEventTypes(): List<EventType> {
         return EventProfileSupport.selectableEventTypes()
@@ -207,57 +225,23 @@ object DesktopInputSupport {
         baseCompact: String?,
         targetCompact: String?,
     ): RelativeTimeSelection {
-        val base = baseCompact?.let(JvmTimeSupport::normalizeCurrentTimeCompactForDisplay)?.let(JvmTimeSupport::parseCompactTimestamp)
-        val target = targetCompact?.let(JvmTimeSupport::normalizeCurrentTimeCompactForDisplay)?.let(JvmTimeSupport::parseCompactTimestamp)
-        if (base == null || target == null || !target.isAfter(base)) {
-            return RelativeTimeSelection(hours = 0, minutes = 0, useTopOfHour = true)
-        }
-
-        val totalMinutes = Duration.between(base, target).toMinutes().coerceAtLeast(0)
-        val hours = (totalMinutes / 60).toInt().coerceIn(0, 480)
-        val minutes = (totalMinutes % 60).toInt()
-        val roundedMinutes = ((minutes + 2) / 5) * 5
-        return if (roundedMinutes >= 60) {
-            RelativeTimeSelection(hours = (hours + 1).coerceIn(0, 480), minutes = 0, useTopOfHour = true)
-        } else if (roundedMinutes == 0) {
-            RelativeTimeSelection(hours = hours, minutes = 0, useTopOfHour = true)
-        } else {
-            RelativeTimeSelection(hours = hours, minutes = roundedMinutes, useTopOfHour = false)
-        }
+        return RelativeScheduleSupport.deriveSelection(baseCompact, targetCompact).toDesktopSelection()
     }
 
     fun formatRelativeTimeSelection(selection: RelativeTimeSelection): String {
-        return if (selection.useTopOfHour) {
-            "+${selection.hours} TOTH"
-        } else {
-            "+${selection.hours}:${selection.minutes}"
-        }
+        return RelativeScheduleSupport.formatSelection(selection.toSharedSelection())
     }
 
     fun formatRelativeTimeCommand(selection: RelativeTimeSelection): String {
-        return if (selection.useTopOfHour) {
-            "+${selection.hours}"
-        } else {
-            "+${selection.hours}:${selection.minutes}"
-        }
+        return RelativeScheduleSupport.formatCommand(selection.toSharedSelection())
     }
 
     fun validateDefaultEventLengthMinutes(minutes: Int): Int {
-        require(minutes in 10..(24 * 60)) {
-            "Default Event Length must be between 10 minutes and 24 hours."
-        }
-        return minutes
+        return RelativeScheduleSupport.validateDefaultEventLengthMinutes(minutes)
     }
 
     fun formatDefaultEventLength(minutes: Int): String {
-        val validatedMinutes = validateDefaultEventLengthMinutes(minutes)
-        val hoursPart = validatedMinutes / 60
-        val minutesPart = validatedMinutes % 60
-        return if (hoursPart > 0) {
-            "${hoursPart}h ${minutesPart.toString().padStart(2, '0')}m"
-        } else {
-            "${minutesPart}m"
-        }
+        return RelativeScheduleSupport.formatDefaultEventLength(minutes)
     }
 
     fun finishTimeCompactFromStart(
@@ -268,14 +252,41 @@ object DesktopInputSupport {
         return formatCompactTimestamp(start.plusMinutes(validateDefaultEventLengthMinutes(defaultEventLengthMinutes).toLong()))
     }
 
+    fun finishTimeCompactFromStart(
+        startTimeCompact: String,
+        duration: Duration,
+    ): String {
+        return JvmTimeSupport.finishTimeCompactFromStart(startTimeCompact, duration)
+    }
+
     fun relativeTimeSelectionForDuration(minutes: Int): RelativeTimeSelection {
-        val validatedMinutes = validateDefaultEventLengthMinutes(minutes)
-        val hoursPart = validatedMinutes / 60
-        val minutesPart = validatedMinutes % 60
-        return RelativeTimeSelection(
-            hours = hoursPart,
-            minutes = minutesPart,
-            useTopOfHour = false,
+        return RelativeScheduleSupport.selectionForDuration(minutes).toDesktopSelection()
+    }
+
+    fun relativeTimeSelectionForDuration(duration: Duration): RelativeTimeSelection {
+        return RelativeScheduleSupport.selectionForDuration(duration).toDesktopSelection()
+    }
+
+    fun validEventDuration(
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+    ): Duration? {
+        return JvmTimeSupport.validEventDuration(startTimeCompact, finishTimeCompact)
+    }
+
+    fun formatRelativeDurationCommand(duration: Duration): String {
+        return JvmTimeSupport.formatRelativeDurationCommand(duration)
+    }
+
+    fun relativeTargetTimeCompact(
+        baseCompact: String?,
+        selection: RelativeTimeSelection,
+    ): String? {
+        return JvmTimeSupport.relativeTargetTimeCompact(
+            baseCompact = baseCompact,
+            hours = selection.hours,
+            minutes = selection.minutes,
+            useTopOfHour = selection.useTopOfHour,
         )
     }
 
@@ -385,6 +396,18 @@ object DesktopInputSupport {
         fallback: String?,
     ): String {
         return JvmTimeSupport.describeEventDuration(startTimeCompact, finishTimeCompact, fallback)
+    }
+
+    fun eventDurationDiffersFromDefault(
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+        defaultEventLengthMinutes: Int,
+    ): Boolean {
+        return JvmTimeSupport.eventDurationDiffersFromDefault(
+            startTimeCompact = startTimeCompact,
+            finishTimeCompact = finishTimeCompact,
+            defaultEventLengthMinutes = defaultEventLengthMinutes,
+        )
     }
 
     fun formatDaysToRunRemainingSummary(

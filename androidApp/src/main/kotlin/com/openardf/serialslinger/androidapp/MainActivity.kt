@@ -49,9 +49,19 @@ import com.openardf.serialslinger.model.FrequencyBankId
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
+import com.openardf.serialslinger.model.RelativeScheduleSelection
+import com.openardf.serialslinger.model.RelativeScheduleSupport
+import com.openardf.serialslinger.model.StartTimeAdjustmentOption
+import com.openardf.serialslinger.model.StartTimeAdjustmentOptionKind
+import com.openardf.serialslinger.model.StartTimeAdjustmentPlanner
+import com.openardf.serialslinger.model.StartTimeDaysToRunChoice
+import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
+import com.openardf.serialslinger.model.TemperatureAlertLevel
+import com.openardf.serialslinger.model.TemperatureAlertSupport
 import com.openardf.serialslinger.transport.AndroidUsbDeviceDescriptor
 import com.openardf.serialslinger.transport.AndroidUsbTransport
 import com.openardf.serialslinger.transport.SignalSlingerReadPlan
+import java.time.Duration
 import java.time.LocalDateTime
 
 class MainActivity : Activity() {
@@ -82,6 +92,28 @@ class MainActivity : Activity() {
         val useTopOfHour: Boolean = false,
     )
 
+private data class StartTimeFinishAdjustmentChoice(
+    val label: String,
+    val duration: Duration? = null,
+    val disablesEvent: Boolean = false,
+)
+
+private fun RelativeScheduleSelection.toAndroidSelection(): RelativeTimeSelection {
+    return RelativeTimeSelection(
+        hours = hours,
+        minutes = minutes,
+        useTopOfHour = useTopOfHour,
+    )
+}
+
+private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection {
+    return RelativeScheduleSelection(
+        hours = hours,
+        minutes = minutes,
+        useTopOfHour = useTopOfHour,
+    )
+}
+
     private lateinit var usbManager: UsbManager
     private lateinit var uiPreferences: SharedPreferences
     private lateinit var content: LinearLayout
@@ -110,8 +142,11 @@ class MainActivity : Activity() {
     private var scheduleDerivedDataPending: Boolean = false
     private var scheduleTimeToggleTargets: List<Pair<View, TextView?>> = emptyList()
     private var headerStatusMessageView: TextView? = null
+    private var thermalHeaderWarningText: String? = null
+    private var thermalHeaderWarningDetail: String? = null
     private var relativeStartDisplaySelectionOverride: RelativeTimeSelection? = null
     private var relativeFinishDisplaySelectionOverride: RelativeTimeSelection? = null
+    private var startTimeFinishAdjustmentDialogOpen: Boolean = false
 
     private val refreshListener: () -> Unit = { runOnUiThread { renderContent() } }
     private val clockTickRunnable =
@@ -429,6 +464,7 @@ class MainActivity : Activity() {
         val editableSettings = EditableDeviceSettings.fromDeviceSettings(DeviceSettings.empty())
         val usbDevices = AndroidUsbTransport.connectedDevices(usbManager)
         val sessionViewState = uiState.sessionViewState
+        updateThermalHeaderWarning(sessionViewState?.state?.snapshot?.status?.temperatureC)
         currentTimeDisplayField = null
         currentTimeLabelView = null
         systemTimeDisplayField = null
@@ -562,6 +598,14 @@ class MainActivity : Activity() {
                 loadedSettings.finishTimeCompact,
                 loadedStatus?.eventDurationSummary,
             )
+        val durationDiffersFromDefault =
+            JvmTimeSupport.eventDurationDiffersFromDefault(
+                startTimeCompact = loadedSettings.startTimeCompact,
+                finishTimeCompact = loadedSettings.finishTimeCompact,
+                defaultEventLengthMinutes = defaultEventLengthMinutes,
+            )
+        val warningColor = Color.parseColor("#9E1C1C")
+        val normalLabelColor = Color.parseColor("#1F1F1F")
         val daysRemainingSummary = AndroidSessionController.displayedDaysToRunRemainingSummary()
 
         deviceSettingsCard.addView(sectionTitle("Device Settings"))
@@ -831,15 +875,52 @@ class MainActivity : Activity() {
                         title = "Relative Start Time",
                         initialSelection = initialSelection,
                     ) { selection ->
-                        relativeStartDisplaySelectionOverride = selection
-                        relativeFinishDisplaySelectionOverride = defaultEventLengthRelativeSelection()
-                        val formattedSelection = formatRelativeTimeSelection(selection)
-                        startTimeField.setText(formattedSelection)
-                        AndroidSessionController.runRelativeStartTimeSubmit(
-                            context = applicationContext,
-                            offsetCommand = formatRelativeTimeCommand(selection),
-                            finishOffsetCommand = formatRelativeTimeCommand(defaultEventLengthRelativeSelection()),
+                        val proposedStartTimeCompact = JvmTimeSupport.relativeTargetTimeCompact(
+                            baseCompact = AndroidSessionController.displayedDeviceTimeCompact(),
+                            hours = selection.hours,
+                            minutes = selection.minutes,
+                            useTopOfHour = selection.useTopOfHour,
                         )
+                        chooseStartTimeFinishAdjustmentDuration(
+                            currentStartTimeCompact = loadedSettings.startTimeCompact,
+                            currentFinishTimeCompact = loadedSettings.finishTimeCompact,
+                            proposedStartTimeCompact = proposedStartTimeCompact,
+                            onCancel = {
+                                relativeStartDisplaySelectionOverride = null
+                                startTimeField.setText(formatRelativeTimeSelection(initialSelection))
+                            },
+                        ) { choice ->
+                            if (choice.disablesEvent) {
+                                clearRelativeScheduleDisplayOverrides()
+                                AndroidSessionController.runDisableEventViaStartTimeCommand(
+                                    context = applicationContext,
+                                )
+                                return@chooseStartTimeFinishAdjustmentDuration
+                            }
+                            val chosenDuration = choice.duration ?: return@chooseStartTimeFinishAdjustmentDuration
+                            chooseStartTimeDaysToRunHandling(
+                                currentDaysToRun = loadedSettings.daysToRun,
+                                onCancel = {
+                                    relativeStartDisplaySelectionOverride = null
+                                    startTimeField.setText(formatRelativeTimeSelection(initialSelection))
+                                },
+                            ) { daysChoice ->
+                                val finishSelection = relativeTimeSelectionForDuration(chosenDuration)
+                                relativeStartDisplaySelectionOverride = selection
+                                relativeFinishDisplaySelectionOverride = finishSelection
+                                val formattedSelection = formatRelativeTimeSelection(selection)
+                                startTimeField.setText(formattedSelection)
+                                AndroidSessionController.runRelativeStartTimeSubmit(
+                                    context = applicationContext,
+                                    offsetCommand = formatRelativeTimeCommand(selection),
+                                    finishOffsetCommand = JvmTimeSupport.formatRelativeDurationCommand(chosenDuration),
+                                    preservedDaysToRun = when (daysChoice) {
+                                        StartTimeDaysToRunChoice.PRESERVE -> loadedSettings.daysToRun
+                                        StartTimeDaysToRunChoice.RESET -> null
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             } else {
@@ -849,14 +930,41 @@ class MainActivity : Activity() {
                     textSizeSp = timestampFieldTextSizeSp(),
                 ) {
                     pickDateTime(initialValue = startTimeField.text.toString()) { selected ->
-                        clearRelativeScheduleDisplayOverrides()
                         val formattedTimestamp = formatDisplayTimestamp(selected)
-                        startTimeField.setText(formattedTimestamp)
-                        AndroidSessionController.runStartTimeSubmit(
-                            context = applicationContext,
-                            startTimeInput = formattedTimestamp,
-                            defaultEventLengthMinutes = defaultEventLengthMinutes,
-                        )
+                        val normalizedStartTime = JvmTimeSupport.parseOptionalCompactTimestamp(formattedTimestamp) ?: return@pickDateTime
+                        chooseStartTimeFinishAdjustmentDuration(
+                            currentStartTimeCompact = loadedSettings.startTimeCompact,
+                            currentFinishTimeCompact = loadedSettings.finishTimeCompact,
+                            proposedStartTimeCompact = normalizedStartTime,
+                            onCancel = {
+                                startTimeField.setText(uiState.draftStartTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.startTimeCompact))
+                            },
+                        ) { choice ->
+                            if (choice.disablesEvent) {
+                                clearRelativeScheduleDisplayOverrides()
+                                AndroidSessionController.runDisableEventViaStartTimeCommand(
+                                    context = applicationContext,
+                                )
+                                return@chooseStartTimeFinishAdjustmentDuration
+                            }
+                            val chosenDuration = choice.duration ?: return@chooseStartTimeFinishAdjustmentDuration
+                            chooseStartTimeDaysToRunHandling(
+                                currentDaysToRun = loadedSettings.daysToRun,
+                                onCancel = {
+                                    startTimeField.setText(uiState.draftStartTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.startTimeCompact))
+                                },
+                            ) { daysChoice ->
+                                clearRelativeScheduleDisplayOverrides()
+                                startTimeField.setText(formattedTimestamp)
+                                AndroidSessionController.runStartTimeSubmit(
+                                    context = applicationContext,
+                                    startTimeInput = formattedTimestamp,
+                                    defaultEventLengthMinutes = defaultEventLengthMinutes,
+                                    requestedFinishTimeInput = JvmTimeSupport.finishTimeCompactFromStart(normalizedStartTime, chosenDuration),
+                                    preserveDaysToRun = daysChoice == StartTimeDaysToRunChoice.PRESERVE,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -910,13 +1018,25 @@ class MainActivity : Activity() {
                         title = "Relative Finish Time",
                         initialSelection = initialSelection,
                     ) { selection ->
-                        relativeFinishDisplaySelectionOverride = selection
-                        val formattedSelection = formatRelativeTimeSelection(selection)
-                        finishTimeField.setText(formattedSelection)
-                        AndroidSessionController.runRelativeFinishTimeSubmit(
-                            context = applicationContext,
-                            offsetCommand = formatRelativeTimeCommand(selection),
-                        )
+                        chooseStartTimeDaysToRunHandling(
+                            currentDaysToRun = loadedSettings.daysToRun,
+                            onCancel = {
+                                relativeFinishDisplaySelectionOverride = null
+                                finishTimeField.setText(formatRelativeTimeSelection(initialSelection))
+                            },
+                        ) { daysChoice ->
+                            relativeFinishDisplaySelectionOverride = selection
+                            val formattedSelection = formatRelativeTimeSelection(selection)
+                            finishTimeField.setText(formattedSelection)
+                            AndroidSessionController.runRelativeFinishTimeSubmit(
+                                context = applicationContext,
+                                offsetCommand = formatRelativeTimeCommand(selection),
+                                preservedDaysToRun = when (daysChoice) {
+                                    StartTimeDaysToRunChoice.PRESERVE -> loadedSettings.daysToRun
+                                    StartTimeDaysToRunChoice.RESET -> null
+                                },
+                            )
+                        }
                     }
                 }
             } else {
@@ -926,13 +1046,23 @@ class MainActivity : Activity() {
                     textSizeSp = timestampFieldTextSizeSp(),
                 ) {
                     pickDateTime(initialValue = finishTimeField.text.toString()) { selected ->
-                        clearRelativeScheduleDisplayOverrides()
                         val formattedTimestamp = formatDisplayTimestamp(selected)
-                        finishTimeField.setText(formattedTimestamp)
-                        AndroidSessionController.runFinishTimeSubmit(
-                            context = applicationContext,
-                            finishTimeInput = formattedTimestamp,
-                        )
+                        chooseStartTimeDaysToRunHandling(
+                            currentDaysToRun = loadedSettings.daysToRun,
+                            onCancel = {
+                                finishTimeField.setText(
+                                    uiState.draftFinishTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.finishTimeCompact),
+                                )
+                            },
+                        ) { daysChoice ->
+                            clearRelativeScheduleDisplayOverrides()
+                            finishTimeField.setText(formattedTimestamp)
+                            AndroidSessionController.runFinishTimeSubmit(
+                                context = applicationContext,
+                                finishTimeInput = formattedTimestamp,
+                                preserveDaysToRun = daysChoice == StartTimeDaysToRunChoice.PRESERVE,
+                            )
+                        }
                     }
                 }
         }
@@ -1003,7 +1133,23 @@ class MainActivity : Activity() {
                 )
             },
         )
-        timedEventCard.addView(compactLabeledRow("Lasts", readOnlyField(durationSummary)))
+        val lastsField =
+            readOnlyField(durationSummary).apply {
+                if (durationDiffersFromDefault) {
+                    setTextColor(warningColor)
+                }
+            }
+        var lastsLabelView: TextView? = null
+        timedEventCard.addView(
+            compactLabeledRow(
+                "Lasts",
+                lastsField,
+                captureLabelView = { labelView ->
+                    lastsLabelView = labelView
+                },
+            ),
+        )
+        lastsLabelView?.setTextColor(if (durationDiffersFromDefault) warningColor else normalLabelColor)
 
         val daysToRunSpinner =
             integerSpinner(
@@ -1116,17 +1262,40 @@ class MainActivity : Activity() {
                 labelWidthDp = 128,
             ),
         )
-        val deviceTemperatureField = readOnlyField(formatTemperatureForUnit(loadedStatus?.temperatureC))
-        var deviceTemperatureLabelView: TextView? = null
-        val deviceTemperatureRow =
+        val maximumTemperatureField = readOnlyField(formatTemperatureForUnit(loadedStatus?.maximumTemperatureC))
+        var maximumTemperatureLabelView: TextView? = null
+        deviceDataCard.addView(
             compactLabeledRow(
-                "Device Temperature",
-                deviceTemperatureField,
+                "Maximum Temperature",
+                maximumTemperatureField,
                 labelWidthDp = 132,
-                captureLabelView = { deviceTemperatureLabelView = it },
+                captureLabelView = { maximumTemperatureLabelView = it },
+            ),
+        )
+        applyTemperatureRowAppearance(maximumTemperatureLabelView, maximumTemperatureField, loadedStatus?.maximumTemperatureC)
+        val currentTemperatureField = readOnlyField(formatTemperatureForUnit(loadedStatus?.temperatureC))
+        var currentTemperatureLabelView: TextView? = null
+        val currentTemperatureRow =
+            compactLabeledRow(
+                "Current Temperature",
+                currentTemperatureField,
+                labelWidthDp = 132,
+                captureLabelView = { currentTemperatureLabelView = it },
             )
-        deviceDataCard.addView(deviceTemperatureRow)
-        installTemperatureDisplayUnitToggle(deviceTemperatureField, deviceTemperatureLabelView, deviceTemperatureRow)
+        deviceDataCard.addView(currentTemperatureRow)
+        applyTemperatureRowAppearance(currentTemperatureLabelView, currentTemperatureField, loadedStatus?.temperatureC)
+        val minimumTemperatureField = readOnlyField(formatTemperatureForUnit(loadedStatus?.minimumTemperatureC))
+        var minimumTemperatureLabelView: TextView? = null
+        deviceDataCard.addView(
+            compactLabeledRow(
+                "Minimum Temperature",
+                minimumTemperatureField,
+                labelWidthDp = 132,
+                captureLabelView = { minimumTemperatureLabelView = it },
+            ),
+        )
+        applyTemperatureRowAppearance(minimumTemperatureLabelView, minimumTemperatureField, loadedStatus?.minimumTemperatureC)
+        installTemperatureDisplayUnitToggle(currentTemperatureField, currentTemperatureLabelView, currentTemperatureRow)
         deviceDataCard.addView(
             compactLabeledRow(
                 "Version",
@@ -1421,7 +1590,9 @@ class MainActivity : Activity() {
             appendLine("Serial port name: ${info.serialPortName.orUnknown()}")
             appendLine()
             appendLine("Status")
-            appendLine("Temperature: ${formatTemperatureForUnit(status.temperatureC)}")
+            appendLine("Maximum temperature: ${formatTemperatureForUnit(status.maximumTemperatureC)}")
+            appendLine("Current temperature: ${formatTemperatureForUnit(status.temperatureC)}")
+            appendLine("Minimum temperature: ${formatTemperatureForUnit(status.minimumTemperatureC)}")
             appendLine("Internal battery V: ${status.internalBatteryVolts?.toString().orUnknown()}")
             appendLine("External battery V: ${status.externalBatteryVolts?.toString().orUnknown()}")
             appendLine("Event enabled: ${status.eventEnabled?.toString().orUnknown()}")
@@ -1487,14 +1658,16 @@ class MainActivity : Activity() {
 
     private fun headerCard(uiState: AndroidUiState): LinearLayout {
         headerStatusMessageView = null
+        val thermalWarningActive = thermalHeaderWarningText != null
         val connectionText =
-            when {
+            thermalHeaderWarningText ?: when {
                 uiState.latestLoadedDeviceName != null && uiState.sessionViewState != null -> "SignalSlinger loaded."
                 else -> uiState.statusText
             }
         val headerMessage =
-            uiState.statusText
+            thermalHeaderWarningDetail ?: uiState.statusText
                 .takeIf { it.isNotBlank() && it != connectionText }
+        val headerIsError = thermalWarningActive || uiState.statusIsError
         return cardLayout().apply {
             addView(
                 LinearLayout(this@MainActivity).apply {
@@ -1520,7 +1693,7 @@ class MainActivity : Activity() {
                             addView(
                                 statusView(
                                     text = connectionText,
-                                    isError = uiState.statusIsError,
+                                    isError = headerIsError,
                                     onClick =
                                         uiState.latestLoadedDeviceName?.let { deviceName ->
                                             {
@@ -1550,7 +1723,7 @@ class MainActivity : Activity() {
                                         textSize = 13f
                                         gravity = Gravity.END
                                         textAlignment = View.TEXT_ALIGNMENT_VIEW_END
-                                        setTextColor(if (uiState.statusIsError) Color.parseColor("#9E1C1C") else Color.parseColor("#475569"))
+                                        setTextColor(if (headerIsError) Color.parseColor("#9E1C1C") else Color.parseColor("#475569"))
                                         layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
                                         val startPadding = (12 * resources.displayMetrics.density).toInt()
                                         val bottomPadding = (6 * resources.displayMetrics.density).toInt()
@@ -1729,7 +1902,9 @@ class MainActivity : Activity() {
                         appendLine("Derived event status: $derivedEventStatus")
                         appendLine("Starts in: ${status.eventStartsInSummary.orUnknown()}")
                         appendLine("Duration: ${JvmTimeSupport.describeEventDuration(settings.startTimeCompact, settings.finishTimeCompact, status.eventDurationSummary)}")
-                        appendLine("Temperature: ${formatTemperatureForUnit(status.temperatureC)}")
+                        appendLine("Maximum temperature: ${formatTemperatureForUnit(status.maximumTemperatureC)}")
+                        appendLine("Current temperature: ${formatTemperatureForUnit(status.temperatureC)}")
+                        appendLine("Minimum temperature: ${formatTemperatureForUnit(status.minimumTemperatureC)}")
                         appendLine("Internal battery: ${status.internalBatteryVolts?.let { "$it V" }.orUnknown()}")
                         appendLine("External battery: ${status.externalBatteryVolts?.let { "$it V" }.orUnknown()}")
                         append("Transmissions enabled: ${settings.transmissionsEnabled}")
@@ -1912,6 +2087,10 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Schedule Time Setting")
             .setSingleChoiceItems(labels, if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.ABSOLUTE) 0 else 1) { dialog, which ->
+                if (startTimeFinishAdjustmentDialogOpen) {
+                    dialog.dismiss()
+                    return@setSingleChoiceItems
+                }
                 scheduleTimeInputMode =
                     if (which == 0) {
                         AndroidScheduleTimeInputMode.ABSOLUTE
@@ -2061,6 +2240,9 @@ class MainActivity : Activity() {
     }
 
     private fun toggleScheduleTimeInputMode(label: String) {
+        if (startTimeFinishAdjustmentDialogOpen) {
+            return
+        }
         scheduleTimeInputMode =
             if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.ABSOLUTE) {
                 AndroidScheduleTimeInputMode.RELATIVE
@@ -2849,6 +3031,21 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun applyTemperatureRowAppearance(
+        labelView: TextView?,
+        fieldView: TextView,
+        temperatureC: Double?,
+    ) {
+        val alertColor =
+            when (TemperatureAlertSupport.alertLevel(temperatureC)) {
+                TemperatureAlertLevel.NORMAL -> null
+                TemperatureAlertLevel.WARNING -> Color.parseColor("#9A3412")
+                TemperatureAlertLevel.DANGER -> Color.parseColor("#9E1C1C")
+            }
+        labelView?.setTextColor(alertColor ?: Color.parseColor("#1F1F1F"))
+        fieldView.setTextColor(alertColor ?: Color.parseColor("#1F2937"))
+    }
+
     private fun configureIndependentTextEditor(editor: EditText) {
         editor.imeOptions = EditorInfo.IME_ACTION_DONE
         editor.setOnEditorActionListener { view, actionId, _ ->
@@ -3114,12 +3311,11 @@ class MainActivity : Activity() {
     }
 
     private fun defaultEventLengthRelativeSelection(): RelativeTimeSelection {
-        val validatedMinutes = validateDefaultEventLengthMinutes(defaultEventLengthMinutes)
-        return RelativeTimeSelection(
-            hours = validatedMinutes / 60,
-            minutes = validatedMinutes % 60,
-            useTopOfHour = false,
-        )
+        return RelativeScheduleSupport.selectionForDuration(defaultEventLengthMinutes).toAndroidSelection()
+    }
+
+    private fun relativeTimeSelectionForDuration(duration: Duration): RelativeTimeSelection {
+        return RelativeScheduleSupport.selectionForDuration(duration).toAndroidSelection()
     }
 
     private fun clearRelativeScheduleDisplayOverrides() {
@@ -3127,60 +3323,132 @@ class MainActivity : Activity() {
         relativeFinishDisplaySelectionOverride = null
     }
 
-    private fun validateDefaultEventLengthMinutes(minutes: Int): Int {
-        require(minutes in 10..(24 * 60)) {
-            "Default Event Length must be between 10 minutes and 24 hours."
+    private fun chooseStartTimeFinishAdjustmentDuration(
+        currentStartTimeCompact: String?,
+        currentFinishTimeCompact: String?,
+        proposedStartTimeCompact: String?,
+        onCancel: () -> Unit,
+        onSelected: (StartTimeFinishAdjustmentChoice) -> Unit,
+    ) {
+        val plannedOptions = StartTimeAdjustmentPlanner.plan(
+            currentStartTimeCompact = currentStartTimeCompact,
+            currentFinishTimeCompact = currentFinishTimeCompact,
+            proposedStartTimeCompact = proposedStartTimeCompact,
+            defaultEventLengthMinutes = defaultEventLengthMinutes,
+        )
+        if (plannedOptions.size == 1) {
+            onSelected(plannedOptions.single().toAndroidStartTimeFinishAdjustmentChoice())
+            return
         }
-        return minutes
+        val options = plannedOptions.map { it.toAndroidStartTimeFinishAdjustmentChoice() }
+        startTimeFinishAdjustmentDialogOpen = true
+        AlertDialog.Builder(this)
+            .setTitle("Adjust Finish Time")
+            .setMessage("Choose desired event duration:")
+            .setItems(options.map(StartTimeFinishAdjustmentChoice::label).toTypedArray()) { dialog, which ->
+                startTimeFinishAdjustmentDialogOpen = false
+                dialog.dismiss()
+                onSelected(options[which])
+            }
+            .setNegativeButton("Cancel") { dialog, _ ->
+                startTimeFinishAdjustmentDialogOpen = false
+                dialog.dismiss()
+                onCancel()
+            }
+            .setOnCancelListener {
+                startTimeFinishAdjustmentDialogOpen = false
+                onCancel()
+            }
+            .show()
+    }
+
+    private fun StartTimeAdjustmentOption.toAndroidStartTimeFinishAdjustmentChoice(): StartTimeFinishAdjustmentChoice {
+        return when (kind) {
+            StartTimeAdjustmentOptionKind.KEEP_EXISTING_DURATION -> StartTimeFinishAdjustmentChoice(
+                label = "Keep ${JvmTimeSupport.formatDurationCompact(duration!!)}",
+                duration = duration,
+            )
+            StartTimeAdjustmentOptionKind.ADJUST_FOR_DEFAULT_DURATION -> StartTimeFinishAdjustmentChoice(
+                label = "Adjust for ${formatDefaultEventLength(defaultEventLengthMinutes)}",
+                duration = duration,
+            )
+            StartTimeAdjustmentOptionKind.LEAVE_FINISH_UNCHANGED -> StartTimeFinishAdjustmentChoice(
+                label = "Leave Finish unchanged (${JvmTimeSupport.formatDurationCompact(duration!!)})",
+                duration = duration,
+            )
+            StartTimeAdjustmentOptionKind.DISABLE_EVENT -> StartTimeFinishAdjustmentChoice(
+                label = "Disable Event",
+                disablesEvent = true,
+            )
+        }
+    }
+
+    private fun chooseStartTimeDaysToRunHandling(
+        currentDaysToRun: Int,
+        onCancel: () -> Unit,
+        onSelected: (StartTimeDaysToRunChoice) -> Unit,
+    ) {
+        val plan = StartTimeDaysToRunPlanner.plan(currentDaysToRun)
+        val autoChoice = plan.autoChoice
+        if (autoChoice != null) {
+            runAfterModalUiSettles {
+                onSelected(autoChoice)
+            }
+            return
+        }
+        val options = plan.options
+        AlertDialog.Builder(this)
+            .setTitle("Days To Run")
+            .setMessage("Choose Days To Run handling:")
+            .setItems(options.map { it.label }.toTypedArray()) { dialog, which ->
+                dialog.dismiss()
+                runAfterModalUiSettles {
+                    onSelected(options[which].choice)
+                }
+            }
+            .setNegativeButton("Cancel") { dialog, _ ->
+                dialog.dismiss()
+                runAfterModalUiSettles {
+                    onCancel()
+                }
+            }
+            .setOnCancelListener {
+                runAfterModalUiSettles {
+                    onCancel()
+                }
+            }
+            .show()
+    }
+
+    private fun runAfterModalUiSettles(action: () -> Unit) {
+        content.post {
+            content.post {
+                action()
+            }
+        }
+    }
+
+    private fun validateDefaultEventLengthMinutes(minutes: Int): Int {
+        return RelativeScheduleSupport.validateDefaultEventLengthMinutes(minutes)
     }
 
     private fun formatDefaultEventLength(minutes: Int): String {
-        val validatedMinutes = validateDefaultEventLengthMinutes(minutes)
-        val hours = validatedMinutes / 60
-        val remainderMinutes = validatedMinutes % 60
-        return if (hours > 0) {
-            "${hours}h ${remainderMinutes.toString().padStart(2, '0')}m"
-        } else {
-            "${remainderMinutes}m"
-        }
+        return RelativeScheduleSupport.formatDefaultEventLength(minutes)
     }
 
     private fun deriveRelativeTimeSelection(
         baseCompact: String?,
         targetCompact: String?,
     ): RelativeTimeSelection {
-        val base = baseCompact?.let(JvmTimeSupport::normalizeCurrentTimeCompactForDisplay)?.let(JvmTimeSupport::parseCompactTimestamp)
-        val target = targetCompact?.let(JvmTimeSupport::normalizeCurrentTimeCompactForDisplay)?.let(JvmTimeSupport::parseCompactTimestamp)
-        if (base == null || target == null || !target.isAfter(base)) {
-            return RelativeTimeSelection(hours = 0, minutes = 0, useTopOfHour = true)
-        }
-        val totalMinutes = java.time.Duration.between(base, target).toMinutes().coerceAtLeast(0)
-        val hours = (totalMinutes / 60).toInt().coerceIn(0, 480)
-        val minutes = (totalMinutes % 60).toInt()
-        val roundedMinutes = ((minutes + 2) / 5) * 5
-        return if (roundedMinutes >= 60) {
-            RelativeTimeSelection(hours = (hours + 1).coerceIn(0, 480), minutes = 0, useTopOfHour = true)
-        } else if (roundedMinutes == 0) {
-            RelativeTimeSelection(hours = hours, minutes = 0, useTopOfHour = true)
-        } else {
-            RelativeTimeSelection(hours = hours, minutes = roundedMinutes, useTopOfHour = false)
-        }
+        return RelativeScheduleSupport.deriveSelection(baseCompact, targetCompact).toAndroidSelection()
     }
 
     private fun formatRelativeTimeSelection(selection: RelativeTimeSelection): String {
-        return if (selection.useTopOfHour) {
-            "+${selection.hours} TOTH"
-        } else {
-            "+${selection.hours}:${selection.minutes}"
-        }
+        return RelativeScheduleSupport.formatSelection(selection.toSharedSelection())
     }
 
     private fun formatRelativeTimeCommand(selection: RelativeTimeSelection): String {
-        return if (selection.useTopOfHour) {
-            "+${selection.hours}"
-        } else {
-            "+${selection.hours}:${selection.minutes}"
-        }
+        return RelativeScheduleSupport.formatCommand(selection.toSharedSelection())
     }
 
     private fun saveFrequencyDisplayUnitPreference() {
@@ -3435,6 +3703,24 @@ class MainActivity : Activity() {
             val bottomPadding = (8 * resources.displayMetrics.density).toInt()
             setPadding(0, 0, 0, bottomPadding)
         }
+
+    private fun updateThermalHeaderWarning(currentTemperatureC: Double?) {
+        when (TemperatureAlertSupport.alertLevel(currentTemperatureC)) {
+            TemperatureAlertLevel.DANGER -> {
+                thermalHeaderWarningText = "High Temperature Warning"
+                thermalHeaderWarningDetail =
+                    "Current temperature ${formatTemperatureForUnit(currentTemperatureC)}. Reduce device temperature before continuing."
+            }
+            TemperatureAlertLevel.NORMAL,
+            TemperatureAlertLevel.WARNING,
+            -> {
+                if (currentTemperatureC != null) {
+                    thermalHeaderWarningText = null
+                    thermalHeaderWarningDetail = null
+                }
+            }
+        }
+    }
 
     private fun calloutView(text: String): TextView =
         TextView(this).apply {

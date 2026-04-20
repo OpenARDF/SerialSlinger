@@ -294,6 +294,73 @@ object JvmTimeSupport {
         return fallback.orEmpty().ifBlank { "Not Available" }
     }
 
+    fun validEventDuration(
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+    ): Duration? {
+        val start = startTimeCompact?.let(::parseCompactTimestamp) ?: return null
+        val finish = finishTimeCompact?.let(::parseCompactTimestamp) ?: return null
+        if (!finish.isAfter(start)) {
+            return null
+        }
+        return Duration.between(start, finish)
+    }
+
+    fun finishTimeCompactFromStart(
+        startTimeCompact: String,
+        duration: Duration,
+    ): String {
+        require(!duration.isNegative && !duration.isZero) {
+            "Event duration must be positive."
+        }
+        val start = parseCompactTimestamp(startTimeCompact)
+        return formatCompactTimestamp(start.plus(duration))
+    }
+
+    fun formatRelativeDurationCommand(duration: Duration): String {
+        require(!duration.isNegative && !duration.isZero) {
+            "Relative duration must be positive."
+        }
+        val totalSeconds = duration.seconds.coerceAtLeast(0)
+        val totalMinutes = (totalSeconds / 60) + if (totalSeconds % 60 == 0L) 0 else 1
+        val hours = totalMinutes / 60
+        val minutes = totalMinutes % 60
+        return if (minutes == 0L) {
+            "+$hours"
+        } else {
+            "+$hours:$minutes"
+        }
+    }
+
+    fun relativeTargetTimeCompact(
+        baseCompact: String?,
+        hours: Int,
+        minutes: Int,
+        useTopOfHour: Boolean,
+    ): String? {
+        require(hours >= 0) { "Relative hours must not be negative." }
+        require(minutes >= 0) { "Relative minutes must not be negative." }
+        val base = normalizeCurrentTimeCompactForDisplay(baseCompact)?.let(::parseCompactTimestamp) ?: return null
+        val target = truncateToMinute(base)
+            .plusHours(hours.toLong())
+            .plusMinutes(if (useTopOfHour) 0L else minutes.toLong())
+        return formatCompactTimestamp(target)
+    }
+
+    fun eventDurationDiffersFromDefault(
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+        defaultEventLengthMinutes: Int,
+    ): Boolean {
+        val start = startTimeCompact?.let(::parseCompactTimestamp) ?: return false
+        val finish = finishTimeCompact?.let(::parseCompactTimestamp) ?: return false
+        if (finish.isBefore(start)) {
+            return false
+        }
+
+        return Duration.between(start, finish).toMinutes() != defaultEventLengthMinutes.toLong()
+    }
+
     fun formatDaysToRunRemainingSummary(
         totalDaysToRun: Int?,
         daysToRunRemaining: Int?,
