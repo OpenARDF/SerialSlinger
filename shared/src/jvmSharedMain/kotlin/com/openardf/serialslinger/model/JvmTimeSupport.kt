@@ -144,15 +144,26 @@ object JvmTimeSupport {
         startTimeCompact: String?,
         currentTimeCompact: String?,
     ): Boolean {
-        val current =
-            runCatching {
-                requireValidTimestampForWrite("Device Time", currentTimeCompact)
-            }.getOrNull() ?: return false
+        val current = schedulingFieldsEditableCurrentTime(currentTimeCompact) ?: return false
         val start =
             runCatching {
                 requireValidTimestampForWrite("Start Time", startTimeCompact)
             }.getOrNull() ?: return false
         return !start.isBefore(current)
+    }
+
+    fun areSchedulingFieldsEditable(
+        currentTimeCompact: String?,
+    ): Boolean {
+        return schedulingFieldsEditableCurrentTime(currentTimeCompact) != null
+    }
+
+    private fun schedulingFieldsEditableCurrentTime(
+        currentTimeCompact: String?,
+    ): LocalDateTime? {
+        return runCatching {
+            requireValidTimestampForWrite("Device Time", currentTimeCompact)
+        }.getOrNull()
     }
 
     fun minimumStartTimeBoundary(
@@ -265,11 +276,15 @@ object JvmTimeSupport {
         val start = startTimeCompact?.let(::parseCompactTimestamp)
         val finish = finishTimeCompact?.let(::parseCompactTimestamp)
 
+        if (current == null) {
+            return "Device Time not set."
+        }
+
         if (isManualEventStateSummary(normalizedSummary)) {
             return "Manually started event in progress"
         }
 
-        if (current != null && start != null && finish != null) {
+        if (start != null && finish != null) {
             if (start == finish) {
                 return "Disabled"
             }
@@ -312,9 +327,6 @@ object JvmTimeSupport {
             return "Disabled"
         }
 
-        if (current == null) {
-            return startsInFallback?.takeIf { it.isNotBlank() }?.let { "Starts in $it" } ?: "Not Available"
-        }
         if (start == null) {
             return "Disabled"
         }

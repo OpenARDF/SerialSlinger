@@ -130,6 +130,20 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun describesEventStatusAsSetDeviceTimeWhenCurrentTimeIsInvalid() {
+        val label = DesktopInputSupport.describeEventStatus(
+            deviceReportedEventEnabled = true,
+            eventStateSummary = "In progress",
+            currentTimeCompact = null,
+            startTimeCompact = "260410141530",
+            finishTimeCompact = "260410160000",
+            startsInFallback = "15 minutes 30 seconds",
+        )
+
+        assertEquals("Device Time not set.", label)
+    }
+
+    @Test
     fun describesCompletedEventAsCompleted() {
         val label = DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = true,
@@ -552,7 +566,7 @@ class DesktopInputSupportTest {
             startsInFallback = "15 minutes 30 seconds",
         )
 
-        assertEquals("Starts in 15 minutes 30 seconds", label)
+        assertEquals("Device Time not set.", label)
     }
 
     @Test

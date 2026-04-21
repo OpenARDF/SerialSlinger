@@ -6,6 +6,24 @@ import kotlin.test.assertTrue
 
 class JvmTimeSupportTest {
     @Test
+    fun `scheduling fields are editable when device time is valid`() {
+        assertTrue(
+            JvmTimeSupport.areSchedulingFieldsEditable(
+                currentTimeCompact = "260421115500",
+            ),
+        )
+    }
+
+    @Test
+    fun `scheduling fields are not editable when device time is invalid`() {
+        assertFalse(
+            JvmTimeSupport.areSchedulingFieldsEditable(
+                currentTimeCompact = null,
+            ),
+        )
+    }
+
+    @Test
     fun `finish time is editable when start time is valid and not in the past`() {
         assertTrue(
             JvmTimeSupport.isFinishTimeEditable(

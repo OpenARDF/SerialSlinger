@@ -871,6 +871,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         }
 
+        val schedulingFieldsEditable = JvmTimeSupport.areSchedulingFieldsEditable(loadedSettings.currentTimeCompact)
+
         lateinit var startTimeField: EditText
         startTimeField =
             if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
@@ -884,6 +886,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     hint = "Start Time",
                     textSizeSp = timestampFieldTextSizeSp(),
                     actionLabel = "Start Time",
+                    isEnabledForInteraction = schedulingFieldsEditable,
                 ) {
                     showRelativeTimePickerDialog(
                         title = "Relative Start Time",
@@ -942,6 +945,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     hint = "Start Time",
                     textSizeSp = timestampFieldTextSizeSp(),
                     actionLabel = "Start Time",
+                    isEnabledForInteraction = schedulingFieldsEditable,
                 ) {
                     pickDateTime(initialValue = startTimeField.text.toString()) { selected ->
                         val formattedTimestamp = formatDisplayTimestamp(selected)
@@ -1004,6 +1008,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
             }
         timedEventCard.addView(startTimeRow)
+        startTimeLabelView?.alpha = if (schedulingFieldsEditable) 1f else 0.55f
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
             absoluteStartField =
                 readOnlyField(
@@ -1020,10 +1025,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             timedEventCard.addView(absoluteStartRow)
         }
         val finishTimeEditable =
-            JvmTimeSupport.isFinishTimeEditable(
+            schedulingFieldsEditable &&
+                JvmTimeSupport.isFinishTimeEditable(
                 startTimeCompact = loadedSettings.startTimeCompact,
                 currentTimeCompact = loadedSettings.currentTimeCompact,
-            )
+                )
 
         lateinit var finishTimeField: EditText
         finishTimeField =
@@ -1227,7 +1233,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             integerSpinner(
                 values = 1..255,
                 selectedValue = uiState.draftDaysToRun?.toIntOrNull() ?: loadedSettings.daysToRun,
-            )
+            ).apply {
+                isEnabled = schedulingFieldsEditable
+                isClickable = schedulingFieldsEditable
+                alpha = if (schedulingFieldsEditable) 1f else 0.55f
+            }
+        var daysToRunLabelView: TextView? = null
         val daysRowField =
             LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -1260,7 +1271,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 daysRemainingSummaryView = daysRemainingView
                 addView(daysRemainingView)
             }
-        timedEventCard.addView(compactLabeledRow("Days To Run", daysRowField))
+        timedEventCard.addView(
+            compactLabeledRow(
+                "Days To Run",
+                daysRowField,
+                captureLabelView = { daysToRunLabelView = it },
+            ),
+        )
+        daysToRunLabelView?.alpha = if (schedulingFieldsEditable) 1f else 0.55f
         wireImmediateIntSpinner(daysToRunSpinner, selectedValue = uiState.draftDaysToRun?.toIntOrNull() ?: loadedSettings.daysToRun) { selectedValue ->
             val currentDuration = JvmTimeSupport.validEventDuration(
                 loadedSettings.startTimeCompact,

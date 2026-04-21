@@ -208,7 +208,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val alertForeground = Color(0xB9, 0x1C, 0x1C)
     private val portModel = DefaultComboBoxModel<SignalSlingerPortProbe>()
     private val portComboBox = JComboBox(portModel)
-    private val autoDetectButton = JButton("Find Devices")
+    private val autoDetectButton = JButton("Find Device")
     private val submitButton = createAccentButton("Clone")
     private val applyButton = createAccentButton(
         title = "Apply",
@@ -1722,7 +1722,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     showConnectionIndicator(
                         ConnectionIndicatorState.SEARCHING,
-                        "SignalSlinger detected on ${result.portInfo.systemPortPath}. Select it or click Find Devices.",
+                        "SignalSlinger detected on ${result.portInfo.systemPortPath}. Select it or click Find Device.",
                     )
                     setStatus("SignalSlinger detected on ${result.portInfo.systemPortPath}.")
                 }
@@ -5046,9 +5046,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val connected = currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
         val schedulingSupported = loadedSnapshot?.capabilities?.supportsScheduling == true
         val writableEnabled = connected && !isBusy
-        val finishTimeEditable =
+        val schedulingFieldsEditable =
             writableEnabled &&
             schedulingSupported &&
+            loadedSnapshot?.settings?.let { settings ->
+                DesktopInputSupport.areSchedulingFieldsEditable(settings.currentTimeCompact)
+            } == true
+        val finishTimeEditable =
+            schedulingFieldsEditable &&
             loadedSnapshot?.settings?.let { settings ->
                 DesktopInputSupport.isFinishTimeEditable(
                     startTimeCompact = settings.startTimeCompact,
@@ -5070,19 +5075,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         batteryModeCombo.isEnabled = writableEnabled
         transmissionsField.isEnabled = true
 
-        daysField.isEnabled = writableEnabled && schedulingSupported
+        daysField.isEnabled = schedulingFieldsEditable
         frequency1Field.isEnabled = writableEnabled
         frequency2Field.isEnabled = writableEnabled
         frequency3Field.isEnabled = writableEnabled
         frequencyBField.isEnabled = writableEnabled
 
         applyDateTimeEditorCapability(manualTimeSpinner, writableEnabled && schedulingSupported)
-        applyDateTimeEditorCapability(startTimeSpinner, writableEnabled && schedulingSupported)
+        applyDateTimeEditorCapability(startTimeSpinner, schedulingFieldsEditable)
         applyDateTimeEditorCapability(finishTimeSpinner, finishTimeEditable)
-        startTimeRelativeField.isEnabled = writableEnabled && schedulingSupported
+        startTimeRelativeField.isEnabled = schedulingFieldsEditable
         finishTimeRelativeField.isEnabled = finishTimeEditable
-        startTimeAbsoluteMirrorField.isEnabled = writableEnabled && schedulingSupported
+        startTimeAbsoluteMirrorField.isEnabled = schedulingFieldsEditable
         finishTimeAbsoluteMirrorField.isEnabled = finishTimeEditable
+        startTimeRowLabel.isEnabled = schedulingFieldsEditable
         finishTimeRowLabel.isEnabled = finishTimeEditable
         updateLastsRowEditability(finishTimeEditable)
         setTimeButton.isEnabled =
@@ -6692,7 +6698,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (showDialog) {
             JOptionPane.showMessageDialog(
                 this,
-                "$message\n\nThe connection has been marked disconnected. You can reconnect or click Find Devices again.",
+                "$message\n\nThe connection has been marked disconnected. You can reconnect or click Find Device again.",
             )
         }
     }
@@ -7096,6 +7102,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     )
                     component.putClientProperty(DATE_TIME_ARROW_FIELD_PRESERVER_KEY, true)
                 }
+                installDateTimeSpinnerArrowStepHandler(spinner, component)
             }
             if (component is Container) {
                 component.components.forEach(::visit)
@@ -7103,6 +7110,26 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         spinner.components.forEach(::visit)
+    }
+
+    private fun installDateTimeSpinnerArrowStepHandler(spinner: JSpinner, button: AbstractButton) {
+        if (button.getClientProperty(DATE_TIME_ARROW_STEP_HANDLER_INSTALLED_KEY) == true) {
+            return
+        }
+
+        val incrementAction = spinner.actionMap.get("increment") as? java.awt.event.ActionListener
+        val decrementAction = spinner.actionMap.get("decrement") as? java.awt.event.ActionListener
+        val originalActionListener = button.actionListeners.firstOrNull { listener ->
+            listener === incrementAction || listener === decrementAction
+        } ?: return
+        val forward = originalActionListener === incrementAction
+
+        button.removeActionListener(originalActionListener)
+        button.addActionListener {
+            val selectedField = spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int ?: Calendar.MINUTE
+            stepDateTimeSpinner(spinner, forward, selectedField)
+        }
+        button.putClientProperty(DATE_TIME_ARROW_STEP_HANDLER_INSTALLED_KEY, true)
     }
 
     private fun configureDateTimeSpinnerKeyboardFieldPreservation(spinner: JSpinner) {
@@ -7156,13 +7183,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun stepDateTimeSpinnerFromKeyboard(spinner: JSpinner, forward: Boolean) {
+        stepDateTimeSpinner(spinner, forward)
+    }
+
+    private fun stepDateTimeSpinner(
+        spinner: JSpinner,
+        forward: Boolean,
+        selectedFieldOverride: Int? = null,
+    ) {
         if (updatingForm || isDateTimeCommitSuppressed(spinner) || shouldSuppressScheduleCommit(spinner)) {
             return
         }
 
         val textField = spinnerEditorTextField(spinner)
-        val currentField = spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int ?: Calendar.MINUTE
-        val selectedField = selectedDateTimeEditorFieldFromText(textField, currentField)
+        val currentField = selectedFieldOverride ?: (spinner.getClientProperty(DATE_TIME_ACTIVE_FIELD_KEY) as? Int ?: Calendar.MINUTE)
+        val selectedField = selectedFieldOverride ?: selectedDateTimeEditorFieldFromText(textField, currentField)
         setSelectedDateTimeEditorField(spinner, selectedField)
         val steppedValue = withForcedDateTimeStepField(spinner, selectedField) {
             try {
@@ -7698,6 +7733,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         const val SPINNER_COMMIT_HANDLER_INSTALLED_KEY = "serialslinger.spinnerCommitHandlerInstalled"
         const val SPINNER_EDITOR_COMMIT_ACTION_KEY = "serialslinger.spinnerEditorCommitAction"
         const val DATE_TIME_ARROW_FIELD_PRESERVER_KEY = "serialslinger.dateTimeArrowFieldPreserverInstalled"
+        const val DATE_TIME_ARROW_STEP_HANDLER_INSTALLED_KEY = "serialslinger.dateTimeArrowStepHandlerInstalled"
         const val DATE_TIME_KEYBOARD_STEP_HANDLER_INSTALLED_KEY = "serialslinger.dateTimeKeyboardStepInstalled"
         const val DATE_TIME_INCREMENT_ACTION_KEY = "serialslinger.dateTimeIncrementAction"
         const val DATE_TIME_DECREMENT_ACTION_KEY = "serialslinger.dateTimeDecrementAction"

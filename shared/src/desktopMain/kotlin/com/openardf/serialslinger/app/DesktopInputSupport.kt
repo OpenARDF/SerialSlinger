@@ -157,6 +157,10 @@ object DesktopInputSupport {
         return JvmTimeSupport.validateCurrentTimeForWrite(currentTimeCompact)
     }
 
+    fun areSchedulingFieldsEditable(currentTimeCompact: String?): Boolean {
+        return JvmTimeSupport.areSchedulingFieldsEditable(currentTimeCompact)
+    }
+
     fun adjustManualTimeTargetForWrite(
         selectedTime: LocalDateTime,
         estimatedWriteDelayMillis: Long,
