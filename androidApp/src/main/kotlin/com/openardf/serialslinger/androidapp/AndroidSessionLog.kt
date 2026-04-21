@@ -11,6 +11,7 @@ enum class AndroidLogCategory(
 ) {
     APP("APP"),
     SERIAL("SERIAL"),
+    USER("USER"),
 }
 
 data class AndroidLogEntry(

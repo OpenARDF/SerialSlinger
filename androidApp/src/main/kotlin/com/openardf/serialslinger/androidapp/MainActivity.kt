@@ -3,6 +3,7 @@ package com.openardf.serialslinger.androidapp
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.DatePickerDialog
+import android.app.Dialog
 import android.app.TimePickerDialog
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -25,12 +26,15 @@ import android.view.MotionEvent
 import android.text.InputType
 import android.text.SpannableStringBuilder
 import android.text.method.LinkMovementMethod
+import android.text.style.ForegroundColorSpan
 import android.text.style.URLSpan
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.view.Gravity
+import android.view.Window
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -67,6 +71,7 @@ import com.openardf.serialslinger.transport.AndroidUsbTransport
 import com.openardf.serialslinger.transport.SignalSlingerReadPlan
 import java.time.Duration
 import java.time.LocalDateTime
+import java.util.WeakHashMap
 
 class MainActivity : Activity() {
 
@@ -152,6 +157,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var startTimeFinishAdjustmentDialogOpen: Boolean = false
     private var lastsDurationDialogOpen: Boolean = false
     private var multiDayDurationGuardDialogOpen: Boolean = false
+    private val loggedWindows = WeakHashMap<Window, Boolean>()
 
     private val refreshListener: () -> Unit = { runOnUiThread { renderContent() } }
     private val clockTickRunnable =
@@ -288,6 +294,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 addView(content)
             },
         )
+        installWindowUserActionLogging(window, "Main")
 
         registerUsbReceiver()
         if (!handleUsbLaunchIntent(intent, fromNewIntent = false)) {
@@ -560,7 +567,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         dialog.dismiss()
                     }
                     .setNegativeButton("Cancel", null)
-                    .show()
+                    .showLogged("Choose Event Type")
             }
         foxRoleChooserButton =
             rowButton("Choose Fox Role") {
@@ -580,7 +587,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         dialog.dismiss()
                     }
                     .setNegativeButton("Cancel", null)
-                    .show()
+                    .showLogged("Choose Fox Role")
             }
         refreshProfileSelection(selectedEventType, selectedFoxRole)
 
@@ -677,6 +684,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 hint = "Device Time",
                 textSizeSp = timestampFieldTextSizeSp(),
                 emphasizedInputStyle = deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL,
+                actionLabel = "Device Time",
             ) {
                 if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) {
                     pickDateTime(
@@ -875,6 +883,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     text = formatRelativeTimeSelection(initialSelection),
                     hint = "Start Time",
                     textSizeSp = timestampFieldTextSizeSp(),
+                    actionLabel = "Start Time",
                 ) {
                     showRelativeTimePickerDialog(
                         title = "Relative Start Time",
@@ -932,6 +941,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     text = uiState.draftStartTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.startTimeCompact),
                     hint = "Start Time",
                     textSizeSp = timestampFieldTextSizeSp(),
+                    actionLabel = "Start Time",
                 ) {
                     pickDateTime(initialValue = startTimeField.text.toString()) { selected ->
                         val formattedTimestamp = formatDisplayTimestamp(selected)
@@ -1009,6 +1019,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
             timedEventCard.addView(absoluteStartRow)
         }
+        val finishTimeEditable =
+            JvmTimeSupport.isFinishTimeEditable(
+                startTimeCompact = loadedSettings.startTimeCompact,
+                currentTimeCompact = loadedSettings.currentTimeCompact,
+            )
 
         lateinit var finishTimeField: EditText
         finishTimeField =
@@ -1019,6 +1034,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     text = formatRelativeTimeSelection(initialSelection),
                     hint = "Finish Time",
                     textSizeSp = timestampFieldTextSizeSp(),
+                    actionLabel = "Finish Time",
+                    isEnabledForInteraction = finishTimeEditable,
                 ) {
                     showRelativeTimePickerDialog(
                         title = "Relative Finish Time",
@@ -1063,6 +1080,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     text = uiState.draftFinishTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.finishTimeCompact),
                     hint = "Finish Time",
                     textSizeSp = timestampFieldTextSizeSp(),
+                    actionLabel = "Finish Time",
+                    isEnabledForInteraction = finishTimeEditable,
                 ) {
                     pickDateTime(initialValue = finishTimeField.text.toString()) { selected ->
                         val formattedTimestamp = formatDisplayTimestamp(selected)
@@ -1114,6 +1133,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
             }
         timedEventCard.addView(finishTimeRow)
+        finishTimeLabelView?.apply {
+            alpha = if (finishTimeEditable) 1f else 0.55f
+        }
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
             absoluteFinishField =
                 readOnlyField(
@@ -1155,6 +1177,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 text = durationSummary,
                 hint = "Lasts",
                 textSizeSp = timestampFieldTextSizeSp(),
+                actionLabel = "Lasts",
+                isEnabledForInteraction = finishTimeEditable,
             ) {
                 showLastsDurationDialog(
                     initialDuration =
@@ -1192,7 +1216,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             ),
         )
         lastsLabelView?.setTextColor(if (durationDiffersFromDefault) warningColor else normalLabelColor)
-        lastsLabelView?.setOnClickListener { lastsField.performClick() }
+        lastsLabelView?.alpha = if (finishTimeEditable) 1f else 0.55f
+        lastsLabelView?.setOnClickListener(if (finishTimeEditable) {
+            View.OnClickListener { lastsField.performClick() }
+        } else {
+            null
+        })
 
         val daysToRunSpinner =
             integerSpinner(
@@ -2081,7 +2110,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 options[which].second.invoke()
             }
             .setNegativeButton("Close", null)
-            .show()
+            .showLogged("View")
     }
 
     private fun showSettingsDialog() {
@@ -2115,7 +2144,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 dialog.dismiss()
             }
             .setNegativeButton("Close", null)
-            .show()
+            .showLogged("Settings")
     }
 
     private fun showFrequencySettingsDialog() {
@@ -2127,7 +2156,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 dialog.dismiss()
             }
             .setNegativeButton("Close", null)
-            .show()
+            .showLogged("Frequency Units")
     }
 
     private fun showTemperatureSettingsDialog() {
@@ -2145,7 +2174,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 dialog.dismiss()
             }
             .setNegativeButton("Close", null)
-            .show()
+            .showLogged("Temperature Units")
     }
 
     private fun showDeviceTimeSettingDialog() {
@@ -2163,7 +2192,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 dialog.dismiss()
             }
             .setNegativeButton("Close", null)
-            .show()
+            .showLogged("Device Time Setting")
     }
 
     private fun showScheduleTimeInputSettingDialog() {
@@ -2189,7 +2218,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 dialog.dismiss()
             }
             .setNegativeButton("Close", null)
-            .show()
+            .showLogged("Schedule Time Setting")
     }
 
     private fun showDefaultEventLengthDialog() {
@@ -2262,7 +2291,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 setDefaultEventLengthMinutes(currentMinutes())
             }
             .setNegativeButton("Cancel", null)
-            .show()
+            .showLogged("Default Event Length")
     }
 
     private fun showLastsDurationDialog(
@@ -2350,7 +2379,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 .create()
         dialog.setOnDismissListener { lastsDurationDialogOpen = false }
         lastsDurationDialogOpen = true
-        dialog.show()
+        dialog.showLogged("Lasts")
     }
 
     private fun showAboutDialog() {
@@ -2382,7 +2411,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             .setTitle("About SerialSlinger")
             .setView(aboutView)
             .setPositiveButton("Close", null)
-            .show()
+            .showLogged("About SerialSlinger")
     }
 
     private fun appVersionLabel(): String {
@@ -2700,6 +2729,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     showLargeTextDialog(
                         title = "Android Session Log",
                         text = AndroidSessionController.debugSessionLogSummary(),
+                        colorizeLogCategories = true,
                     )
                 })
                 add("Clear Android Session Logs" to {
@@ -2712,7 +2742,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             showLargeTextDialog("Android Session Logs", message)
                         }
                         .setNegativeButton("Cancel", null)
-                        .show()
+                        .showLogged("Clear Android Session Logs")
                 })
             }
         AlertDialog.Builder(this)
@@ -2721,17 +2751,18 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 options[which].second.invoke()
             }
             .setNegativeButton("Close", null)
-            .show()
+            .showLogged("Tools")
     }
 
     private fun showLargeTextDialog(
         title: String,
         text: String,
+        colorizeLogCategories: Boolean = false,
     ) {
         val padding = (16 * resources.displayMetrics.density).toInt()
         val textView =
             TextView(this).apply {
-                this.text = text.ifBlank { "<empty>" }
+                this.text = if (colorizeLogCategories) buildColorizedLogText(text) else text.ifBlank { "<empty>" }
                 textSize = 14f
                 setTextColor(Color.parseColor("#2B2B2B"))
                 setPadding(padding, padding, padding, padding)
@@ -2744,7 +2775,164 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 },
             )
             .setPositiveButton("Close", null)
-            .show()
+            .showLogged(title)
+    }
+
+    private fun buildColorizedLogText(text: String): CharSequence {
+        val rendered = text.ifBlank { "<empty>" }
+        val lines = rendered.split('\n')
+        val builder = SpannableStringBuilder()
+        lines.forEachIndexed { index, line ->
+            val start = builder.length
+            builder.append(line)
+            val color =
+                when {
+                    line.contains("[${AndroidLogCategory.USER.label}]") -> Color.parseColor("#7A285B")
+                    line.contains("[${AndroidLogCategory.SERIAL.label}]") -> Color.parseColor("#166534")
+                    line.contains("[${AndroidLogCategory.APP.label}]") -> Color.parseColor("#0B3D91")
+                    line.contains("==") -> Color.parseColor("#111827")
+                    else -> null
+                }
+            if (color != null && line.isNotBlank()) {
+                builder.setSpan(
+                    ForegroundColorSpan(color),
+                    start,
+                    builder.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+            if (index < lines.lastIndex) {
+                builder.append('\n')
+            }
+        }
+        return builder
+    }
+
+    private fun AlertDialog.Builder.showLogged(title: String): AlertDialog = showLoggedDialog(title, create())
+
+    private fun <T : Dialog> T.showLogged(title: String): T = showLoggedDialog(title, this)
+
+    private fun <T : Dialog> showLoggedDialog(
+        title: String,
+        dialog: T,
+    ): T {
+        dialog.setOnShowListener {
+            installWindowUserActionLogging(dialog.window, title)
+        }
+        dialog.show()
+        return dialog
+    }
+
+    private fun installWindowUserActionLogging(
+        targetWindow: Window?,
+        title: String,
+    ) {
+        val safeWindow = targetWindow ?: return
+        if (loggedWindows.containsKey(safeWindow)) {
+            return
+        }
+        val originalCallback = safeWindow.callback ?: return
+        safeWindow.callback =
+            UserActionLoggingWindowCallback(
+                trackedWindow = safeWindow,
+                delegate = originalCallback,
+            )
+        loggedWindows[safeWindow] = true
+    }
+
+    private fun logWindowUserAction(
+        targetWindow: Window,
+        event: MotionEvent,
+    ) {
+        val targetView =
+            findTouchedClickableView(
+                view = targetWindow.decorView,
+                rawX = event.rawX.toInt(),
+                rawY = event.rawY.toInt(),
+            ) ?: return
+        val description = resolveAndroidUserActionDescription(targetView) ?: return
+        AndroidSessionController.logUserAction(description)
+    }
+
+    private fun findTouchedClickableView(
+        view: View,
+        rawX: Int,
+        rawY: Int,
+    ): View? {
+        if (!view.isShown || !view.containsScreenPoint(rawX, rawY)) {
+            return null
+        }
+        if (view is ViewGroup) {
+            for (index in view.childCount - 1 downTo 0) {
+                val child = view.getChildAt(index)
+                val nestedMatch = findTouchedClickableView(child, rawX, rawY)
+                if (nestedMatch != null) {
+                    return nestedMatch
+                }
+            }
+        }
+        return if (view.hasOnClickListeners() || view.isClickable || view.isLongClickable) view else null
+    }
+
+    private fun View.containsScreenPoint(
+        rawX: Int,
+        rawY: Int,
+    ): Boolean {
+        val location = IntArray(2)
+        getLocationOnScreen(location)
+        val left = location[0]
+        val top = location[1]
+        return rawX >= left && rawX < left + width && rawY >= top && rawY < top + height
+    }
+
+    private fun resolveAndroidUserActionDescription(view: View): String? {
+        val explicitLabel = view.contentDescription?.toString()?.trim().takeIf { !it.isNullOrBlank() }
+        if (explicitLabel != null) {
+            return "Tapped $explicitLabel."
+        }
+        val directText =
+            (view as? TextView)?.text
+                ?.toString()
+                ?.trim()
+                ?.takeIf(String::isNotBlank)
+        if (directText != null) {
+            return "Tapped $directText."
+        }
+        val nestedText = firstTextLabel(view)
+        if (nestedText != null) {
+            return "Tapped $nestedText."
+        }
+        return null
+    }
+
+    private fun firstTextLabel(view: View): String? {
+        if (view is TextView) {
+            val text = view.text?.toString()?.trim()
+            if (!text.isNullOrBlank()) {
+                return text
+            }
+        }
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) {
+                val nested = firstTextLabel(view.getChildAt(index))
+                if (!nested.isNullOrBlank()) {
+                    return nested
+                }
+            }
+        }
+        return null
+    }
+
+    private inner class UserActionLoggingWindowCallback(
+        private val trackedWindow: Window,
+        private val delegate: Window.Callback,
+    ) : Window.Callback by delegate {
+        override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+            if (event.actionMasked == MotionEvent.ACTION_UP) {
+                logWindowUserAction(trackedWindow, event)
+            }
+            return delegate.dispatchTouchEvent(event)
+        }
     }
 
     private fun integerSpinner(
@@ -2914,6 +3102,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             pickerField(
                 text = formatFrequencyForUnit(currentFrequencyHz),
                 hint = label,
+                actionLabel = label,
             ) {
                 showFrequencyPickerDialog(
                     title = label,
@@ -3052,7 +3241,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 onSelected(currentKhz() * 1_000L)
             }
             .setNegativeButton("Cancel", null)
-            .show()
+            .showLogged("Pick $title")
     }
 
     private fun digitSpinner(
@@ -3240,18 +3429,24 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         hint: String,
         textSizeSp: Float = 15f,
         emphasizedInputStyle: Boolean = true,
+        actionLabel: String = hint.ifBlank { text },
+        isEnabledForInteraction: Boolean = true,
         onPick: () -> Unit,
     ): EditText =
         EditText(this).apply {
             setText(text)
             this.hint = hint
+            contentDescription = actionLabel
             textSize = textSizeSp
             inputType = InputType.TYPE_NULL
             isFocusable = false
             isFocusableInTouchMode = false
             isCursorVisible = false
             setSingleLine()
-            applyPickerFieldPresentation(emphasizedInputStyle)
+            applyPickerFieldPresentation(
+                emphasizedInputStyle = emphasizedInputStyle,
+                enabledForInteraction = isEnabledForInteraction,
+            )
             setOnClickListener { onPick() }
             layoutParams =
                 LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
@@ -3260,17 +3455,30 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 }
         }
 
-    private fun EditText.applyPickerFieldPresentation(emphasizedInputStyle: Boolean) {
+    private fun EditText.applyPickerFieldPresentation(
+        emphasizedInputStyle: Boolean,
+        enabledForInteraction: Boolean = true,
+    ) {
         val horizontalPadding = (10 * resources.displayMetrics.density).toInt()
         val verticalPadding = (8 * resources.displayMetrics.density).toInt()
         setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
-        if (emphasizedInputStyle) {
+        isEnabled = enabledForInteraction
+        isClickable = enabledForInteraction
+        if (enabledForInteraction && emphasizedInputStyle) {
             setBackgroundColor(Color.WHITE)
             setTextColor(Color.parseColor("#1F2937"))
             alpha = 1f
-        } else {
+        } else if (enabledForInteraction) {
             background = null
             setTextColor(Color.parseColor("#4B5563"))
+            alpha = 1f
+        } else {
+            if (emphasizedInputStyle) {
+                setBackgroundColor(Color.parseColor("#E5E7EB"))
+            } else {
+                background = null
+            }
+            setTextColor(Color.parseColor("#9CA3AF"))
             alpha = 1f
         }
     }
@@ -3310,12 +3518,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     initialDateTime.hour,
                     initialDateTime.minute,
                     true,
-                ).show()
+                ).showLogged("Pick Time")
             },
             initialDateTime.year,
             initialDateTime.monthValue - 1,
             initialDateTime.dayOfMonth,
-        ).show()
+        ).showLogged("Pick Date")
     }
 
     private fun showRelativeTimePickerDialog(
@@ -3396,7 +3604,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 onSelected(currentSelection())
             }
             .setNegativeButton("Cancel", null)
-            .show()
+            .showLogged(title)
     }
 
     private fun parseDateTimeInput(value: String): LocalDateTime? {
@@ -3496,7 +3704,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 startTimeFinishAdjustmentDialogOpen = false
                 onCancel()
             }
-            .show()
+            .showLogged("Adjust Finish Time")
     }
 
     private fun StartTimeAdjustmentOption.toAndroidStartTimeFinishAdjustmentChoice(): StartTimeFinishAdjustmentChoice {
@@ -3554,7 +3762,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     onCancel()
                 }
             }
-            .show()
+            .showLogged("Days To Run")
     }
 
     private fun chooseMultiDayDurationGuardHandling(
@@ -3590,7 +3798,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     onCancel()
                 }
             }
-            .show()
+            .showLogged("Invalid Multi-Day Event")
     }
 
     private fun resolveMultiDayDurationGuardForScheduleChange(
@@ -3718,6 +3926,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun rowButton(text: String, onClick: () -> Unit): Button =
         Button(this).apply {
             this.text = text
+            contentDescription = text
             layoutParams =
                 LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
                     val bottomMargin = (8 * resources.displayMetrics.density).toInt()
@@ -3729,6 +3938,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun weightedButton(text: String, onClick: () -> Unit): Button =
         Button(this).apply {
             this.text = text
+            contentDescription = text
             layoutParams =
                 LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
                     val horizontalMargin = (4 * resources.displayMetrics.density).toInt()
@@ -3885,7 +4095,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 .setTitle("Device Time Warning")
                 .setView(container)
                 .create()
-        dialog.show()
+        dialog.showLogged("Device Time Warning")
     }
 
     private fun sectionTitle(text: String): TextView =
@@ -3912,6 +4122,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     ): TextView =
         TextView(this).apply {
             this.text = text
+            contentDescription = text
             textSize = 15f
             setTextColor(if (isError) Color.parseColor("#9E1C1C") else Color.parseColor("#1F5F2C"))
             if (onClick != null) {

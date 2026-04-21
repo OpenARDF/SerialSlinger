@@ -3149,9 +3149,7 @@ object AndroidSessionController {
         trimmedLines.forEach { line ->
             Log.i(logTag, "event=$title $line")
         }
-        synchronized(this) {
-            sessionLog
-        }?.appendSection(
+        appendSessionLogEntries(
             title = title,
             entries = trimmedLines.map { line ->
                 AndroidLogEntry(
@@ -3159,6 +3157,38 @@ object AndroidSessionController {
                     category = AndroidLogCategory.APP,
                 )
             },
+        )
+    }
+
+    fun logUserAction(action: String) {
+        val message = action.trim()
+        if (message.isBlank()) {
+            return
+        }
+        Log.i(logTag, "user_action=$message")
+        appendSessionLogEntries(
+            title = "User Action",
+            entries = listOf(
+                AndroidLogEntry(
+                    message = message,
+                    category = AndroidLogCategory.USER,
+                ),
+            ),
+        )
+    }
+
+    private fun appendSessionLogEntries(
+        title: String,
+        entries: List<AndroidLogEntry>,
+    ) {
+        if (entries.isEmpty()) {
+            return
+        }
+        synchronized(this) {
+            sessionLog
+        }?.appendSection(
+            title = title,
+            entries = entries,
         )
     }
 

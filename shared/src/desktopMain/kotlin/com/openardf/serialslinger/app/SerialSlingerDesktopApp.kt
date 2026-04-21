@@ -35,6 +35,7 @@ import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.session.SettingVerification
 import com.openardf.serialslinger.transport.DesktopSerialPortInfo
 import com.openardf.serialslinger.transport.DesktopSerialTransport
+import java.awt.AWTEvent
 import java.awt.Desktop
 import java.awt.Dialog
 import java.awt.BorderLayout
@@ -52,7 +53,9 @@ import java.awt.Point
 import java.awt.RenderingHints
 import java.awt.Taskbar
 import java.awt.Toolkit
+import java.awt.Window
 import java.awt.datatransfer.StringSelection
+import java.awt.event.AWTEventListener
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
 import java.awt.event.MouseAdapter
@@ -205,7 +208,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val alertForeground = Color(0xB9, 0x1C, 0x1C)
     private val portModel = DefaultComboBoxModel<SignalSlingerPortProbe>()
     private val portComboBox = JComboBox(portModel)
-    private val autoDetectButton = JButton("Auto Detect")
+    private val autoDetectButton = JButton("Find Devices")
     private val submitButton = createAccentButton("Clone")
     private val applyButton = createAccentButton(
         title = "Apply",
@@ -393,9 +396,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val deviceLogStyle = SimpleAttributeSet().apply {
         StyleConstants.setForeground(this, Color(0x9A, 0x34, 0x12))
     }
+    private val userLogStyle = SimpleAttributeSet().apply {
+        StyleConstants.setForeground(this, Color(0x7A, 0x28, 0x5B))
+    }
     private val neutralLogStyle = SimpleAttributeSet().apply {
         StyleConstants.setForeground(this, Color(0x1F, 0x29, 0x37))
     }
+    private var desktopUserActionLoggingInstalled: Boolean = false
+    private val desktopUserActionEventListener =
+        AWTEventListener { event ->
+            handleDesktopUserActionMouseEvent(event as? MouseEvent ?: return@AWTEventListener)
+        }
     private val editableTextFieldBackground = patternTextField.background
     private val readOnlyTextFieldBackground = UIManager.getColor("TextField.inactiveBackground") ?: editableTextFieldBackground
     private val editableTextFieldBorder: Border = patternTextField.border
@@ -468,6 +479,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureLogAutoScroll()
         showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "Not Connected")
         appendRenderedLog(sessionLog.loadCurrentLogText())
+        installDesktopUserActionLogging()
         setRawSerialVisible(displayPreferences.rawSerialVisible)
         setLogVisible(displayPreferences.logVisible)
         applyTimeSetMode(displayPreferences.timeSetMode)
@@ -1710,7 +1722,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     showConnectionIndicator(
                         ConnectionIndicatorState.SEARCHING,
-                        "SignalSlinger detected on ${result.portInfo.systemPortPath}. Select it or run Auto Detect.",
+                        "SignalSlinger detected on ${result.portInfo.systemPortPath}. Select it or click Find Devices.",
                     )
                     setStatus("SignalSlinger detected on ${result.portInfo.systemPortPath}.")
                 }
@@ -4846,6 +4858,113 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         appendRenderedLog(rendered)
     }
 
+    private fun appendUserActionLog(message: String) {
+        appendLog(
+            title = "User Action",
+            entries = listOf(DesktopLogEntry(message, DesktopLogCategory.USER)),
+        )
+    }
+
+    private fun installDesktopUserActionLogging() {
+        if (desktopUserActionLoggingInstalled) {
+            return
+        }
+        annotateDesktopUserActionComponents()
+        Toolkit.getDefaultToolkit().addAWTEventListener(
+            desktopUserActionEventListener,
+            AWTEvent.MOUSE_EVENT_MASK,
+        )
+        desktopUserActionLoggingInstalled = true
+    }
+
+    private fun annotateDesktopUserActionComponents() {
+        setDesktopUserActionLabel(portComboBox, "Port Selector")
+        setDesktopUserActionLabel(rawCommandField, "Manual Command Line")
+        setDesktopUserActionLabel(stationIdField, "Station ID")
+        setDesktopUserActionLabel(eventTypeCombo, "Event Type")
+        setDesktopUserActionLabel(foxRoleCombo, "Fox Role")
+        setDesktopUserActionLabel(patternTextField, "Pattern Text")
+        setDesktopUserActionLabel(idSpeedField, "ID Speed")
+        setDesktopUserActionLabel(devicePatternSpeedField, "Pattern Speed")
+        setDesktopUserActionLabel(timedPatternSpeedField, "Pattern Speed")
+        setDesktopUserActionLabel(manualTimeSpinner, "Set Device Time")
+        setDesktopUserActionLabel(startTimeSpinner, "Start Time")
+        setDesktopUserActionLabel(startTimeRelativeField, "Start Time")
+        setDesktopUserActionLabel(finishTimeSpinner, "Finish Time")
+        setDesktopUserActionLabel(finishTimeRelativeField, "Finish Time")
+        setDesktopUserActionLabel(daysField, "Days To Run")
+        setDesktopUserActionLabel(lastsField, "Lasts")
+        setDesktopUserActionLabel(lastsRowLabel, "Lasts")
+        setDesktopUserActionLabel(frequency1Field, "Frequency 1")
+        setDesktopUserActionLabel(frequency2Field, "Frequency 2")
+        setDesktopUserActionLabel(frequency3Field, "Frequency 3")
+        setDesktopUserActionLabel(frequencyBField, "Frequency B")
+        setDesktopUserActionLabel(batteryThresholdField, "Battery Threshold")
+        setDesktopUserActionLabel(batteryModeCombo, "External Battery Control Mode")
+    }
+
+    private fun setDesktopUserActionLabel(component: JComponent, label: String) {
+        component.putClientProperty(USER_ACTION_LABEL_KEY, label)
+    }
+
+    private fun handleDesktopUserActionMouseEvent(event: MouseEvent) {
+        if (event.id != MouseEvent.MOUSE_CLICKED || event.button != MouseEvent.BUTTON1) {
+            return
+        }
+        val component = event.component ?: return
+        if (!belongsToDesktopWindow(component)) {
+            return
+        }
+        val description = resolveDesktopUserActionDescription(component) ?: return
+        SwingUtilities.invokeLater {
+            appendUserActionLog(description)
+        }
+    }
+
+    private fun belongsToDesktopWindow(component: Component): Boolean {
+        var currentWindow = SwingUtilities.getWindowAncestor(component) ?: return false
+        while (true) {
+            if (currentWindow === this) {
+                return true
+            }
+            currentWindow = currentWindow.owner ?: return false
+        }
+    }
+
+    private fun resolveDesktopUserActionDescription(component: Component): String? {
+        var current: Component? = component
+        while (current != null && current !is Window) {
+            if (current is JComponent) {
+                val explicitLabel = current.getClientProperty(USER_ACTION_LABEL_KEY) as? String
+                if (!explicitLabel.isNullOrBlank()) {
+                    return "Clicked $explicitLabel."
+                }
+            }
+            when (current) {
+                is JMenuItem -> current.text?.trim()?.takeIf(String::isNotBlank)?.let { return "Clicked $it." }
+                is AbstractButton -> current.text?.trim()?.takeIf(String::isNotBlank)?.let { return "Clicked $it." }
+                is JLabel -> {
+                    if (isDesktopPopupRendererLabel(current)) {
+                        current.text?.trim()?.takeIf(String::isNotBlank)?.let { return "Clicked $it." }
+                    }
+                }
+            }
+            current = current.parent
+        }
+        return null
+    }
+
+    private fun isDesktopPopupRendererLabel(label: JLabel): Boolean {
+        var current: Container? = label.parent
+        while (current != null) {
+            if (current is javax.swing.CellRendererPane || current is javax.swing.JPopupMenu || current is JList<*>) {
+                return true
+            }
+            current = current.parent
+        }
+        return false
+    }
+
     private fun runInBackground(
         status: String,
         showErrorDialog: Boolean = true,
@@ -4927,6 +5046,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val connected = currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
         val schedulingSupported = loadedSnapshot?.capabilities?.supportsScheduling == true
         val writableEnabled = connected && !isBusy
+        val finishTimeEditable =
+            writableEnabled &&
+            schedulingSupported &&
+            loadedSnapshot?.settings?.let { settings ->
+                DesktopInputSupport.isFinishTimeEditable(
+                    startTimeCompact = settings.startTimeCompact,
+                    currentTimeCompact = settings.currentTimeCompact,
+                )
+            } == true
 
         stationIdField.isEnabled = writableEnabled
         eventTypeCombo.isEnabled = writableEnabled
@@ -4950,12 +5078,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         applyDateTimeEditorCapability(manualTimeSpinner, writableEnabled && schedulingSupported)
         applyDateTimeEditorCapability(startTimeSpinner, writableEnabled && schedulingSupported)
-        applyDateTimeEditorCapability(finishTimeSpinner, writableEnabled && schedulingSupported)
+        applyDateTimeEditorCapability(finishTimeSpinner, finishTimeEditable)
         startTimeRelativeField.isEnabled = writableEnabled && schedulingSupported
-        finishTimeRelativeField.isEnabled = writableEnabled && schedulingSupported
+        finishTimeRelativeField.isEnabled = finishTimeEditable
         startTimeAbsoluteMirrorField.isEnabled = writableEnabled && schedulingSupported
-        finishTimeAbsoluteMirrorField.isEnabled = writableEnabled && schedulingSupported
-        updateLastsRowEditability(writableEnabled && schedulingSupported)
+        finishTimeAbsoluteMirrorField.isEnabled = finishTimeEditable
+        finishTimeRowLabel.isEnabled = finishTimeEditable
+        updateLastsRowEditability(finishTimeEditable)
         setTimeButton.isEnabled =
             writableEnabled &&
             schedulingSupported &&
@@ -4969,6 +5098,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun updateLastsRowEditability(enabled: Boolean) {
+        lastsField.isEnabled = enabled
+        lastsRowLabel.isEnabled = enabled
         val cursor =
             if (enabled) {
                 java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
@@ -5926,6 +6057,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val transport = currentTransport
         val state = currentState
         val snapshot = loadedSnapshot
+        val intendedTimeSetMode = displayPreferences.timeSetMode
         if (transport == null || state == null || snapshot == null) {
             JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
             return
@@ -5943,11 +6075,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             requireNotNull(validatedCompact) { "Choose a valid date and time to apply." }
             DesktopInputSupport.parseCompactTimestamp(validatedCompact)
         } catch (exception: IllegalArgumentException) {
-            JOptionPane.showMessageDialog(
-                this,
-                exception.message ?: "Choose a valid date and time to apply.",
-                "Set Device Time",
-                JOptionPane.INFORMATION_MESSAGE,
+            showTimeSetModePreservingDialog(
+                title = "Set Device Time",
+                message = exception.message ?: "Choose a valid date and time to apply.",
+                messageType = JOptionPane.INFORMATION_MESSAGE,
+                intendedMode = intendedTimeSetMode,
             )
             return
         }
@@ -5990,27 +6122,47 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         setStatus("Device time set to ${DesktopInputSupport.formatSystemTimestamp(selectedBaseTime)}.")
                     } else {
                         setStatus("Device time was written, but verification differed from the requested manual set.")
-                        JOptionPane.showMessageDialog(
-                            this,
-                            "The device time was written, but verification differed from the requested manual set by " +
-                                "${setResult.deviationMillis?.let(DesktopInputSupport::formatSignedDurationMillis) ?: "an unknown amount"}.\n\n" +
-                                "Review the log and retry if needed.",
-                            "Set Device Time",
-                            JOptionPane.WARNING_MESSAGE,
+                        showTimeSetModePreservingDialog(
+                            title = "Set Device Time",
+                            message =
+                                "The device time was written, but verification differed from the requested manual set by " +
+                                    "${setResult.deviationMillis?.let(DesktopInputSupport::formatSignedDurationMillis) ?: "an unknown amount"}.\n\n" +
+                                    "Review the log and retry if needed.",
+                            messageType = JOptionPane.WARNING_MESSAGE,
+                            intendedMode = intendedTimeSetMode,
                         )
                     }
                 }
             } catch (exception: IllegalArgumentException) {
                 SwingUtilities.invokeLater {
-                    JOptionPane.showMessageDialog(
-                        this,
-                        exception.message ?: "Choose a valid date and time to apply.",
-                        "Set Device Time",
-                        JOptionPane.INFORMATION_MESSAGE,
+                    showTimeSetModePreservingDialog(
+                        title = "Set Device Time",
+                        message = exception.message ?: "Choose a valid date and time to apply.",
+                        messageType = JOptionPane.INFORMATION_MESSAGE,
+                        intendedMode = intendedTimeSetMode,
                     )
                     setStatus(exception.message ?: "Manual time set cancelled.")
                 }
             }
+        }
+    }
+
+    private fun showTimeSetModePreservingDialog(
+        title: String,
+        message: String,
+        messageType: Int,
+        intendedMode: TimeSetMode,
+    ) {
+        JOptionPane.showMessageDialog(
+            this,
+            message,
+            title,
+            messageType,
+        )
+        if (displayPreferences.timeSetMode != intendedMode) {
+            displayPreferences = displayPreferences.copy(timeSetMode = intendedMode)
+            applyTimeSetMode(intendedMode)
+            persistDisplayPreferences()
         }
     }
 
@@ -6327,7 +6479,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return !backgroundWorkInProgress &&
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED &&
-            loadedSnapshot?.capabilities?.supportsScheduling == true
+            loadedSnapshot?.capabilities?.supportsScheduling == true &&
+            loadedSnapshot?.settings?.let { settings ->
+                DesktopInputSupport.isFinishTimeEditable(
+                    startTimeCompact = settings.startTimeCompact,
+                    currentTimeCompact = settings.currentTimeCompact,
+                )
+            } == true
     }
 
     private fun displayedDeviceTimeCompact(systemNow: java.time.LocalDateTime = java.time.LocalDateTime.now()): String? {
@@ -6534,7 +6692,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (showDialog) {
             JOptionPane.showMessageDialog(
                 this,
-                "$message\n\nThe connection has been marked disconnected. You can reconnect or run Auto Detect again.",
+                "$message\n\nThe connection has been marked disconnected. You can reconnect or click Find Devices again.",
             )
         }
     }
@@ -7433,6 +7591,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             line.contains("==") -> headerLogStyle
             line.contains("[${DesktopLogCategory.SERIAL.label}]") -> serialLogStyle
             line.contains("[${DesktopLogCategory.DEVICE.label}]") -> deviceLogStyle
+            line.contains("[${DesktopLogCategory.USER.label}]") -> userLogStyle
             line.contains("[${DesktopLogCategory.APP.label}]") -> appLogStyle
             else -> neutralLogStyle
         }
@@ -7552,6 +7711,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         const val NULLABLE_TIMESTAMP_STATUS_LABEL_KEY = "serialslinger.nullableTimestampStatusLabel"
         const val SETTING_LONG_PRESS_HANDLER_INSTALLED_KEY = "serialslinger.settingLongPressHandlerInstalled"
         const val SETTING_LONG_PRESS_TRIGGERED_KEY = "serialslinger.settingLongPressTriggered"
+        const val USER_ACTION_LABEL_KEY = "serialslinger.userActionLabel"
         const val AUTO_DETECT_BUTTON_LONG_PRESS_MS = 900
         const val CLONE_BUTTON_LONG_PRESS_MS = 900
         const val SETTING_TOGGLE_LONG_PRESS_MS = 900

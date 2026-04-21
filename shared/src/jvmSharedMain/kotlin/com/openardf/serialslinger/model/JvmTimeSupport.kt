@@ -140,6 +140,21 @@ object JvmTimeSupport {
         return formatCompactTimestamp(if (start.isBefore(minimumStart)) minimumStart else start)
     }
 
+    fun isFinishTimeEditable(
+        startTimeCompact: String?,
+        currentTimeCompact: String?,
+    ): Boolean {
+        val current =
+            runCatching {
+                requireValidTimestampForWrite("Device Time", currentTimeCompact)
+            }.getOrNull() ?: return false
+        val start =
+            runCatching {
+                requireValidTimestampForWrite("Start Time", startTimeCompact)
+            }.getOrNull() ?: return false
+        return !start.isBefore(current)
+    }
+
     fun minimumStartTimeBoundary(
         currentTimeCompact: String,
         stepMinutes: Int = 5,

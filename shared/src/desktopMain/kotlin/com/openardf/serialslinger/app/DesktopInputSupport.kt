@@ -172,6 +172,13 @@ object DesktopInputSupport {
         return JvmTimeSupport.validateFinishTimeForWrite(finishTimeCompact)
     }
 
+    fun isFinishTimeEditable(
+        startTimeCompact: String?,
+        currentTimeCompact: String?,
+    ): Boolean {
+        return JvmTimeSupport.isFinishTimeEditable(startTimeCompact, currentTimeCompact)
+    }
+
     fun resolveStartTimeForChange(
         startTimeCompact: String?,
         currentTimeCompact: String?,

@@ -15,6 +15,7 @@ enum class DesktopLogCategory(
     APP("APP"),
     SERIAL("SERIAL"),
     DEVICE("DEVICE"),
+    USER("USER"),
 }
 
 data class DesktopLogEntry(
