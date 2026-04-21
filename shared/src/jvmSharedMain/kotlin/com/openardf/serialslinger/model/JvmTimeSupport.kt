@@ -18,6 +18,8 @@ data class ValidatedScheduleTimes(
 
 object JvmTimeSupport {
     private val displayTimestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    private val textualDurationComponentPattern =
+        Regex("""(\d+)\s+(day|days|hour|hours|minute|minutes|second|seconds)""", RegexOption.IGNORE_CASE)
     private const val timeSyncThresholdSeconds = 1L
     private const val syncLeadSeconds = 2L
     private val minimumValidTimestamp = LocalDateTime.of(2021, 1, 1, 0, 0, 0)
@@ -105,7 +107,7 @@ object JvmTimeSupport {
         finishTimeCompact: String?,
         currentTimeCompact: String?,
     ): ValidatedScheduleTimes {
-        val start = requireValidTimestampForWrite("Start Time", startTimeCompact)
+        val start = normalizeStartTimeForFinishChange(startTimeCompact, currentTimeCompact)?.let(::parseCompactTimestamp)
         val finish = requireValidTimestampForWrite("Finish Time", finishTimeCompact)
             ?: return ValidatedScheduleTimes(
                 startTimeCompact = start?.let(::formatCompactTimestamp),
@@ -125,6 +127,17 @@ object JvmTimeSupport {
             startTimeCompact = start?.let(::formatCompactTimestamp),
             finishTimeCompact = formatCompactTimestamp(finish),
         )
+    }
+
+    fun normalizeStartTimeForFinishChange(
+        startTimeCompact: String?,
+        currentTimeCompact: String?,
+    ): String? {
+        val start = requireValidTimestampForWrite("Start Time", startTimeCompact) ?: return null
+        val current = requireValidTimestampForWrite("Device Time", currentTimeCompact)
+            ?: error("Set Device Time first before changing Finish Time.")
+        val minimumStart = minimumStartTimeBoundary(formatCompactTimestamp(current), stepMinutes = 5)
+        return formatCompactTimestamp(if (start.isBefore(minimumStart)) minimumStart else start)
     }
 
     fun minimumStartTimeBoundary(
@@ -200,6 +213,26 @@ object JvmTimeSupport {
             append(seconds.toString().padStart(if (days > 0 || hours > 0 || minutes > 0) 2 else 1, '0'))
             append("s")
         }
+    }
+
+    fun formatDurationHoursMinutesCompact(duration: Duration): String {
+        val totalMinutes = duration.toMinutes().coerceAtLeast(0)
+        val hours = totalMinutes / 60
+        val minutes = totalMinutes % 60
+        return if (hours > 0) {
+            "${hours}h ${minutes.toString().padStart(2, '0')}m"
+        } else {
+            "${minutes}m"
+        }
+    }
+
+    fun roundDurationMinutesToNearestFive(duration: Duration): Duration {
+        require(!duration.isNegative && !duration.isZero) {
+            "Duration must be positive."
+        }
+        val totalMinutes = duration.toMinutes().coerceAtLeast(1)
+        val roundedMinutes = (((totalMinutes + 2) / 5) * 5).coerceAtLeast(5)
+        return Duration.ofMinutes(roundedMinutes)
     }
 
     fun describeEventStatus(
@@ -294,6 +327,39 @@ object JvmTimeSupport {
         return fallback.orEmpty().ifBlank { "Not Available" }
     }
 
+    fun describeEventDurationHoursMinutes(
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+        fallback: String?,
+    ): String {
+        val start = startTimeCompact?.let(::parseCompactTimestamp)
+        val finish = finishTimeCompact?.let(::parseCompactTimestamp)
+        if (start != null && finish != null && start == finish) {
+            return ""
+        }
+
+        val validDuration = validEventDuration(startTimeCompact, finishTimeCompact)
+        if (validDuration != null) {
+            return formatDurationHoursMinutesCompact(validDuration)
+        }
+
+        val fallbackText = fallback.orEmpty().ifBlank { "Not Available" }
+        if (fallbackText.equals("Disabled", ignoreCase = true)) {
+            return ""
+        }
+
+        val parsedFallbackDuration = parseTextualDurationSummary(fallbackText)
+        if (parsedFallbackDuration != null) {
+            return if (parsedFallbackDuration.isZero) {
+                ""
+            } else {
+                formatDurationHoursMinutesCompact(parsedFallbackDuration)
+            }
+        }
+
+        return fallbackText
+    }
+
     fun validEventDuration(
         startTimeCompact: String?,
         finishTimeCompact: String?,
@@ -304,6 +370,30 @@ object JvmTimeSupport {
             return null
         }
         return Duration.between(start, finish)
+    }
+
+    private fun parseTextualDurationSummary(summary: String?): Duration? {
+        val trimmed = summary?.trim().orEmpty()
+        if (trimmed.isBlank()) {
+            return null
+        }
+
+        var totalSeconds = 0L
+        var matched = false
+        textualDurationComponentPattern.findAll(trimmed).forEach { match ->
+            val quantity = match.groupValues[1].toLongOrNull() ?: return@forEach
+            val unit = match.groupValues[2].lowercase()
+            matched = true
+            totalSeconds += when (unit) {
+                "day", "days" -> quantity * 86_400L
+                "hour", "hours" -> quantity * 3_600L
+                "minute", "minutes" -> quantity * 60L
+                "second", "seconds" -> quantity
+                else -> 0L
+            }
+        }
+
+        return if (matched) Duration.ofSeconds(totalSeconds) else null
     }
 
     fun finishTimeCompactFromStart(
@@ -354,7 +444,7 @@ object JvmTimeSupport {
     ): Boolean {
         val start = startTimeCompact?.let(::parseCompactTimestamp) ?: return false
         val finish = finishTimeCompact?.let(::parseCompactTimestamp) ?: return false
-        if (finish.isBefore(start)) {
+        if (!finish.isAfter(start)) {
             return false
         }
 

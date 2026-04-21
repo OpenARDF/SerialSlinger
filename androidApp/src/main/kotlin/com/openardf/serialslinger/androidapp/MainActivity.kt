@@ -49,6 +49,10 @@ import com.openardf.serialslinger.model.FrequencyBankId
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
+import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
+import com.openardf.serialslinger.model.MultiDayDurationGuardOption
+import com.openardf.serialslinger.model.MultiDayDurationGuardPlanner
+import com.openardf.serialslinger.model.ScheduleDurationGuardSupport
 import com.openardf.serialslinger.model.RelativeScheduleSelection
 import com.openardf.serialslinger.model.RelativeScheduleSupport
 import com.openardf.serialslinger.model.StartTimeAdjustmentOption
@@ -140,13 +144,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var daysRemainingSummaryView: TextView? = null
     private var displayedScheduleSnapshot: com.openardf.serialslinger.model.DeviceSnapshot? = null
     private var scheduleDerivedDataPending: Boolean = false
-    private var scheduleTimeToggleTargets: List<Pair<View, TextView?>> = emptyList()
     private var headerStatusMessageView: TextView? = null
     private var thermalHeaderWarningText: String? = null
     private var thermalHeaderWarningDetail: String? = null
     private var relativeStartDisplaySelectionOverride: RelativeTimeSelection? = null
     private var relativeFinishDisplaySelectionOverride: RelativeTimeSelection? = null
     private var startTimeFinishAdjustmentDialogOpen: Boolean = false
+    private var lastsDurationDialogOpen: Boolean = false
+    private var multiDayDurationGuardDialogOpen: Boolean = false
 
     private val refreshListener: () -> Unit = { runOnUiThread { renderContent() } }
     private val clockTickRunnable =
@@ -593,7 +598,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 daysToRun = loadedSettings.daysToRun,
             )
         val durationSummary =
-            JvmTimeSupport.describeEventDuration(
+            JvmTimeSupport.describeEventDurationHoursMinutes(
                 loadedSettings.startTimeCompact,
                 loadedSettings.finishTimeCompact,
                 loadedStatus?.eventDurationSummary,
@@ -905,20 +910,28 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                     startTimeField.setText(formatRelativeTimeSelection(initialSelection))
                                 },
                             ) { daysChoice ->
-                                val finishSelection = relativeTimeSelectionForDuration(chosenDuration)
-                                relativeStartDisplaySelectionOverride = selection
-                                relativeFinishDisplaySelectionOverride = finishSelection
-                                val formattedSelection = formatRelativeTimeSelection(selection)
-                                startTimeField.setText(formattedSelection)
-                                AndroidSessionController.runRelativeStartTimeSubmit(
-                                    context = applicationContext,
-                                    offsetCommand = formatRelativeTimeCommand(selection),
-                                    finishOffsetCommand = JvmTimeSupport.formatRelativeDurationCommand(chosenDuration),
-                                    preservedDaysToRun = when (daysChoice) {
-                                        StartTimeDaysToRunChoice.PRESERVE -> loadedSettings.daysToRun
-                                        StartTimeDaysToRunChoice.RESET -> null
+                                resolveMultiDayDurationGuardForScheduleChange(
+                                    currentDaysToRun = loadedSettings.daysToRun,
+                                    daysChoice = daysChoice,
+                                    proposedDuration = chosenDuration,
+                                    onCancel = {
+                                        relativeStartDisplaySelectionOverride = null
+                                        startTimeField.setText(formatRelativeTimeSelection(initialSelection))
                                     },
-                                )
+                                ) { preserveDaysToRun, resolvedDuration ->
+                                    val effectiveDuration = resolvedDuration ?: chosenDuration
+                                    val finishSelection = relativeTimeSelectionForDuration(effectiveDuration)
+                                    relativeStartDisplaySelectionOverride = selection
+                                    relativeFinishDisplaySelectionOverride = finishSelection
+                                    val formattedSelection = formatRelativeTimeSelection(selection)
+                                    startTimeField.setText(formattedSelection)
+                                    AndroidSessionController.runRelativeStartTimeSubmit(
+                                        context = applicationContext,
+                                        offsetCommand = formatRelativeTimeCommand(selection),
+                                        finishOffsetCommand = JvmTimeSupport.formatRelativeDurationCommand(effectiveDuration),
+                                        preservedDaysToRun = if (preserveDaysToRun) loadedSettings.daysToRun else null,
+                                    )
+                                }
                             }
                         }
                     }
@@ -954,15 +967,27 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                     startTimeField.setText(uiState.draftStartTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.startTimeCompact))
                                 },
                             ) { daysChoice ->
-                                clearRelativeScheduleDisplayOverrides()
-                                startTimeField.setText(formattedTimestamp)
-                                AndroidSessionController.runStartTimeSubmit(
-                                    context = applicationContext,
-                                    startTimeInput = formattedTimestamp,
-                                    defaultEventLengthMinutes = defaultEventLengthMinutes,
-                                    requestedFinishTimeInput = JvmTimeSupport.finishTimeCompactFromStart(normalizedStartTime, chosenDuration),
-                                    preserveDaysToRun = daysChoice == StartTimeDaysToRunChoice.PRESERVE,
-                                )
+                                resolveMultiDayDurationGuardForScheduleChange(
+                                    currentDaysToRun = loadedSettings.daysToRun,
+                                    daysChoice = daysChoice,
+                                    proposedDuration = chosenDuration,
+                                    onCancel = {
+                                        startTimeField.setText(uiState.draftStartTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.startTimeCompact))
+                                    },
+                                ) { preserveDaysToRun, resolvedDuration ->
+                                    clearRelativeScheduleDisplayOverrides()
+                                    startTimeField.setText(formattedTimestamp)
+                                    AndroidSessionController.runStartTimeSubmit(
+                                        context = applicationContext,
+                                        startTimeInput = formattedTimestamp,
+                                        defaultEventLengthMinutes = defaultEventLengthMinutes,
+                                        requestedFinishTimeInput = JvmTimeSupport.finishTimeCompactFromStart(
+                                            normalizedStartTime,
+                                            resolvedDuration ?: chosenDuration,
+                                        ),
+                                        preserveDaysToRun = preserveDaysToRun,
+                                    )
+                                }
                             }
                         }
                     }
@@ -986,7 +1011,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
             }
         timedEventCard.addView(startTimeRow)
-        installScheduleTimeModeToggle(startTimeField, startTimeLabelView, "Start Time", startTimeRow)
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
             absoluteStartField =
                 readOnlyField(
@@ -1001,7 +1025,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     captureLabelView = { absoluteStartLabelView = it },
                 )
             timedEventCard.addView(absoluteStartRow)
-            installScheduleTimeModeToggle(absoluteStartField, absoluteStartLabelView, "Start Time", absoluteStartRow)
         }
 
         lateinit var finishTimeField: EditText
@@ -1025,17 +1048,39 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 finishTimeField.setText(formatRelativeTimeSelection(initialSelection))
                             },
                         ) { daysChoice ->
-                            relativeFinishDisplaySelectionOverride = selection
-                            val formattedSelection = formatRelativeTimeSelection(selection)
-                            finishTimeField.setText(formattedSelection)
-                            AndroidSessionController.runRelativeFinishTimeSubmit(
-                                context = applicationContext,
-                                offsetCommand = formatRelativeTimeCommand(selection),
-                                preservedDaysToRun = when (daysChoice) {
-                                    StartTimeDaysToRunChoice.PRESERVE -> loadedSettings.daysToRun
-                                    StartTimeDaysToRunChoice.RESET -> null
-                                },
+                            val proposedFinishTimeCompact = JvmTimeSupport.relativeTargetTimeCompact(
+                                baseCompact = loadedSettings.startTimeCompact,
+                                hours = selection.hours,
+                                minutes = selection.minutes,
+                                useTopOfHour = selection.useTopOfHour,
                             )
+                            val proposedDuration = JvmTimeSupport.validEventDuration(
+                                loadedSettings.startTimeCompact,
+                                proposedFinishTimeCompact,
+                            )
+                            resolveMultiDayDurationGuardForScheduleChange(
+                                currentDaysToRun = loadedSettings.daysToRun,
+                                daysChoice = daysChoice,
+                                proposedDuration = proposedDuration,
+                                onCancel = {
+                                    relativeFinishDisplaySelectionOverride = null
+                                    finishTimeField.setText(formatRelativeTimeSelection(initialSelection))
+                                },
+                            ) { preserveDaysToRun, resolvedDuration ->
+                                val effectiveSelection = if (resolvedDuration != null && resolvedDuration != proposedDuration) {
+                                    relativeTimeSelectionForDuration(resolvedDuration)
+                                } else {
+                                    selection
+                                }
+                                relativeFinishDisplaySelectionOverride = effectiveSelection
+                                val formattedSelection = formatRelativeTimeSelection(effectiveSelection)
+                                finishTimeField.setText(formattedSelection)
+                                AndroidSessionController.runRelativeFinishTimeSubmit(
+                                    context = applicationContext,
+                                    offsetCommand = formatRelativeTimeCommand(effectiveSelection),
+                                    preservedDaysToRun = if (preserveDaysToRun) loadedSettings.daysToRun else null,
+                                )
+                            }
                         }
                     }
                 }
@@ -1055,13 +1100,34 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 )
                             },
                         ) { daysChoice ->
-                            clearRelativeScheduleDisplayOverrides()
-                            finishTimeField.setText(formattedTimestamp)
-                            AndroidSessionController.runFinishTimeSubmit(
-                                context = applicationContext,
-                                finishTimeInput = formattedTimestamp,
-                                preserveDaysToRun = daysChoice == StartTimeDaysToRunChoice.PRESERVE,
+                            val proposedDuration = JvmTimeSupport.validEventDuration(
+                                loadedSettings.startTimeCompact,
+                                JvmTimeSupport.parseOptionalCompactTimestamp(formattedTimestamp),
                             )
+                            resolveMultiDayDurationGuardForScheduleChange(
+                                currentDaysToRun = loadedSettings.daysToRun,
+                                daysChoice = daysChoice,
+                                proposedDuration = proposedDuration,
+                                onCancel = {
+                                    finishTimeField.setText(
+                                        uiState.draftFinishTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.finishTimeCompact),
+                                    )
+                                },
+                            ) { preserveDaysToRun, resolvedDuration ->
+                                clearRelativeScheduleDisplayOverrides()
+                                val finalFinishTimeInput = if (resolvedDuration?.takeIf { it != proposedDuration } != null) {
+                                    val startTimeCompact = loadedSettings.startTimeCompact ?: return@resolveMultiDayDurationGuardForScheduleChange
+                                    JvmTimeSupport.finishTimeCompactFromStart(startTimeCompact, resolvedDuration)
+                                } else {
+                                    formattedTimestamp
+                                }
+                                finishTimeField.setText(JvmTimeSupport.formatCompactTimestamp(finalFinishTimeInput))
+                                AndroidSessionController.runFinishTimeSubmit(
+                                    context = applicationContext,
+                                    finishTimeInput = finalFinishTimeInput,
+                                    preserveDaysToRun = preserveDaysToRun,
+                                )
+                            }
                         }
                     }
                 }
@@ -1084,7 +1150,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
             }
         timedEventCard.addView(finishTimeRow)
-        installScheduleTimeModeToggle(finishTimeField, finishTimeLabelView, "Finish Time", finishTimeRow)
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
             absoluteFinishField =
                 readOnlyField(
@@ -1099,19 +1164,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     captureLabelView = { absoluteFinishLabelView = it },
                 )
             timedEventCard.addView(absoluteFinishRow)
-            installScheduleTimeModeToggle(absoluteFinishField, absoluteFinishLabelView, "Finish Time", absoluteFinishRow)
         }
-        scheduleTimeToggleTargets =
-            buildList {
-                add(startTimeField to startTimeLabelView)
-                add(finishTimeField to finishTimeLabelView)
-                if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
-                    absoluteStartField?.let { add(it to absoluteStartLabelView) }
-                    absoluteFinishField?.let { add(it to absoluteFinishLabelView) }
-                }
-            }
-        absoluteStartField?.let { installScheduleTimeModeToggle(it, absoluteStartLabelView, "Start Time") }
-        absoluteFinishField?.let { installScheduleTimeModeToggle(it, absoluteFinishLabelView, "Finish Time") }
         val eventStatusField =
             readOnlyField(
                 if (uiState.scheduleDerivedDataPending) "Updating..." else derivedEventStatus,
@@ -1134,7 +1187,38 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             },
         )
         val lastsField =
-            readOnlyField(durationSummary).apply {
+            pickerField(
+                text = durationSummary,
+                hint = "Lasts",
+                textSizeSp = timestampFieldTextSizeSp(),
+            ) {
+                showLastsDurationDialog(
+                    initialDuration =
+                        JvmTimeSupport.validEventDuration(
+                            loadedSettings.startTimeCompact,
+                            loadedSettings.finishTimeCompact,
+                        ) ?: Duration.ofMinutes(defaultEventLengthMinutes.toLong()),
+                ) { selectedDuration ->
+                    chooseStartTimeDaysToRunHandling(
+                        currentDaysToRun = loadedSettings.daysToRun,
+                        onCancel = {},
+                    ) { daysChoice ->
+                        resolveMultiDayDurationGuardForScheduleChange(
+                            currentDaysToRun = loadedSettings.daysToRun,
+                            daysChoice = daysChoice,
+                            proposedDuration = selectedDuration,
+                            onCancel = {},
+                        ) { preserveDaysToRun, resolvedDuration ->
+                            clearRelativeScheduleDisplayOverrides()
+                            AndroidSessionController.runEventDurationSubmit(
+                                context = applicationContext,
+                                requestedDuration = resolvedDuration ?: selectedDuration,
+                                preserveDaysToRun = preserveDaysToRun,
+                            )
+                        }
+                    }
+                }
+            }.apply {
                 if (durationDiffersFromDefault) {
                     setTextColor(warningColor)
                 }
@@ -1150,6 +1234,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             ),
         )
         lastsLabelView?.setTextColor(if (durationDiffersFromDefault) warningColor else normalLabelColor)
+        lastsLabelView?.setOnClickListener { lastsField.performClick() }
 
         val daysToRunSpinner =
             integerSpinner(
@@ -1190,10 +1275,51 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         timedEventCard.addView(compactLabeledRow("Days To Run", daysRowField))
         wireImmediateIntSpinner(daysToRunSpinner, selectedValue = uiState.draftDaysToRun?.toIntOrNull() ?: loadedSettings.daysToRun) { selectedValue ->
-            AndroidSessionController.runDaysToRunSubmit(
-                context = applicationContext,
-                daysToRunText = selectedValue.toString(),
+            val currentDuration = JvmTimeSupport.validEventDuration(
+                loadedSettings.startTimeCompact,
+                loadedSettings.finishTimeCompact,
             )
+            chooseMultiDayDurationGuardHandling(
+                options = ScheduleDurationGuardSupport.planForDirectDaysToRunChange(
+                    selectedDaysToRun = selectedValue,
+                    currentDuration = currentDuration,
+                ),
+                onCancel = {
+                    daysToRunSpinner.setSelection((loadedSettings.daysToRun - 1).coerceAtLeast(0))
+                },
+            ) { option ->
+                val resolution = ScheduleDurationGuardSupport.resolveDirectDaysToRunChange(
+                    selectedDaysToRun = selectedValue,
+                    currentDuration = currentDuration,
+                    selectedOption = option,
+                )
+                when (option?.choice) {
+                    MultiDayDurationGuardChoice.SHORTEN_DURATION -> {
+                        clearRelativeScheduleDisplayOverrides()
+                        val startTimeCompact = loadedSettings.startTimeCompact ?: return@chooseMultiDayDurationGuardHandling
+                        AndroidSessionController.runDaysToRunSubmit(
+                            context = applicationContext,
+                            daysToRunText = resolution.resultingDaysToRun.toString(),
+                            requestedFinishTimeInput = JvmTimeSupport.finishTimeCompactFromStart(
+                                startTimeCompact,
+                                resolution.resultingDuration ?: return@chooseMultiDayDurationGuardHandling,
+                            ),
+                        )
+                    }
+                    MultiDayDurationGuardChoice.SET_DAYS_TO_ONE -> {
+                        AndroidSessionController.runDaysToRunSubmit(
+                            context = applicationContext,
+                            daysToRunText = resolution.resultingDaysToRun.toString(),
+                        )
+                    }
+                    null -> {
+                        AndroidSessionController.runDaysToRunSubmit(
+                            context = applicationContext,
+                            daysToRunText = resolution.resultingDaysToRun.toString(),
+                        )
+                    }
+                }
+            }
         }
 
         addFrequencyControl(
@@ -2087,7 +2213,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AlertDialog.Builder(this)
             .setTitle("Schedule Time Setting")
             .setSingleChoiceItems(labels, if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.ABSOLUTE) 0 else 1) { dialog, which ->
-                if (startTimeFinishAdjustmentDialogOpen) {
+                if (startTimeFinishAdjustmentDialogOpen || lastsDurationDialogOpen || multiDayDurationGuardDialogOpen) {
                     dialog.dismiss()
                     return@setSingleChoiceItems
                 }
@@ -2181,6 +2307,94 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             .show()
     }
 
+    private fun showLastsDurationDialog(
+        initialDuration: Duration,
+        onSelected: (Duration) -> Unit,
+    ) {
+        val dialogHorizontalPadding = (16 * resources.displayMetrics.density).toInt()
+        val previewView =
+            sectionBody("").apply {
+                setTextColor(Color.parseColor("#2F5EA6"))
+                setTypeface(Typeface.DEFAULT_BOLD)
+                setPadding(dialogHorizontalPadding, 0, dialogHorizontalPadding, (12 * resources.displayMetrics.density).toInt())
+            }
+        val pickerLayout =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dialogHorizontalPadding, 0, dialogHorizontalPadding, 0)
+                addView(previewView)
+            }
+
+        val initialMinutes = JvmTimeSupport.roundDurationMinutesToNearestFive(initialDuration).toMinutes()
+        val hourDigits = (initialMinutes / 60).toInt().coerceIn(0, 480).toString().padStart(3, '0')
+        val hundredsSpinner = digitSpinner((0..4).toList(), hourDigits[0].digitToInt())
+        val tensSpinner = digitSpinner((0..9).toList(), hourDigits[1].digitToInt())
+        val onesSpinner = digitSpinner((0..9).toList(), hourDigits[2].digitToInt())
+        val minuteOptions = (0..55 step 5).map { it.toString().padStart(2, '0') }
+        val minuteSpinner = dialogSelectionSpinner(minuteOptions, (initialMinutes % 60).toString().padStart(2, '0'), emphasized = true)
+
+        val row =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                addView(hundredsSpinner)
+                addView(tensSpinner)
+                addView(onesSpinner)
+                addView(pickerContextLabel("h", emphasized = true))
+                addView(minuteSpinner)
+                addView(pickerContextLabel("m", emphasized = true))
+            }
+        pickerLayout.addView(row, 0)
+
+        val currentMinutes: () -> Int = {
+            val rawHours =
+                ((hundredsSpinner.selectedItem as Int) * 100) +
+                    ((tensSpinner.selectedItem as Int) * 10) +
+                    (onesSpinner.selectedItem as Int)
+            val boundedHours = rawHours.coerceIn(0, 480)
+            if (boundedHours != rawHours) {
+                val boundedText = boundedHours.toString().padStart(3, '0')
+                setSpinnerSelectionByValue(hundredsSpinner, (0..4).toList(), boundedText[0].digitToInt())
+                setSpinnerSelectionByValue(tensSpinner, (0..9).toList(), boundedText[1].digitToInt())
+                setSpinnerSelectionByValue(onesSpinner, (0..9).toList(), boundedText[2].digitToInt())
+            }
+            (boundedHours * 60) + (minuteSpinner.selectedItem as String).toInt()
+        }
+
+        val refreshSelection = {
+            val minutes = currentMinutes()
+            previewView.text =
+                if (minutes > 0) {
+                    "Event duration: ${JvmTimeSupport.formatDurationHoursMinutesCompact(Duration.ofMinutes(minutes.toLong()))}"
+                } else {
+                    "Choose at least 5 minutes."
+                }
+        }
+        wireDigitSpinner(hundredsSpinner, refreshSelection)
+        wireDigitSpinner(tensSpinner, refreshSelection)
+        wireDigitSpinner(onesSpinner, refreshSelection)
+        wireImmediateSelectionSpinner(minuteSpinner, (initialMinutes % 60).toString().padStart(2, '0')) { _ -> refreshSelection() }
+        refreshSelection.invoke()
+
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Lasts")
+                .setView(pickerLayout)
+                .setPositiveButton("OK") { _, _ ->
+                    val minutes = currentMinutes()
+                    if (minutes <= 0) {
+                        AndroidSessionController.recordStatus("Event duration must be at least 5 minutes.", isError = true)
+                    } else {
+                        onSelected(Duration.ofMinutes(minutes.toLong()))
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .create()
+        dialog.setOnDismissListener { lastsDurationDialogOpen = false }
+        lastsDurationDialogOpen = true
+        dialog.show()
+    }
+
     private fun showAboutDialog() {
         val aboutText =
             SpannableStringBuilder().apply {
@@ -2224,41 +2438,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 }
             packageInfo.versionName ?: "unknown"
         }.getOrDefault("unknown")
-    }
-
-    private fun installScheduleTimeModeToggle(
-        field: View,
-        labelView: TextView?,
-        label: String,
-        extraTouchTarget: View? = null,
-    ) {
-        installDelayedLongPressToggle(field, labelView, extraTouchTarget) {
-            performAnimatedToggleGroup(scheduleTimeToggleTargets) {
-                toggleScheduleTimeInputMode(label)
-            }
-        }
-    }
-
-    private fun toggleScheduleTimeInputMode(label: String) {
-        if (startTimeFinishAdjustmentDialogOpen) {
-            return
-        }
-        scheduleTimeInputMode =
-            if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.ABSOLUTE) {
-                AndroidScheduleTimeInputMode.RELATIVE
-            } else {
-                AndroidScheduleTimeInputMode.ABSOLUTE
-        }
-        saveScheduleTimeInputModePreference()
-        val modeLabel =
-            if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
-                "Relative"
-            } else {
-                "Absolute"
-        }
-        AndroidSessionController.recordStatus("$label set to $modeLabel time input.", isError = false)
-        renderContent()
-        clockDisplayHandler.post { animateHeaderStatusFeedback() }
     }
 
     private fun installFrequencyDisplayUnitToggle(
@@ -3418,6 +3597,68 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 }
             }
             .show()
+    }
+
+    private fun chooseMultiDayDurationGuardHandling(
+        options: List<MultiDayDurationGuardOption>,
+        onCancel: () -> Unit,
+        onSelected: (MultiDayDurationGuardOption?) -> Unit,
+    ) {
+        if (options.isEmpty()) {
+            onSelected(null)
+            return
+        }
+        multiDayDurationGuardDialogOpen = true
+        AlertDialog.Builder(this)
+            .setTitle("Invalid Multi-Day Event")
+            .setMessage("Multi-day events must last less than 24 hours. Choose how to proceed:")
+            .setItems(options.map { it.label }.toTypedArray()) { dialog, which ->
+                multiDayDurationGuardDialogOpen = false
+                dialog.dismiss()
+                runAfterModalUiSettles {
+                    onSelected(options[which])
+                }
+            }
+            .setNegativeButton("Cancel") { dialog, _ ->
+                multiDayDurationGuardDialogOpen = false
+                dialog.dismiss()
+                runAfterModalUiSettles {
+                    onCancel()
+                }
+            }
+            .setOnCancelListener {
+                multiDayDurationGuardDialogOpen = false
+                runAfterModalUiSettles {
+                    onCancel()
+                }
+            }
+            .show()
+    }
+
+    private fun resolveMultiDayDurationGuardForScheduleChange(
+        currentDaysToRun: Int,
+        daysChoice: StartTimeDaysToRunChoice,
+        proposedDuration: Duration?,
+        onCancel: () -> Unit,
+        onResolved: (preserveDaysToRun: Boolean, resultingDuration: Duration?) -> Unit,
+    ) {
+        val options = ScheduleDurationGuardSupport.planForScheduleChange(
+            currentDaysToRun = currentDaysToRun,
+            daysChoice = daysChoice,
+            proposedDuration = proposedDuration,
+        )
+        chooseMultiDayDurationGuardHandling(
+            options = options,
+            onCancel = onCancel,
+        ) { option ->
+            val resolution = ScheduleDurationGuardSupport.resolveScheduleChange(
+                currentDaysToRun = currentDaysToRun,
+                daysChoice = daysChoice,
+                proposedDuration = proposedDuration,
+                selectedOption = option,
+            )
+            onResolved(resolution.preserveDaysToRun, resolution.resultingDuration)
+        }
     }
 
     private fun runAfterModalUiSettles(action: () -> Unit) {

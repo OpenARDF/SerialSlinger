@@ -8,6 +8,10 @@ import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
+import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
+import com.openardf.serialslinger.model.MultiDayDurationGuardOption
+import com.openardf.serialslinger.model.MultiDayDurationGuardPlanner
+import com.openardf.serialslinger.model.ScheduleDurationGuardSupport
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
@@ -226,7 +230,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var cachedManualWriteDelayMillis: Long? = null
     private val rawCommandField = JTextField()
     private val rawSerialRowPanel = JPanel(BorderLayout(8, 0)).apply {
-        add(JLabel("Raw Serial"), BorderLayout.WEST)
+        add(JLabel("Command to send:"), BorderLayout.WEST)
         add(rawCommandField, BorderLayout.CENTER)
     }
     private val logPane = JTextPane()
@@ -358,6 +362,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var relativeFinishDisplaySelectionOverride: DesktopInputSupport.RelativeTimeSelection? = null
     private var startTimeFinishAdjustmentDialogOpen: Boolean = false
     private var startTimeDaysToRunDialogOpen: Boolean = false
+    private var multiDayDurationGuardDialogOpen: Boolean = false
+    private var lastsDurationDialogOpen: Boolean = false
     private var displayPreferences: DesktopDisplayPreferences = PreferencesDesktopDisplayPreferencesStore.load()
     private val knownProbeResults = linkedMapOf<String, SignalSlingerPortProbe>()
     private val portMemory: DesktopPortMemory = PreferencesDesktopPortMemory
@@ -431,6 +437,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureInformationalField(currentBankField)
         configureInformationalField(startsInField)
         configureInformationalField(lastsField)
+        configureInteractiveSelectionField(lastsField)
         configureInformationalField(versionInfoField)
         configureInformationalField(internalBatteryField)
         configureInformationalField(externalBatteryField)
@@ -540,6 +547,26 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     if (event.button == MouseEvent.BUTTON1 && !backgroundWorkInProgress && finishTimeRelativeField.isEnabled) {
                         showRelativeTimePickerDialog(ScheduleTimeField.FINISH)
+                    }
+                }
+            },
+        )
+        lastsField.toolTipText = "Click to choose event duration."
+        lastsRowLabel.toolTipText = lastsField.toolTipText
+        lastsField.addMouseListener(
+            object : MouseAdapter() {
+                override fun mouseClicked(event: MouseEvent) {
+                    if (event.button == MouseEvent.BUTTON1) {
+                        showLastsDurationDialog()
+                    }
+                }
+            },
+        )
+        lastsRowLabel.addMouseListener(
+            object : MouseAdapter() {
+                override fun mouseClicked(event: MouseEvent) {
+                    if (event.button == MouseEvent.BUTTON1) {
+                        showLastsDurationDialog()
                     }
                 }
             },
@@ -718,7 +745,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             add(
                 JMenu("Tools").apply {
-                    showRawSerialMenuItem = JCheckBoxMenuItem("Show Raw Serial Entry", displayPreferences.rawSerialVisible).apply {
+                    showRawSerialMenuItem = JCheckBoxMenuItem("Show Manual Command Line", displayPreferences.rawSerialVisible).apply {
                         addActionListener { setRawSerialVisible(isSelected) }
                     }
                     add(showRawSerialMenuItem)
@@ -1115,7 +1142,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return JTextField().apply {
             isEditable = false
             cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-            toolTipText = "Click to choose $fieldLabel. Press and hold to switch between absolute and relative entry."
+            toolTipText = "Click to choose $fieldLabel."
         }
     }
 
@@ -1239,18 +1266,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         installDateTimeCommitHandler(
             startTimeSpinner,
             "Start Time",
-            hasMeaningfulChange = {
-                selectedDateTimeCompactForComparison(startTimeSpinner, currentConnectedTimedSettings().startTimeCompact) !=
-                    currentConnectedTimedSettings().startTimeCompact
-            },
         ) { applyStartTimeChange() }
         installDateTimeCommitHandler(
             finishTimeSpinner,
             "Finish Time",
-            hasMeaningfulChange = {
-                selectedDateTimeCompactForComparison(finishTimeSpinner, currentConnectedTimedSettings().finishTimeCompact) !=
-                    currentConnectedTimedSettings().finishTimeCompact
-            },
         ) { applyFinishTimeChange() }
     }
 
@@ -1440,7 +1459,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun shouldSuppressScheduleCommit(spinner: JSpinner): Boolean {
         return spinner in listOf(startTimeSpinner, finishTimeSpinner) &&
-            (isScheduleInteractionSuppressed() || startTimeFinishAdjustmentDialogOpen || startTimeDaysToRunDialogOpen)
+            (
+                isScheduleInteractionSuppressed() ||
+                    startTimeFinishAdjustmentDialogOpen ||
+                    startTimeDaysToRunDialogOpen ||
+                    multiDayDurationGuardDialogOpen ||
+                    lastsDurationDialogOpen
+                )
     }
 
     private fun rememberPendingImmediateEdit(description: String, source: Any, onCommit: () -> Unit) {
@@ -2130,33 +2155,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             targets = listOf(currentTemperatureField, currentTemperatureRowLabel),
             animatedTargets = listOf(currentTemperatureField, currentTemperatureRowLabel),
         ) { toggleTemperatureDisplayUnit() }
-        val scheduleAnimatedTargets = listOf(
-            startTimeRowLabel,
-            finishTimeRowLabel,
-            startTimeRelativeField,
-            finishTimeRelativeField,
-            startTimeAbsoluteMirrorLabel,
-            finishTimeAbsoluteMirrorLabel,
-            startTimeAbsoluteMirrorField,
-            finishTimeAbsoluteMirrorField,
-            spinnerEditorTextField(startTimeSpinner),
-            spinnerEditorTextField(finishTimeSpinner),
-        )
-        installSettingLongPressShortcut(
-            targets = listOf(
-                startTimeRowLabel,
-                finishTimeRowLabel,
-                startTimeRelativeField,
-                finishTimeRelativeField,
-                startTimeAbsoluteMirrorLabel,
-                finishTimeAbsoluteMirrorLabel,
-                startTimeAbsoluteMirrorField,
-                finishTimeAbsoluteMirrorField,
-                spinnerEditorTextField(startTimeSpinner),
-                spinnerEditorTextField(finishTimeSpinner),
-            ),
-            animatedTargets = scheduleAnimatedTargets,
-        ) { toggleScheduleTimeInputMode() }
     }
 
     private fun installTimeSetSpinnerLongPressShortcut() {
@@ -3031,34 +3029,43 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
                 },
             ) { daysChoice ->
-                val editRequest = ScheduleSubmitSupport.absoluteStartEdit(
-                    currentSettings = connectedTimedSettings,
-                    normalizedStartTime = normalizedStartTime,
-                    requestedFinishTimeCompact = DesktopInputSupport.finishTimeCompactFromStart(
-                        startTimeCompact = normalizedStartTime,
-                        duration = chosenDuration,
-                    ),
-                    preserveDaysToRun = daysChoice == StartTimeDaysToRunChoice.PRESERVE,
-                )
-                applyImmediateEdit(
-                    "Start Time",
-                    updatesTimedEventTemplate = true,
-                    forceWriteKeys = editRequest.forceWriteKeys,
-                ) { base ->
-                    EditableDeviceSettings.fromDeviceSettings(base).copy(
-                        startTimeCompact = SettingsField(
-                            "startTimeCompact",
-                            "Start Time",
-                            base.startTimeCompact,
-                            editRequest.startTimeCompact,
+                resolveMultiDayDurationGuardForScheduleChange(
+                    currentDaysToRun = connectedTimedSettings.daysToRun,
+                    daysChoice = daysChoice,
+                    proposedDuration = chosenDuration,
+                    onCancel = {
+                        restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
+                    },
+                ) { preserveDaysToRun, resolvedDuration ->
+                    val editRequest = ScheduleSubmitSupport.absoluteStartEdit(
+                        currentSettings = connectedTimedSettings,
+                        normalizedStartTime = normalizedStartTime,
+                        requestedFinishTimeCompact = DesktopInputSupport.finishTimeCompactFromStart(
+                            startTimeCompact = normalizedStartTime,
+                            duration = resolvedDuration ?: chosenDuration,
                         ),
-                        finishTimeCompact = SettingsField(
-                            "finishTimeCompact",
-                            "Finish Time",
-                            base.finishTimeCompact,
-                            editRequest.finishTimeCompact,
-                        ),
+                        preserveDaysToRun = preserveDaysToRun,
                     )
+                    applyImmediateEdit(
+                        "Start Time",
+                        updatesTimedEventTemplate = true,
+                        forceWriteKeys = editRequest.forceWriteKeys,
+                    ) { base ->
+                        EditableDeviceSettings.fromDeviceSettings(base).copy(
+                            startTimeCompact = SettingsField(
+                                "startTimeCompact",
+                                "Start Time",
+                                base.startTimeCompact,
+                                editRequest.startTimeCompact,
+                            ),
+                            finishTimeCompact = SettingsField(
+                                "finishTimeCompact",
+                                "Finish Time",
+                                base.finishTimeCompact,
+                                editRequest.finishTimeCompact,
+                            ),
+                        )
+                    }
                 }
             }
         }
@@ -3089,30 +3096,187 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 restoreAbsoluteFinishTimeEditor(connectedTimedSettings.finishTimeCompact)
             },
         ) { daysChoice ->
-            val editRequest = ScheduleSubmitSupport.absoluteFinishEdit(
-                currentSettings = connectedTimedSettings,
-                normalizedFinishTime = normalizedFinishTime,
-                preserveDaysToRun = daysChoice == StartTimeDaysToRunChoice.PRESERVE,
+            val proposedDuration = DesktopInputSupport.validEventDuration(
+                connectedTimedSettings.startTimeCompact,
+                normalizedFinishTime,
             )
-            applyImmediateEdit(
-                "Finish Time",
-                updatesTimedEventTemplate = true,
-                forceWriteKeys = editRequest.forceWriteKeys,
-            ) { base ->
-                EditableDeviceSettings.fromDeviceSettings(base).copy(
-                    startTimeCompact = SettingsField(
-                        "startTimeCompact",
-                        "Start Time",
-                        base.startTimeCompact,
-                        editRequest.startTimeCompact,
-                    ),
-                    finishTimeCompact = SettingsField(
-                        "finishTimeCompact",
-                        "Finish Time",
-                        base.finishTimeCompact,
-                        editRequest.finishTimeCompact,
-                    ),
+            resolveMultiDayDurationGuardForScheduleChange(
+                currentDaysToRun = connectedTimedSettings.daysToRun,
+                daysChoice = daysChoice,
+                proposedDuration = proposedDuration,
+                onCancel = {
+                    restoreAbsoluteFinishTimeEditor(connectedTimedSettings.finishTimeCompact)
+                },
+            ) { preserveDaysToRun, resolvedDuration ->
+                val editRequest = ScheduleSubmitSupport.absoluteFinishEditWithDurationOverride(
+                    currentSettings = connectedTimedSettings,
+                    normalizedFinishTime = normalizedFinishTime,
+                    requestedDurationOverride = resolvedDuration?.takeIf { it != proposedDuration },
+                    preserveDaysToRun = preserveDaysToRun,
                 )
+                applyImmediateEdit(
+                    "Finish Time",
+                    updatesTimedEventTemplate = true,
+                    forceWriteKeys = editRequest.forceWriteKeys,
+                ) { base ->
+                    EditableDeviceSettings.fromDeviceSettings(base).copy(
+                        startTimeCompact = SettingsField(
+                            "startTimeCompact",
+                            "Start Time",
+                            base.startTimeCompact,
+                            editRequest.startTimeCompact,
+                        ),
+                        finishTimeCompact = SettingsField(
+                            "finishTimeCompact",
+                            "Finish Time",
+                            base.finishTimeCompact,
+                            editRequest.finishTimeCompact,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun showLastsDurationDialog() {
+        if (isScheduleInteractionSuppressed() || !canEditLastsDuration()) {
+            return
+        }
+        val snapshot = loadedSnapshot ?: return
+        val initialDuration =
+            DesktopInputSupport.validEventDuration(
+                snapshot.settings.startTimeCompact,
+                snapshot.settings.finishTimeCompact,
+            ) ?: Duration.ofMinutes(displayPreferences.defaultEventLengthMinutes.toLong())
+        val initialMinutes = DesktopInputSupport.roundDurationMinutesToNearestFive(initialDuration).toMinutes()
+        val hourSpinner = JSpinner(SpinnerNumberModel((initialMinutes / 60).toInt().coerceIn(0, 480), 0, 480, 1))
+        val minuteSpinner = JSpinner(SpinnerNumberModel((initialMinutes % 60).toInt().coerceIn(0, 55), 0, 55, 5))
+        val summaryLabel = JLabel().apply {
+            foreground = cloneAccentColor
+        }
+
+        fun selectedMinutes(): Int {
+            val hours = (hourSpinner.value as? Number)?.toInt()?.coerceIn(0, 480) ?: 0
+            val minutes = (minuteSpinner.value as? Number)?.toInt()?.coerceIn(0, 59) ?: 0
+            return (hours * 60) + minutes
+        }
+
+        fun refreshSummary() {
+            val totalMinutes = selectedMinutes()
+            summaryLabel.text = if (totalMinutes > 0) {
+                "Event duration: ${DesktopInputSupport.formatDurationHoursMinutesCompact(Duration.ofMinutes(totalMinutes.toLong()))}"
+            } else {
+                "Choose at least 5 minutes."
+            }
+        }
+
+        hourSpinner.addChangeListener { refreshSummary() }
+        minuteSpinner.addChangeListener { refreshSummary() }
+        refreshSummary()
+
+        val panel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(summaryLabel)
+            add(Box.createVerticalStrut(10))
+            add(
+                JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    isOpaque = false
+                    add(JLabel("Hours"))
+                    add(Box.createHorizontalStrut(6))
+                    add(hourSpinner)
+                    add(Box.createHorizontalStrut(12))
+                    add(JLabel("Minutes"))
+                    add(Box.createHorizontalStrut(6))
+                    add(minuteSpinner)
+                },
+            )
+        }
+
+        lastsDurationDialogOpen = true
+        val result =
+            try {
+                JOptionPane.showConfirmDialog(
+                    this,
+                    panel,
+                    "Lasts",
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.PLAIN_MESSAGE,
+                )
+            } finally {
+                lastsDurationDialogOpen = false
+            }
+        if (result != JOptionPane.OK_OPTION) {
+            return
+        }
+
+        val requestedMinutes = selectedMinutes()
+        if (requestedMinutes <= 0) {
+            JOptionPane.showMessageDialog(
+                this,
+                "Event duration must be at least 5 minutes.",
+                "Lasts",
+                JOptionPane.WARNING_MESSAGE,
+            )
+            return
+        }
+
+        chooseStartTimeDaysToRunHandling(
+            currentDaysToRun = snapshot.settings.daysToRun,
+            onCancel = {},
+        ) { daysChoice ->
+            val requestedDuration = Duration.ofMinutes(requestedMinutes.toLong())
+            resolveMultiDayDurationGuardForScheduleChange(
+                currentDaysToRun = snapshot.settings.daysToRun,
+                daysChoice = daysChoice,
+                proposedDuration = requestedDuration,
+                onCancel = {},
+            ) { preserveDaysToRun, resolvedDuration ->
+                clearRelativeScheduleDisplayOverrides()
+                val editRequest =
+                    try {
+                        ScheduleSubmitSupport.absoluteDurationEdit(
+                            currentSettings = snapshot.settings,
+                            requestedDuration = resolvedDuration ?: requestedDuration,
+                            preserveDaysToRun = preserveDaysToRun,
+                        )
+                    } catch (exception: IllegalArgumentException) {
+                        JOptionPane.showMessageDialog(
+                            this,
+                            exception.message ?: "Invalid Lasts value.",
+                            "Lasts",
+                            JOptionPane.WARNING_MESSAGE,
+                        )
+                        return@resolveMultiDayDurationGuardForScheduleChange
+                    } catch (exception: IllegalStateException) {
+                        JOptionPane.showMessageDialog(
+                            this,
+                            exception.message ?: "Invalid Lasts value.",
+                            "Lasts",
+                            JOptionPane.WARNING_MESSAGE,
+                        )
+                        return@resolveMultiDayDurationGuardForScheduleChange
+                    }
+                applyImmediateEdit(
+                    "Lasts",
+                    updatesTimedEventTemplate = true,
+                    forceWriteKeys = editRequest.forceWriteKeys,
+                ) { base ->
+                    EditableDeviceSettings.fromDeviceSettings(base).copy(
+                        startTimeCompact = SettingsField(
+                            "startTimeCompact",
+                            "Start Time",
+                            base.startTimeCompact,
+                            editRequest.startTimeCompact,
+                        ),
+                        finishTimeCompact = SettingsField(
+                            "finishTimeCompact",
+                            "Finish Time",
+                            base.finishTimeCompact,
+                            editRequest.finishTimeCompact,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -3198,10 +3362,79 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun applyDaysToRunChange() {
-        applyImmediateEdit("Days To Run", updatesTimedEventTemplate = true) { base ->
-            EditableDeviceSettings.fromDeviceSettings(base).copy(
-                daysToRun = SettingsField("daysToRun", "Days To Run", base.daysToRun, daysField.value as Int),
+        val connectedTimedSettings = currentConnectedTimedSettings()
+        val selectedDaysToRun = (daysField.value as? Number)?.toInt() ?: connectedTimedSettings.daysToRun
+        val currentDuration = DesktopInputSupport.validEventDuration(
+            connectedTimedSettings.startTimeCompact,
+            connectedTimedSettings.finishTimeCompact,
+        )
+        chooseMultiDayDurationGuardHandling(
+            options = ScheduleDurationGuardSupport.planForDirectDaysToRunChange(
+                selectedDaysToRun = selectedDaysToRun,
+                currentDuration = currentDuration,
+            ),
+            onCancel = {
+                restoreDaysToRunEditor(connectedTimedSettings.daysToRun)
+            },
+        ) { option ->
+            val resolution = ScheduleDurationGuardSupport.resolveDirectDaysToRunChange(
+                selectedDaysToRun = selectedDaysToRun,
+                currentDuration = currentDuration,
+                selectedOption = option,
             )
+            when (option?.choice) {
+                MultiDayDurationGuardChoice.SHORTEN_DURATION -> {
+                    clearRelativeScheduleDisplayOverrides()
+                    val startTimeCompact = connectedTimedSettings.startTimeCompact ?: return@chooseMultiDayDurationGuardHandling
+                    val editRequest = ScheduleSubmitSupport.daysToRunEdit(
+                        currentSettings = connectedTimedSettings,
+                        requestedDaysToRun = resolution.resultingDaysToRun,
+                        requestedFinishTimeCompact = DesktopInputSupport.finishTimeCompactFromStart(
+                            startTimeCompact = startTimeCompact,
+                            duration = resolution.resultingDuration ?: return@chooseMultiDayDurationGuardHandling,
+                        ),
+                    )
+                    applyImmediateEdit("Days To Run", updatesTimedEventTemplate = true) { base ->
+                        EditableDeviceSettings.fromDeviceSettings(base).copy(
+                            daysToRun = SettingsField("daysToRun", "Days To Run", base.daysToRun, editRequest.daysToRun),
+                            startTimeCompact = SettingsField(
+                                "startTimeCompact",
+                                "Start Time",
+                                base.startTimeCompact,
+                                editRequest.startTimeCompact,
+                            ),
+                            finishTimeCompact = SettingsField(
+                                "finishTimeCompact",
+                                "Finish Time",
+                                base.finishTimeCompact,
+                                editRequest.finishTimeCompact,
+                            ),
+                        )
+                    }
+                }
+                MultiDayDurationGuardChoice.SET_DAYS_TO_ONE -> {
+                    val editRequest = ScheduleSubmitSupport.daysToRunEdit(
+                        currentSettings = connectedTimedSettings,
+                        requestedDaysToRun = resolution.resultingDaysToRun,
+                    )
+                    applyImmediateEdit("Days To Run", updatesTimedEventTemplate = true) { base ->
+                        EditableDeviceSettings.fromDeviceSettings(base).copy(
+                            daysToRun = SettingsField("daysToRun", "Days To Run", base.daysToRun, editRequest.daysToRun),
+                        )
+                    }
+                }
+                null -> {
+                    val editRequest = ScheduleSubmitSupport.daysToRunEdit(
+                        currentSettings = connectedTimedSettings,
+                        requestedDaysToRun = resolution.resultingDaysToRun,
+                    )
+                    applyImmediateEdit("Days To Run", updatesTimedEventTemplate = true) { base ->
+                        EditableDeviceSettings.fromDeviceSettings(base).copy(
+                            daysToRun = SettingsField("daysToRun", "Days To Run", base.daysToRun, editRequest.daysToRun),
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -3509,16 +3742,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         restoreRelativeStartTimeEditor()
                     },
                 ) { daysChoice ->
-                    applyRelativeStartTimeChange(
-                        selection = selection,
-                        chosenDuration = chosenStartDuration,
-                        transport = transport,
-                        state = state,
-                        preservedDaysToRun = when (daysChoice) {
-                            StartTimeDaysToRunChoice.PRESERVE -> snapshot.settings.daysToRun
-                            StartTimeDaysToRunChoice.RESET -> null
+                    resolveMultiDayDurationGuardForScheduleChange(
+                        currentDaysToRun = snapshot.settings.daysToRun,
+                        daysChoice = daysChoice,
+                        proposedDuration = chosenStartDuration,
+                        onCancel = {
+                            restoreRelativeStartTimeEditor()
                         },
-                    )
+                    ) { preserveDaysToRun, resolvedDuration ->
+                        applyRelativeStartTimeChange(
+                            selection = selection,
+                            chosenDuration = resolvedDuration ?: chosenStartDuration,
+                            transport = transport,
+                            state = state,
+                            preservedDaysToRun = if (preserveDaysToRun) snapshot.settings.daysToRun else null,
+                        )
+                    }
                 }
             }
             return
@@ -3529,79 +3768,97 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 restoreRelativeFinishTimeEditor()
             },
         ) { daysChoice ->
-            val commands = ScheduleSubmitSupport.relativeFinishCommands(
-                offsetCommand = DesktopInputSupport.formatRelativeTimeCommand(selection),
-                preservedDaysToRun = if (daysChoice == StartTimeDaysToRunChoice.PRESERVE) {
-                    snapshot.settings.daysToRun
-                } else {
-                    null
+            val proposedFinishTimeCompact = DesktopInputSupport.relativeTargetTimeCompact(
+                baseCompact = snapshot.settings.startTimeCompact,
+                selection = selection,
+            )
+            val proposedDuration = DesktopInputSupport.validEventDuration(
+                snapshot.settings.startTimeCompact,
+                proposedFinishTimeCompact,
+            )
+            resolveMultiDayDurationGuardForScheduleChange(
+                currentDaysToRun = snapshot.settings.daysToRun,
+                daysChoice = daysChoice,
+                proposedDuration = proposedDuration,
+                onCancel = {
+                    restoreRelativeFinishTimeEditor()
                 },
-            )
-
-            showConnectionIndicator(
-                ConnectionIndicatorState.SEARCHING,
-                "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
-            )
-            runInBackground("Applying $description...") {
-                setBusyProgress(0, 100, "Sending relative schedule command")
-                val sentAtMs = System.currentTimeMillis()
-                transport.sendCommands(commands)
-                val responseLines = transport.readAvailableLines()
-                val receivedAtMs = System.currentTimeMillis()
-                extractDeviceError(responseLines)?.let { error ->
-                    throw IllegalStateException(error)
-                }
-
-                val updatedState = if (responseLines.isNotEmpty()) {
-                    DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+            ) { preserveDaysToRun, resolvedDuration ->
+                val effectiveSelection = if (resolvedDuration != null && resolvedDuration != proposedDuration) {
+                    DesktopInputSupport.relativeTimeSelectionForDuration(resolvedDuration)
                 } else {
-                    state
+                    selection
                 }
-
-                val refreshed = DeviceSessionController.refreshFromDevice(
-                    updatedState,
-                    transport,
-                    startEditing = true,
-                    progress = { completed, total ->
-                        setBusyProgressRange(20, 95, completed, total, commandProgressLabel(completed, total))
+                val commands = ScheduleSubmitSupport.relativeFinishCommands(
+                    offsetCommand = DesktopInputSupport.formatRelativeTimeCommand(effectiveSelection),
+                    preservedDaysToRun = if (preserveDaysToRun) {
+                        snapshot.settings.daysToRun
+                    } else {
+                        null
                     },
                 )
-                setBusyProgress(97, 100, "Checking device time")
-                val refreshClockSample = postLoadClockSample(transport, refreshed.state.snapshot)
-                if (refreshClockSample != null) {
-                    setBusyProgress(100, 100, "Done")
-                } else {
-                    setBusyProgress(100, 100, "Done")
-                }
-                val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
-                currentState = refreshedWithClock.state
-                loadedSnapshot = refreshedWithClock.state.snapshot
-                refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
 
-                SwingUtilities.invokeLater {
-                    relativeFinishDisplaySelectionOverride = selection
-                    refreshClockSample?.second?.let(::applyClockDisplayAnchor)
-                    applySnapshotToForm(
-                        refreshedWithClock.state.snapshot,
-                        recalculateClockOffset = refreshClockSample == null,
+                showConnectionIndicator(
+                    ConnectionIndicatorState.SEARCHING,
+                    "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
+                )
+                runInBackground("Applying $description...") {
+                    setBusyProgress(0, 100, "Sending relative schedule command")
+                    val sentAtMs = System.currentTimeMillis()
+                    transport.sendCommands(commands)
+                    val responseLines = transport.readAvailableLines()
+                    val receivedAtMs = System.currentTimeMillis()
+                    extractDeviceError(responseLines)?.let { error ->
+                        throw IllegalStateException(error)
+                    }
+
+                    val updatedState = if (responseLines.isNotEmpty()) {
+                        DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+                    } else {
+                        state
+                    }
+
+                    val refreshed = DeviceSessionController.refreshFromDevice(
+                        updatedState,
+                        transport,
+                        startEditing = true,
+                        progress = { completed, total ->
+                            setBusyProgressRange(20, 95, completed, total, commandProgressLabel(completed, total))
+                        },
                     )
-                    updateCloneTemplateLabel(
-                        "Clone template updated from current device.",
-                        Color(0x0B, 0x3D, 0x91),
-                    )
-                    appendRelativeScheduleLog(
-                        title = "Apply $description",
-                        commands = commands,
-                        sentAtMs = sentAtMs,
-                        responseLines = responseLines,
-                        receivedAtMs = receivedAtMs,
-                        refreshResult = refreshedWithClock,
-                    )
-                    showConnectionIndicator(
-                        ConnectionIndicatorState.CONNECTED,
-                        "Applied $description on ${currentConnectedPortPath.orEmpty()}.",
-                    )
-                    setStatus("Applied $description.")
+                    setBusyProgress(97, 100, "Checking device time")
+                    val refreshClockSample = postLoadClockSample(transport, refreshed.state.snapshot)
+                    setBusyProgress(100, 100, "Done")
+                    val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
+                    currentState = refreshedWithClock.state
+                    loadedSnapshot = refreshedWithClock.state.snapshot
+                    refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+
+                    SwingUtilities.invokeLater {
+                        relativeFinishDisplaySelectionOverride = effectiveSelection
+                        refreshClockSample?.second?.let(::applyClockDisplayAnchor)
+                        applySnapshotToForm(
+                            refreshedWithClock.state.snapshot,
+                            recalculateClockOffset = refreshClockSample == null,
+                        )
+                        updateCloneTemplateLabel(
+                            "Clone template updated from current device.",
+                            Color(0x0B, 0x3D, 0x91),
+                        )
+                        appendRelativeScheduleLog(
+                            title = "Apply $description",
+                            commands = commands,
+                            sentAtMs = sentAtMs,
+                            responseLines = responseLines,
+                            receivedAtMs = receivedAtMs,
+                            refreshResult = refreshedWithClock,
+                        )
+                        showConnectionIndicator(
+                            ConnectionIndicatorState.CONNECTED,
+                            "Applied $description on ${currentConnectedPortPath.orEmpty()}.",
+                        )
+                        setStatus("Applied $description.")
+                    }
                 }
             }
         }
@@ -3731,6 +3988,53 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun chooseMultiDayDurationGuardHandling(
+        options: List<MultiDayDurationGuardOption>,
+        onCancel: () -> Unit,
+        onSelected: (MultiDayDurationGuardOption?) -> Unit,
+    ) {
+        if (options.isEmpty()) {
+            onSelected(null)
+            return
+        }
+        val selectedChoiceIndex = showMultiDayDurationGuardDialog(options)
+        if (selectedChoiceIndex != null) {
+            runAfterModalUiSettles {
+                onSelected(options[selectedChoiceIndex])
+            }
+        } else {
+            runAfterModalUiSettles {
+                onCancel()
+            }
+        }
+    }
+
+    private fun resolveMultiDayDurationGuardForScheduleChange(
+        currentDaysToRun: Int,
+        daysChoice: StartTimeDaysToRunChoice,
+        proposedDuration: Duration?,
+        onCancel: () -> Unit,
+        onResolved: (preserveDaysToRun: Boolean, resultingDuration: Duration?) -> Unit,
+    ) {
+        val options = ScheduleDurationGuardSupport.planForScheduleChange(
+            currentDaysToRun = currentDaysToRun,
+            daysChoice = daysChoice,
+            proposedDuration = proposedDuration,
+        )
+        chooseMultiDayDurationGuardHandling(
+            options = options,
+            onCancel = onCancel,
+        ) { option ->
+            val resolution = ScheduleDurationGuardSupport.resolveScheduleChange(
+                currentDaysToRun = currentDaysToRun,
+                daysChoice = daysChoice,
+                proposedDuration = proposedDuration,
+                selectedOption = option,
+            )
+            onResolved(resolution.preserveDaysToRun, resolution.resultingDuration)
+        }
+    }
+
     private fun runAfterModalUiSettles(action: () -> Unit) {
         SwingUtilities.invokeLater {
             SwingUtilities.invokeLater {
@@ -3785,6 +4089,59 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             startTimeDaysToRunDialogOpen = false
         }
         return selectedChoiceIndex
+    }
+
+    private fun showMultiDayDurationGuardDialog(options: List<MultiDayDurationGuardOption>): Int? {
+        var selectedChoiceIndex: Int? = null
+        val dialog = JDialog(this, "Invalid Multi-Day Event", true).apply {
+            defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
+            isResizable = false
+        }
+        multiDayDurationGuardDialogOpen = true
+
+        val content = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = BorderFactory.createEmptyBorder(14, 14, 14, 14)
+            add(JLabel("Multi-day events must last less than 24 hours. Choose how to proceed:").apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+            add(Box.createVerticalStrut(12))
+            options.forEachIndexed { index, option ->
+                add(
+                    JButton(option.label).apply {
+                        alignmentX = Component.LEFT_ALIGNMENT
+                        maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+                        addActionListener {
+                            selectedChoiceIndex = index
+                            dialog.dispose()
+                        }
+                    },
+                )
+                add(Box.createVerticalStrut(8))
+            }
+            add(
+                JButton("Cancel").apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+                    addActionListener { dialog.dispose() }
+                },
+            )
+        }
+
+        dialog.contentPane.add(content)
+        dialog.pack()
+        dialog.setLocationRelativeTo(this)
+        try {
+            dialog.isVisible = true
+        } finally {
+            multiDayDurationGuardDialogOpen = false
+        }
+        return selectedChoiceIndex
+    }
+
+    private fun restoreDaysToRunEditor(daysToRun: Int) {
+        daysField.value = daysToRun
+        clearPendingImmediateEdit(daysField)
     }
 
     private fun disableEventViaStartTimeCommand(
@@ -4615,6 +4972,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         finishTimeRelativeField.isEnabled = writableEnabled && schedulingSupported
         startTimeAbsoluteMirrorField.isEnabled = writableEnabled && schedulingSupported
         finishTimeAbsoluteMirrorField.isEnabled = writableEnabled && schedulingSupported
+        updateLastsRowEditability(writableEnabled && schedulingSupported)
         setTimeButton.isEnabled =
             writableEnabled &&
             schedulingSupported &&
@@ -4625,6 +4983,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK &&
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED
+    }
+
+    private fun updateLastsRowEditability(enabled: Boolean) {
+        val cursor =
+            if (enabled) {
+                java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+            } else {
+                java.awt.Cursor.getDefaultCursor()
+            }
+        lastsField.cursor = cursor
+        lastsRowLabel.cursor = cursor
+        val tooltip = if (enabled) "Click to choose event duration." else null
+        lastsField.toolTipText = tooltip
+        lastsRowLabel.toolTipText = tooltip
     }
 
     private fun currentPatternSpeedField(): JComboBox<String> {
@@ -4736,7 +5108,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun setScheduleTimeInputMode(mode: ScheduleTimeInputMode) {
-        if (startTimeFinishAdjustmentDialogOpen || startTimeDaysToRunDialogOpen) {
+        if (startTimeFinishAdjustmentDialogOpen || startTimeDaysToRunDialogOpen || multiDayDurationGuardDialogOpen || lastsDurationDialogOpen) {
             return
         }
         if (displayPreferences.scheduleTimeInputMode == mode) {
@@ -4818,19 +5190,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 TimeSetMode.MANUAL
             } else {
                 TimeSetMode.SYSTEM_CLOCK
-            },
-        )
-    }
-
-    private fun toggleScheduleTimeInputMode() {
-        if (startTimeFinishAdjustmentDialogOpen || startTimeDaysToRunDialogOpen) {
-            return
-        }
-        setScheduleTimeInputMode(
-            if (displayPreferences.scheduleTimeInputMode == ScheduleTimeInputMode.ABSOLUTE) {
-                ScheduleTimeInputMode.RELATIVE
-            } else {
-                ScheduleTimeInputMode.ABSOLUTE
             },
         )
     }
@@ -5920,7 +6279,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         lastsRowLabel.foreground = if (lastsAlertActive) alertForeground else defaultRowLabelForeground
         setInformationalFieldText(
             lastsField,
-            DesktopInputSupport.describeEventDuration(
+            DesktopInputSupport.describeEventDurationHoursMinutes(
                 startTimeCompact = timedSettings.startTimeCompact,
                 finishTimeCompact = timedSettings.finishTimeCompact,
                 fallback = snapshot.status.eventDurationSummary,
@@ -5979,6 +6338,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         lastsRowLabel.foreground = defaultRowLabelForeground
         updateDisplayedClockFields()
         updateWritableControlAvailability(backgroundWorkInProgress)
+    }
+
+    private fun canEditLastsDuration(): Boolean {
+        return !backgroundWorkInProgress &&
+            currentTransport != null &&
+            currentState?.connectionState == ConnectionState.CONNECTED &&
+            loadedSnapshot?.capabilities?.supportsScheduling == true
     }
 
     private fun displayedDeviceTimeCompact(systemNow: java.time.LocalDateTime = java.time.LocalDateTime.now()): String? {

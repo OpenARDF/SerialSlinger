@@ -370,6 +370,14 @@ object DesktopInputSupport {
         return JvmTimeSupport.formatDurationCompact(duration)
     }
 
+    fun formatDurationHoursMinutesCompact(duration: Duration): String {
+        return JvmTimeSupport.formatDurationHoursMinutesCompact(duration)
+    }
+
+    fun roundDurationMinutesToNearestFive(duration: Duration): Duration {
+        return JvmTimeSupport.roundDurationMinutesToNearestFive(duration)
+    }
+
     fun describeEventStatus(
         deviceReportedEventEnabled: Boolean?,
         eventStateSummary: String?,
@@ -396,6 +404,14 @@ object DesktopInputSupport {
         fallback: String?,
     ): String {
         return JvmTimeSupport.describeEventDuration(startTimeCompact, finishTimeCompact, fallback)
+    }
+
+    fun describeEventDurationHoursMinutes(
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+        fallback: String?,
+    ): String {
+        return JvmTimeSupport.describeEventDurationHoursMinutes(startTimeCompact, finishTimeCompact, fallback)
     }
 
     fun eventDurationDiffersFromDefault(

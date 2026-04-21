@@ -5,10 +5,10 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform) apply false
 }
 
-val serialSlingerVersion = "1.0.94"
+val serialSlingerVersion = "1.0.95"
 // Bump this suffix for every new testable change set so desktop and Android builds expose
 // an unmistakable version string during iterative testing. Clear it before a full release.
-val serialSlingerVersionSuffix = "l"
+val serialSlingerVersionSuffix = "a"
 val serialSlingerDisplayVersion = serialSlingerVersion + serialSlingerVersionSuffix
 val serialSlingerVendor = "OpenARDF"
 val serialSlingerDescription = "Desktop configuration tool for SignalSlinger devices."

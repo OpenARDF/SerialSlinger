@@ -2033,6 +2033,7 @@ object AndroidSessionController {
     fun runDaysToRunSubmit(
         context: Context,
         daysToRunText: String,
+        requestedFinishTimeInput: String? = null,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -2086,6 +2087,29 @@ object AndroidSessionController {
             return
         }
 
+        val normalizedRequestedFinishTime =
+            try {
+                requestedFinishTimeInput
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { requestedFinishInput ->
+                        JvmTimeSupport.parseOptionalCompactTimestamp(requestedFinishInput)
+                            ?: error("Finish Time must not be blank.")
+                    }
+            } catch (error: Throwable) {
+                synchronized(this) {
+                    latestSubmitSummary = "Submit failed.\n${error.message}"
+                    statusText = "Days To Run update failed."
+                    statusIsError = true
+                }
+                emitCommandLog("set-days-to-run", source, success = false, summary = error.message.orEmpty())
+                notifyListeners()
+                onComplete?.let { callback ->
+                    mainHandler.post { callback(Result.failure(error)) }
+                }
+                return
+            }
+
         synchronized(this) {
             draftDaysToRun = parsedDaysToRun.toString()
             latestSubmitSummary = "Submitting Days To Run update..."
@@ -2105,10 +2129,37 @@ object AndroidSessionController {
                     val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
                     try {
                         transport.connect()
-                        val editedSettings = editableSettings.copy(
-                            daysToRun = editableSettings.daysToRun.copy(editedValue = parsedDaysToRun),
+                        val editRequest = ScheduleSubmitSupport.daysToRunEdit(
+                            currentSettings = snapshot.settings,
+                            requestedDaysToRun = parsedDaysToRun,
+                            requestedFinishTimeCompact = normalizedRequestedFinishTime,
                         )
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
+                        if (
+                            editRequest.daysToRun == snapshot.settings.daysToRun &&
+                            editRequest.startTimeCompact == snapshot.settings.startTimeCompact &&
+                            editRequest.finishTimeCompact == snapshot.settings.finishTimeCompact &&
+                            editRequest.forceWriteKeys.isEmpty()
+                        ) {
+                            Result.success(noOpSubmitResult(sessionState))
+                        } else {
+                            val editedSettings = editableSettings.copy(
+                                daysToRun = editableSettings.daysToRun.copy(editedValue = editRequest.daysToRun),
+                                startTimeCompact = editableSettings.startTimeCompact.copy(
+                                    editedValue = editRequest.startTimeCompact,
+                                ),
+                                finishTimeCompact = editableSettings.finishTimeCompact.copy(
+                                    editedValue = editRequest.finishTimeCompact,
+                                ),
+                            )
+                            Result.success(
+                                DeviceSessionController.submitEdits(
+                                    sessionState,
+                                    editedSettings,
+                                    transport,
+                                    forceWriteKeys = editRequest.forceWriteKeys,
+                                ),
+                            )
+                        }
                     } catch (error: Throwable) {
                         Result.failure(error)
                     } finally {
@@ -2952,6 +3003,46 @@ object AndroidSessionController {
                 mainHandler.post { callback(result) }
             }
         }
+    }
+
+    fun runEventDurationSubmit(
+        context: Context,
+        requestedDuration: Duration,
+        preserveDaysToRun: Boolean = false,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
+    ) {
+        val snapshot = synchronized(this) { latestSessionViewState?.state?.snapshot }
+        val normalizedFinishTime =
+            try {
+                ScheduleSubmitSupport.absoluteDurationEdit(
+                    currentSettings = snapshot?.settings ?: error("Load a SignalSlinger snapshot before submitting changes."),
+                    requestedDuration = requestedDuration,
+                    preserveDaysToRun = preserveDaysToRun,
+                ).finishTimeCompact ?: error("Finish Time must not be blank.")
+            } catch (error: Throwable) {
+                synchronized(this) {
+                    latestSubmitSummary = "Submit failed.\n${error.message}"
+                    statusText = "Lasts update failed."
+                    statusIsError = true
+                }
+                emitCommandLog("set-lasts", source, success = false, summary = error.message.orEmpty())
+                notifyListeners()
+                onComplete?.let { callback ->
+                    mainHandler.post { callback(Result.failure(error)) }
+                }
+                return
+            }
+
+        runFinishTimeSubmit(
+            context = context,
+            finishTimeInput = normalizedFinishTime,
+            preserveDaysToRun = preserveDaysToRun,
+            requestedDeviceName = requestedDeviceName,
+            source = "set-lasts",
+            onComplete = onComplete,
+        )
     }
 
     fun debugStateSummary(): String {

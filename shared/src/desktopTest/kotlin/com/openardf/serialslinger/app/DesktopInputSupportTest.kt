@@ -250,6 +250,28 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun describesDurationForLastsDisplayWithoutSeconds() {
+        val label = DesktopInputSupport.describeEventDurationHoursMinutes(
+            startTimeCompact = "260410150000",
+            finishTimeCompact = "260410170000",
+            fallback = "2 hours 0 minutes 0 seconds",
+        )
+
+        assertEquals("2h 00m", label)
+    }
+
+    @Test
+    fun describesFallbackDurationForLastsDisplayWithoutSeconds() {
+        val label = DesktopInputSupport.describeEventDurationHoursMinutes(
+            startTimeCompact = null,
+            finishTimeCompact = null,
+            fallback = "2 hours 5 minutes 9 seconds",
+        )
+
+        assertEquals("2h 05m", label)
+    }
+
+    @Test
     fun derivesRelativeTimeSelectionForWholeHoursUsingToth() {
         val selection = DesktopInputSupport.deriveRelativeTimeSelection(
             baseCompact = "260410140000",
@@ -300,6 +322,18 @@ class DesktopInputSupportTest {
     fun formatsDefaultEventLengthForDisplay() {
         assertEquals("6h 00m", DesktopInputSupport.formatDefaultEventLength(6 * 60))
         assertEquals("45m", DesktopInputSupport.formatDefaultEventLength(45))
+    }
+
+    @Test
+    fun roundsDurationToNearestFiveMinutesForLastsPicker() {
+        assertEquals(
+            Duration.ofMinutes(65),
+            DesktopInputSupport.roundDurationMinutesToNearestFive(Duration.ofMinutes(63)),
+        )
+        assertEquals(
+            Duration.ofMinutes(60),
+            DesktopInputSupport.roundDurationMinutesToNearestFive(Duration.ofMinutes(58)),
+        )
     }
 
     @Test

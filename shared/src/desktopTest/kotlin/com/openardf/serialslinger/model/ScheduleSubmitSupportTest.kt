@@ -54,6 +54,74 @@ class ScheduleSubmitSupportTest {
         assertEquals(setOf(SettingKey.DAYS_TO_RUN), request.forceWriteKeys)
     }
 
+    @Test
+    fun `absolute finish edit clamps past start time to next five minute boundary`() {
+        val request = ScheduleSubmitSupport.absoluteFinishEdit(
+            currentSettings = sampleSettings().copy(
+                currentTimeCompact = "260420100231",
+                startTimeCompact = "260420095500",
+            ),
+            normalizedFinishTime = "260420113000",
+            preserveDaysToRun = false,
+        )
+
+        assertEquals("260420100500", request.startTimeCompact)
+        assertEquals("260420113000", request.finishTimeCompact)
+        assertEquals(emptySet(), request.forceWriteKeys)
+    }
+
+    @Test
+    fun `absolute duration edit derives finish from start and preserves days`() {
+        val request = ScheduleSubmitSupport.absoluteDurationEdit(
+            currentSettings = sampleSettings().copy(
+                currentTimeCompact = "260420100000",
+                startTimeCompact = "260420120000",
+            ),
+            requestedDuration = java.time.Duration.ofMinutes(150),
+            preserveDaysToRun = true,
+        )
+
+        assertEquals("260420120000", request.startTimeCompact)
+        assertEquals("260420143000", request.finishTimeCompact)
+        assertEquals(setOf(SettingKey.DAYS_TO_RUN), request.forceWriteKeys)
+    }
+
+    @Test
+    fun `absolute finish edit with duration override delegates to duration edit`() {
+        val request = ScheduleSubmitSupport.absoluteFinishEditWithDurationOverride(
+            currentSettings = sampleSettings().copy(
+                currentTimeCompact = "260420100000",
+                startTimeCompact = "260420120000",
+            ),
+            normalizedFinishTime = "260420183000",
+            requestedDurationOverride = java.time.Duration.ofMinutes(150),
+            preserveDaysToRun = true,
+        )
+
+        assertEquals("260420120000", request.startTimeCompact)
+        assertEquals("260420143000", request.finishTimeCompact)
+        assertEquals(setOf(SettingKey.DAYS_TO_RUN), request.forceWriteKeys)
+    }
+
+    @Test
+    fun `days to run edit can include shortened finish request`() {
+        val request = ScheduleSubmitSupport.daysToRunEdit(
+            currentSettings = sampleSettings().copy(
+                currentTimeCompact = "260420100000",
+                startTimeCompact = "260420120000",
+                finishTimeCompact = "260420180000",
+                daysToRun = 1,
+            ),
+            requestedDaysToRun = 4,
+            requestedFinishTimeCompact = "260420143000",
+        )
+
+        assertEquals(4, request.daysToRun)
+        assertEquals("260420120000", request.startTimeCompact)
+        assertEquals("260420143000", request.finishTimeCompact)
+        assertEquals(setOf(SettingKey.DAYS_TO_RUN), request.forceWriteKeys)
+    }
+
     private fun sampleSettings(): DeviceSettings {
         return DeviceSettings(
             stationId = "N0CALL",
