@@ -3023,49 +3023,41 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 return@chooseStartTimeFinishAdjustmentDuration
             }
             val chosenDuration = choice.duration ?: return@chooseStartTimeFinishAdjustmentDuration
-            chooseStartTimeDaysToRunHandling(
+            chooseScheduleChangeDurationResolution(
                 currentDaysToRun = connectedTimedSettings.daysToRun,
+                proposedDuration = chosenDuration,
                 onCancel = {
                     restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
                 },
-            ) { daysChoice ->
-                resolveMultiDayDurationGuardForScheduleChange(
-                    currentDaysToRun = connectedTimedSettings.daysToRun,
-                    daysChoice = daysChoice,
-                    proposedDuration = chosenDuration,
-                    onCancel = {
-                        restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
-                    },
-                ) { preserveDaysToRun, resolvedDuration ->
-                    val editRequest = ScheduleSubmitSupport.absoluteStartEdit(
-                        currentSettings = connectedTimedSettings,
-                        normalizedStartTime = normalizedStartTime,
-                        requestedFinishTimeCompact = DesktopInputSupport.finishTimeCompactFromStart(
-                            startTimeCompact = normalizedStartTime,
-                            duration = resolvedDuration ?: chosenDuration,
+            ) { preserveDaysToRun, effectiveDuration ->
+                val editRequest = ScheduleSubmitSupport.absoluteStartEdit(
+                    currentSettings = connectedTimedSettings,
+                    normalizedStartTime = normalizedStartTime,
+                    requestedFinishTimeCompact = DesktopInputSupport.finishTimeCompactFromStart(
+                        startTimeCompact = normalizedStartTime,
+                        duration = effectiveDuration ?: chosenDuration,
+                    ),
+                    preserveDaysToRun = preserveDaysToRun,
+                )
+                applyImmediateEdit(
+                    "Start Time",
+                    updatesTimedEventTemplate = true,
+                    forceWriteKeys = editRequest.forceWriteKeys,
+                ) { base ->
+                    EditableDeviceSettings.fromDeviceSettings(base).copy(
+                        startTimeCompact = SettingsField(
+                            "startTimeCompact",
+                            "Start Time",
+                            base.startTimeCompact,
+                            editRequest.startTimeCompact,
                         ),
-                        preserveDaysToRun = preserveDaysToRun,
+                        finishTimeCompact = SettingsField(
+                            "finishTimeCompact",
+                            "Finish Time",
+                            base.finishTimeCompact,
+                            editRequest.finishTimeCompact,
+                        ),
                     )
-                    applyImmediateEdit(
-                        "Start Time",
-                        updatesTimedEventTemplate = true,
-                        forceWriteKeys = editRequest.forceWriteKeys,
-                    ) { base ->
-                        EditableDeviceSettings.fromDeviceSettings(base).copy(
-                            startTimeCompact = SettingsField(
-                                "startTimeCompact",
-                                "Start Time",
-                                base.startTimeCompact,
-                                editRequest.startTimeCompact,
-                            ),
-                            finishTimeCompact = SettingsField(
-                                "finishTimeCompact",
-                                "Finish Time",
-                                base.finishTimeCompact,
-                                editRequest.finishTimeCompact,
-                            ),
-                        )
-                    }
                 }
             }
         }
@@ -3090,50 +3082,42 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             originalFinishTimeCompact = connectedTimedSettings.finishTimeCompact,
             selectedCompact = selectedFinishTimeCompact,
         ) ?: return
-        chooseStartTimeDaysToRunHandling(
+        val proposedDuration = DesktopInputSupport.validEventDuration(
+            connectedTimedSettings.startTimeCompact,
+            normalizedFinishTime,
+        )
+        chooseScheduleChangeDurationResolution(
             currentDaysToRun = connectedTimedSettings.daysToRun,
+            proposedDuration = proposedDuration,
             onCancel = {
                 restoreAbsoluteFinishTimeEditor(connectedTimedSettings.finishTimeCompact)
             },
-        ) { daysChoice ->
-            val proposedDuration = DesktopInputSupport.validEventDuration(
-                connectedTimedSettings.startTimeCompact,
-                normalizedFinishTime,
+        ) { preserveDaysToRun, effectiveDuration ->
+            val editRequest = ScheduleSubmitSupport.absoluteFinishEditWithDurationOverride(
+                currentSettings = connectedTimedSettings,
+                normalizedFinishTime = normalizedFinishTime,
+                requestedDurationOverride = effectiveDuration?.takeIf { it != proposedDuration },
+                preserveDaysToRun = preserveDaysToRun,
             )
-            resolveMultiDayDurationGuardForScheduleChange(
-                currentDaysToRun = connectedTimedSettings.daysToRun,
-                daysChoice = daysChoice,
-                proposedDuration = proposedDuration,
-                onCancel = {
-                    restoreAbsoluteFinishTimeEditor(connectedTimedSettings.finishTimeCompact)
-                },
-            ) { preserveDaysToRun, resolvedDuration ->
-                val editRequest = ScheduleSubmitSupport.absoluteFinishEditWithDurationOverride(
-                    currentSettings = connectedTimedSettings,
-                    normalizedFinishTime = normalizedFinishTime,
-                    requestedDurationOverride = resolvedDuration?.takeIf { it != proposedDuration },
-                    preserveDaysToRun = preserveDaysToRun,
+            applyImmediateEdit(
+                "Finish Time",
+                updatesTimedEventTemplate = true,
+                forceWriteKeys = editRequest.forceWriteKeys,
+            ) { base ->
+                EditableDeviceSettings.fromDeviceSettings(base).copy(
+                    startTimeCompact = SettingsField(
+                        "startTimeCompact",
+                        "Start Time",
+                        base.startTimeCompact,
+                        editRequest.startTimeCompact,
+                    ),
+                    finishTimeCompact = SettingsField(
+                        "finishTimeCompact",
+                        "Finish Time",
+                        base.finishTimeCompact,
+                        editRequest.finishTimeCompact,
+                    ),
                 )
-                applyImmediateEdit(
-                    "Finish Time",
-                    updatesTimedEventTemplate = true,
-                    forceWriteKeys = editRequest.forceWriteKeys,
-                ) { base ->
-                    EditableDeviceSettings.fromDeviceSettings(base).copy(
-                        startTimeCompact = SettingsField(
-                            "startTimeCompact",
-                            "Start Time",
-                            base.startTimeCompact,
-                            editRequest.startTimeCompact,
-                        ),
-                        finishTimeCompact = SettingsField(
-                            "finishTimeCompact",
-                            "Finish Time",
-                            base.finishTimeCompact,
-                            editRequest.finishTimeCompact,
-                        ),
-                    )
-                }
             }
         }
     }
@@ -3221,62 +3205,56 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
-        chooseStartTimeDaysToRunHandling(
+        val requestedDuration = Duration.ofMinutes(requestedMinutes.toLong())
+        chooseScheduleChangeDurationResolution(
             currentDaysToRun = snapshot.settings.daysToRun,
+            proposedDuration = requestedDuration,
             onCancel = {},
-        ) { daysChoice ->
-            val requestedDuration = Duration.ofMinutes(requestedMinutes.toLong())
-            resolveMultiDayDurationGuardForScheduleChange(
-                currentDaysToRun = snapshot.settings.daysToRun,
-                daysChoice = daysChoice,
-                proposedDuration = requestedDuration,
-                onCancel = {},
-            ) { preserveDaysToRun, resolvedDuration ->
-                clearRelativeScheduleDisplayOverrides()
-                val editRequest =
-                    try {
-                        ScheduleSubmitSupport.absoluteDurationEdit(
-                            currentSettings = snapshot.settings,
-                            requestedDuration = resolvedDuration ?: requestedDuration,
-                            preserveDaysToRun = preserveDaysToRun,
-                        )
-                    } catch (exception: IllegalArgumentException) {
-                        JOptionPane.showMessageDialog(
-                            this,
-                            exception.message ?: "Invalid Lasts value.",
-                            "Lasts",
-                            JOptionPane.WARNING_MESSAGE,
-                        )
-                        return@resolveMultiDayDurationGuardForScheduleChange
-                    } catch (exception: IllegalStateException) {
-                        JOptionPane.showMessageDialog(
-                            this,
-                            exception.message ?: "Invalid Lasts value.",
-                            "Lasts",
-                            JOptionPane.WARNING_MESSAGE,
-                        )
-                        return@resolveMultiDayDurationGuardForScheduleChange
-                    }
-                applyImmediateEdit(
-                    "Lasts",
-                    updatesTimedEventTemplate = true,
-                    forceWriteKeys = editRequest.forceWriteKeys,
-                ) { base ->
-                    EditableDeviceSettings.fromDeviceSettings(base).copy(
-                        startTimeCompact = SettingsField(
-                            "startTimeCompact",
-                            "Start Time",
-                            base.startTimeCompact,
-                            editRequest.startTimeCompact,
-                        ),
-                        finishTimeCompact = SettingsField(
-                            "finishTimeCompact",
-                            "Finish Time",
-                            base.finishTimeCompact,
-                            editRequest.finishTimeCompact,
-                        ),
+        ) { preserveDaysToRun, effectiveDuration ->
+            clearRelativeScheduleDisplayOverrides()
+            val editRequest =
+                try {
+                    ScheduleSubmitSupport.absoluteDurationEdit(
+                        currentSettings = snapshot.settings,
+                        requestedDuration = effectiveDuration ?: requestedDuration,
+                        preserveDaysToRun = preserveDaysToRun,
                     )
+                } catch (exception: IllegalArgumentException) {
+                    JOptionPane.showMessageDialog(
+                        this,
+                        exception.message ?: "Invalid Lasts value.",
+                        "Lasts",
+                        JOptionPane.WARNING_MESSAGE,
+                    )
+                    return@chooseScheduleChangeDurationResolution
+                } catch (exception: IllegalStateException) {
+                    JOptionPane.showMessageDialog(
+                        this,
+                        exception.message ?: "Invalid Lasts value.",
+                        "Lasts",
+                        JOptionPane.WARNING_MESSAGE,
+                    )
+                    return@chooseScheduleChangeDurationResolution
                 }
+            applyImmediateEdit(
+                "Lasts",
+                updatesTimedEventTemplate = true,
+                forceWriteKeys = editRequest.forceWriteKeys,
+            ) { base ->
+                EditableDeviceSettings.fromDeviceSettings(base).copy(
+                    startTimeCompact = SettingsField(
+                        "startTimeCompact",
+                        "Start Time",
+                        base.startTimeCompact,
+                        editRequest.startTimeCompact,
+                    ),
+                    finishTimeCompact = SettingsField(
+                        "finishTimeCompact",
+                        "Finish Time",
+                        base.finishTimeCompact,
+                        editRequest.finishTimeCompact,
+                    ),
+                )
             }
         }
     }
@@ -3736,129 +3714,113 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     return@chooseStartTimeFinishAdjustmentDuration
                 }
                 val chosenStartDuration = choice.duration ?: return@chooseStartTimeFinishAdjustmentDuration
-                chooseStartTimeDaysToRunHandling(
+                chooseScheduleChangeDurationResolution(
                     currentDaysToRun = snapshot.settings.daysToRun,
+                    proposedDuration = chosenStartDuration,
                     onCancel = {
                         restoreRelativeStartTimeEditor()
                     },
-                ) { daysChoice ->
-                    resolveMultiDayDurationGuardForScheduleChange(
-                        currentDaysToRun = snapshot.settings.daysToRun,
-                        daysChoice = daysChoice,
-                        proposedDuration = chosenStartDuration,
-                        onCancel = {
-                            restoreRelativeStartTimeEditor()
-                        },
-                    ) { preserveDaysToRun, resolvedDuration ->
-                        applyRelativeStartTimeChange(
-                            selection = selection,
-                            chosenDuration = resolvedDuration ?: chosenStartDuration,
-                            transport = transport,
-                            state = state,
-                            preservedDaysToRun = if (preserveDaysToRun) snapshot.settings.daysToRun else null,
-                        )
-                    }
+                ) { preserveDaysToRun, effectiveDuration ->
+                    applyRelativeStartTimeChange(
+                        selection = selection,
+                        chosenDuration = effectiveDuration ?: chosenStartDuration,
+                        transport = transport,
+                        state = state,
+                        preservedDaysToRun = if (preserveDaysToRun) snapshot.settings.daysToRun else null,
+                    )
                 }
             }
             return
         }
-        chooseStartTimeDaysToRunHandling(
+        val proposedFinishTimeCompact = DesktopInputSupport.relativeTargetTimeCompact(
+            baseCompact = snapshot.settings.startTimeCompact,
+            selection = selection,
+        )
+        val proposedDuration = DesktopInputSupport.validEventDuration(
+            snapshot.settings.startTimeCompact,
+            proposedFinishTimeCompact,
+        )
+        chooseScheduleChangeDurationResolution(
             currentDaysToRun = snapshot.settings.daysToRun,
+            proposedDuration = proposedDuration,
             onCancel = {
                 restoreRelativeFinishTimeEditor()
             },
-        ) { daysChoice ->
-            val proposedFinishTimeCompact = DesktopInputSupport.relativeTargetTimeCompact(
-                baseCompact = snapshot.settings.startTimeCompact,
-                selection = selection,
-            )
-            val proposedDuration = DesktopInputSupport.validEventDuration(
-                snapshot.settings.startTimeCompact,
-                proposedFinishTimeCompact,
-            )
-            resolveMultiDayDurationGuardForScheduleChange(
-                currentDaysToRun = snapshot.settings.daysToRun,
-                daysChoice = daysChoice,
-                proposedDuration = proposedDuration,
-                onCancel = {
-                    restoreRelativeFinishTimeEditor()
-                },
-            ) { preserveDaysToRun, resolvedDuration ->
-                val effectiveSelection = if (resolvedDuration != null && resolvedDuration != proposedDuration) {
-                    DesktopInputSupport.relativeTimeSelectionForDuration(resolvedDuration)
+        ) { preserveDaysToRun, effectiveDuration ->
+            val effectiveSelection = if (effectiveDuration != null && effectiveDuration != proposedDuration) {
+                DesktopInputSupport.relativeTimeSelectionForDuration(effectiveDuration)
+            } else {
+                selection
+            }
+            val commands = ScheduleSubmitSupport.relativeFinishCommands(
+                offsetCommand = DesktopInputSupport.formatRelativeTimeCommand(effectiveSelection),
+                preservedDaysToRun = if (preserveDaysToRun) {
+                    snapshot.settings.daysToRun
                 } else {
-                    selection
+                    null
+                },
+            )
+
+            showConnectionIndicator(
+                ConnectionIndicatorState.SEARCHING,
+                "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
+            )
+            runInBackground("Applying $description...") {
+                setBusyProgress(0, 100, "Sending relative schedule command")
+                val sentAtMs = System.currentTimeMillis()
+                transport.sendCommands(commands)
+                val responseLines = transport.readAvailableLines()
+                val receivedAtMs = System.currentTimeMillis()
+                extractDeviceError(responseLines)?.let { error ->
+                    throw IllegalStateException(error)
                 }
-                val commands = ScheduleSubmitSupport.relativeFinishCommands(
-                    offsetCommand = DesktopInputSupport.formatRelativeTimeCommand(effectiveSelection),
-                    preservedDaysToRun = if (preserveDaysToRun) {
-                        snapshot.settings.daysToRun
-                    } else {
-                        null
+
+                val updatedState = if (responseLines.isNotEmpty()) {
+                    DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+                } else {
+                    state
+                }
+
+                val refreshed = DeviceSessionController.refreshFromDevice(
+                    updatedState,
+                    transport,
+                    startEditing = true,
+                    progress = { completed, total ->
+                        setBusyProgressRange(20, 95, completed, total, commandProgressLabel(completed, total))
                     },
                 )
+                setBusyProgress(97, 100, "Checking device time")
+                val refreshClockSample = postLoadClockSample(transport, refreshed.state.snapshot)
+                setBusyProgress(100, 100, "Done")
+                val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
+                currentState = refreshedWithClock.state
+                loadedSnapshot = refreshedWithClock.state.snapshot
+                refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
 
-                showConnectionIndicator(
-                    ConnectionIndicatorState.SEARCHING,
-                    "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
-                )
-                runInBackground("Applying $description...") {
-                    setBusyProgress(0, 100, "Sending relative schedule command")
-                    val sentAtMs = System.currentTimeMillis()
-                    transport.sendCommands(commands)
-                    val responseLines = transport.readAvailableLines()
-                    val receivedAtMs = System.currentTimeMillis()
-                    extractDeviceError(responseLines)?.let { error ->
-                        throw IllegalStateException(error)
-                    }
-
-                    val updatedState = if (responseLines.isNotEmpty()) {
-                        DeviceSessionWorkflow.ingestReportLines(state, responseLines)
-                    } else {
-                        state
-                    }
-
-                    val refreshed = DeviceSessionController.refreshFromDevice(
-                        updatedState,
-                        transport,
-                        startEditing = true,
-                        progress = { completed, total ->
-                            setBusyProgressRange(20, 95, completed, total, commandProgressLabel(completed, total))
-                        },
+                SwingUtilities.invokeLater {
+                    relativeFinishDisplaySelectionOverride = effectiveSelection
+                    refreshClockSample?.second?.let(::applyClockDisplayAnchor)
+                    applySnapshotToForm(
+                        refreshedWithClock.state.snapshot,
+                        recalculateClockOffset = refreshClockSample == null,
                     )
-                    setBusyProgress(97, 100, "Checking device time")
-                    val refreshClockSample = postLoadClockSample(transport, refreshed.state.snapshot)
-                    setBusyProgress(100, 100, "Done")
-                    val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
-                    currentState = refreshedWithClock.state
-                    loadedSnapshot = refreshedWithClock.state.snapshot
-                    refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
-
-                    SwingUtilities.invokeLater {
-                        relativeFinishDisplaySelectionOverride = effectiveSelection
-                        refreshClockSample?.second?.let(::applyClockDisplayAnchor)
-                        applySnapshotToForm(
-                            refreshedWithClock.state.snapshot,
-                            recalculateClockOffset = refreshClockSample == null,
-                        )
-                        updateCloneTemplateLabel(
-                            "Clone template updated from current device.",
-                            Color(0x0B, 0x3D, 0x91),
-                        )
-                        appendRelativeScheduleLog(
-                            title = "Apply $description",
-                            commands = commands,
-                            sentAtMs = sentAtMs,
-                            responseLines = responseLines,
-                            receivedAtMs = receivedAtMs,
-                            refreshResult = refreshedWithClock,
-                        )
-                        showConnectionIndicator(
-                            ConnectionIndicatorState.CONNECTED,
-                            "Applied $description on ${currentConnectedPortPath.orEmpty()}.",
-                        )
-                        setStatus("Applied $description.")
-                    }
+                    updateCloneTemplateLabel(
+                        "Clone template updated from current device.",
+                        Color(0x0B, 0x3D, 0x91),
+                    )
+                    appendRelativeScheduleLog(
+                        title = "Apply $description",
+                        commands = commands,
+                        sentAtMs = sentAtMs,
+                        responseLines = responseLines,
+                        receivedAtMs = receivedAtMs,
+                        refreshResult = refreshedWithClock,
+                    )
+                    showConnectionIndicator(
+                        ConnectionIndicatorState.CONNECTED,
+                        "Applied $description on ${currentConnectedPortPath.orEmpty()}.",
+                    )
+                    setStatus("Applied $description.")
                 }
             }
         }
@@ -4032,6 +3994,27 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 selectedOption = option,
             )
             onResolved(resolution.preserveDaysToRun, resolution.resultingDuration)
+        }
+    }
+
+    private fun chooseScheduleChangeDurationResolution(
+        currentDaysToRun: Int,
+        proposedDuration: Duration?,
+        onCancel: () -> Unit,
+        onResolved: (preserveDaysToRun: Boolean, effectiveDuration: Duration?) -> Unit,
+    ) {
+        chooseStartTimeDaysToRunHandling(
+            currentDaysToRun = currentDaysToRun,
+            onCancel = onCancel,
+        ) { daysChoice ->
+            resolveMultiDayDurationGuardForScheduleChange(
+                currentDaysToRun = currentDaysToRun,
+                daysChoice = daysChoice,
+                proposedDuration = proposedDuration,
+                onCancel = onCancel,
+            ) { preserveDaysToRun, resolvedDuration ->
+                onResolved(preserveDaysToRun, resolvedDuration ?: proposedDuration)
+            }
         }
     }
 
