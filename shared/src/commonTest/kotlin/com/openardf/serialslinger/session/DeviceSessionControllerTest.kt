@@ -9,7 +9,6 @@ import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
 import com.openardf.serialslinger.transport.FakeDeviceTransport
-import com.openardf.serialslinger.transport.SignalSlingerReadPlan
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -46,10 +45,12 @@ class DeviceSessionControllerTest {
                     "* Ext. Bat. Ctrl = ON",
                     "* Transmitter = Enabled",
                 ),
-                "FUN" to listOf(
-                    "*   Cur Temp: 20.9C",
-                    "*   Min Temp: 18.4C",
-                    "*   Max Temp: 24.2C",
+                "TMP" to listOf(
+                    "* Max Ever: 27.1C",
+                    "* Max Temp: 24.2C",
+                    "* Temp: 20.9C",
+                    "* Min Temp: 18.4C",
+                    "* Thermal shutdown threshold: 50C",
                 ),
             ),
         )
@@ -57,8 +58,11 @@ class DeviceSessionControllerTest {
         val result = DeviceSessionController.connectAndLoad(transport)
 
         assertTrue(transport.isConnected)
-        assertEquals(SignalSlingerReadPlan.defaultLoadCommands, result.commandsSent)
-        assertEquals(SignalSlingerReadPlan.defaultLoadCommands, transport.sentCommands)
+        assertEquals(
+            com.openardf.serialslinger.protocol.SignalSlingerFirmwareSupport.resolve("1.2.3").fullLoadCommands,
+            result.commandsSent,
+        )
+        assertEquals(result.commandsSent, transport.sentCommands)
         assertEquals("W1FOX", result.state.snapshot?.settings?.stationId)
         assertEquals(FoxRole.CLASSIC_1, result.state.snapshot?.settings?.foxRole)
         assertEquals("TEST", result.state.snapshot?.settings?.patternText)
@@ -66,6 +70,8 @@ class DeviceSessionControllerTest {
         assertEquals(20.9, result.state.snapshot?.status?.temperatureC)
         assertEquals(18.4, result.state.snapshot?.status?.minimumTemperatureC)
         assertEquals(24.2, result.state.snapshot?.status?.maximumTemperatureC)
+        assertEquals(27.1, result.state.snapshot?.status?.maximumEverTemperatureC)
+        assertEquals(50.0, result.state.snapshot?.status?.thermalShutdownThresholdC)
         assertEquals(4.1, result.state.snapshot?.status?.internalBatteryVolts)
         assertEquals(ConnectionState.CONNECTED, result.state.connectionState)
         assertEquals("W1FOX", result.state.editableSettings?.stationId?.editedValue)
@@ -422,7 +428,7 @@ class DeviceSessionControllerTest {
 
         assertEquals(listOf("CLK F 260410172000"), result.commandsSent)
         assertEquals(
-            listOf("CLK", "EVT") + SignalSlingerReadPlan.defaultLoadCommands,
+            listOf("CLK", "EVT") + com.openardf.serialslinger.protocol.SignalSlingerFirmwareSupport.resolve("1.2.3").fullLoadCommands,
             result.readbackCommandsSent,
         )
         assertTrue("VER" in transport.sentCommands)

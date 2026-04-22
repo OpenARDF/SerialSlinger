@@ -80,7 +80,7 @@ object SignalSlingerFirmwareSupport {
         "FRE B",
         "BAT",
     )
-    private val modernLoadCommands = listOf(
+    private val modern120LoadCommands = listOf(
         "ID",
         "EVT",
         "FOX",
@@ -95,18 +95,20 @@ object SignalSlingerFirmwareSupport {
         "FRE B",
         "BAT",
         "TMP",
-        // NOTE: This no-arg FUN read is intentionally part of the modern load plan because
-        // SignalSlinger firmware 1.2 and earlier returns Cur/Max/Min temperature values in the
-        // FUN settings report, while TMP only returns the current Temp line. This area is tightly
-        // coupled to firmware behavior and is more likely than most other commands to change or be
-        // deprecated in future firmware, so re-check the serial report contract before editing it.
+        // NOTE: SignalSlinger firmware 1.2.0 and earlier needs the no-arg FUN read to collect
+        // Cur/Max/Min temperature values. Firmware 1.2.1 and later moved the full temperature
+        // report to TMP with no arguments, so FUN should no longer be used there. This area is
+        // tightly coupled to firmware behavior and more likely than most other commands to change
+        // or be deprecated, so re-check the serial report contract before editing it.
         "FUN",
     )
+    private val modern121LoadCommands = modern120LoadCommands - "FUN"
 
     private val legacyProfile = SignalSlingerFirmwareProfile(
         id = "legacy-pre-1.2",
         capabilities = DeviceCapabilities(
             supportsTemperatureReadback = false,
+            supportsExtendedTemperatureReadback = false,
             supportsExternalBatteryControl = true,
             supportsPatternEditing = true,
             supportsScheduling = false,
@@ -117,31 +119,48 @@ object SignalSlingerFirmwareSupport {
         verificationReadbackCommands = sharedVerificationReadbackCommands,
     )
 
-    private val modernProfile = SignalSlingerFirmwareProfile(
-        id = "modern-1.2+",
+    private val modern120Profile = SignalSlingerFirmwareProfile(
+        id = "modern-1.2.0",
         minimumVersion = SignalSlingerFirmwareVersion(1, 2),
         capabilities = DeviceCapabilities(
             supportsTemperatureReadback = true,
+            supportsExtendedTemperatureReadback = false,
             supportsExternalBatteryControl = true,
             supportsPatternEditing = true,
             supportsScheduling = true,
             supportsFrequencyProfiles = true,
         ),
         bootstrapLoadCommands = versionBootstrapCommands,
-        loadCommandsAfterVersion = modernLoadCommands,
+        loadCommandsAfterVersion = modern120LoadCommands,
+        verificationReadbackCommands = sharedVerificationReadbackCommands,
+    )
+
+    private val modern121Profile = SignalSlingerFirmwareProfile(
+        id = "modern-1.2.1+",
+        minimumVersion = SignalSlingerFirmwareVersion(1, 2, 1),
+        capabilities = DeviceCapabilities(
+            supportsTemperatureReadback = true,
+            supportsExtendedTemperatureReadback = true,
+            supportsExternalBatteryControl = true,
+            supportsPatternEditing = true,
+            supportsScheduling = true,
+            supportsFrequencyProfiles = true,
+        ),
+        bootstrapLoadCommands = versionBootstrapCommands,
+        loadCommandsAfterVersion = modern121LoadCommands,
         verificationReadbackCommands = sharedVerificationReadbackCommands,
     )
 
     fun resolve(softwareVersion: String?): SignalSlingerFirmwareProfile {
         val parsedVersion = SignalSlingerFirmwareVersion.parse(softwareVersion)
         if (parsedVersion == null) {
-            return modernProfile
+            return modern120Profile
         }
 
-        return if (parsedVersion >= SignalSlingerFirmwareVersion(1, 2)) {
-            modernProfile
-        } else {
-            legacyProfile
+        return when {
+            parsedVersion >= SignalSlingerFirmwareVersion(1, 2, 1) -> modern121Profile
+            parsedVersion >= SignalSlingerFirmwareVersion(1, 2) -> modern120Profile
+            else -> legacyProfile
         }
     }
 

@@ -303,6 +303,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val currentTemperatureField = JTextField()
     private val minimumTemperatureField = JTextField()
     private val maximumTemperatureField = JTextField()
+    private val maximumEverTemperatureField = JTextField()
+    private val thermalShutdownThresholdField = JTextField()
     private val syncTimeButton = JButton("Sync")
     private val setTimeButton = JButton("Set Time")
     private val currentTimeRowLabel = JLabel("Device Time")
@@ -315,6 +317,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val currentTemperatureRowLabel = JLabel("Current Temperature")
     private val minimumTemperatureRowLabel = JLabel("Minimum Temperature")
     private val maximumTemperatureRowLabel = JLabel("Maximum Temperature")
+    private val maximumEverTemperatureRowLabel = JLabel("Maximum Ever Temperature")
+    private val thermalShutdownThresholdRowLabel = JLabel("Thermal Shutdown Threshold")
     private val transmissionsRowLabel = JLabel("External device being controlled")
     private val defaultRowLabelForeground = currentTimeRowLabel.foreground
     private val currentTimeRowPanel by lazy { buildCurrentTimeRow() }
@@ -441,6 +445,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentTemperatureField.isEditable = false
         minimumTemperatureField.isEditable = false
         maximumTemperatureField.isEditable = false
+        maximumEverTemperatureField.isEditable = false
+        thermalShutdownThresholdField.isEditable = false
         transmissionsField.isEditable = false
         configureInformationalField(currentTimeField)
         configureInformationalField(systemTimeField)
@@ -455,6 +461,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureInformationalField(currentTemperatureField)
         configureInformationalField(minimumTemperatureField)
         configureInformationalField(maximumTemperatureField)
+        configureInformationalField(maximumEverTemperatureField)
+        configureInformationalField(thermalShutdownThresholdField)
         configureInformationalField(transmissionsField)
         configureNullableDateTimeSpinner(startTimeSpinner, startTimeStatusLabel)
         configureNullableDateTimeSpinner(finishTimeSpinner, finishTimeStatusLabel)
@@ -997,9 +1005,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 var row = 0
                 row = addRow(section, row, "Internal Battery", internalBatteryField)
                 row = addRow(section, row, "External Battery", externalBatteryField)
+                row = addRow(section, row, maximumEverTemperatureRowLabel, maximumEverTemperatureField)
                 row = addRow(section, row, maximumTemperatureRowLabel, maximumTemperatureField)
                 row = addRow(section, row, currentTemperatureRowLabel, currentTemperatureField)
                 row = addRow(section, row, minimumTemperatureRowLabel, minimumTemperatureField)
+                row = addRow(section, row, thermalShutdownThresholdRowLabel, thermalShutdownThresholdField)
                 addRow(section, row, "Version", versionInfoField)
             })
             add(Box.createVerticalGlue())
@@ -2462,7 +2472,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
         }
         updateCloneTemplateLabel(
-            "Clone template locked. Display shows attached device state.",
+            cloneTemplateCloningInProgressMessage(),
             Color(0x9A, 0x67, 0x11),
         )
 
@@ -2541,7 +2551,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
                 if (cloneSucceeded) {
                     updateCloneTemplateLabel(
-                        "Clone template locked. Display shows attached device state.",
+                        cloneTemplateAttachedDeviceStateMessage(),
                         Color(0x9A, 0x67, 0x11),
                     )
                     showConnectionIndicator(
@@ -2555,7 +2565,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     setStatus("Clone succeeded.")
                 } else {
                     updateCloneTemplateLabel(
-                        "Clone template locked. Display shows attached device state.",
+                        cloneTemplateAttachedDeviceStateMessage(),
                         Color(0x9A, 0x67, 0x11),
                     )
                     showConnectionIndicator(
@@ -4382,6 +4392,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val timedSettings = snapshot.settings
         val frequencies = FrequencySupport.describeFrequencies(settings)
         val schedulingSupported = snapshot.capabilities.supportsScheduling
+        val temperatureReadbackSupported = snapshot.capabilities.supportsTemperatureReadback
+        val extendedTemperatureReadbackSupported = snapshot.capabilities.supportsExtendedTemperatureReadback
         updatingForm = true
         try {
             stationIdField.text = timedSettings.stationId
@@ -4423,20 +4435,43 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             setInformationalFieldText(internalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.internalBatteryVolts), unreadPlaceholder = false)
             setInformationalFieldText(externalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.externalBatteryVolts), unreadPlaceholder = false)
             updateTemperatureRow(
+                rowLabel = maximumEverTemperatureRowLabel,
+                field = maximumEverTemperatureField,
+                temperatureC = snapshot.status.maximumEverTemperatureC,
+                supported = extendedTemperatureReadbackSupported,
+            )
+            updateTemperatureRow(
                 rowLabel = maximumTemperatureRowLabel,
                 field = maximumTemperatureField,
                 temperatureC = snapshot.status.maximumTemperatureC,
+                supported = temperatureReadbackSupported,
             )
             updateTemperatureRow(
                 rowLabel = currentTemperatureRowLabel,
                 field = currentTemperatureField,
                 temperatureC = snapshot.status.temperatureC,
+                supported = temperatureReadbackSupported,
             )
             updateTemperatureRow(
                 rowLabel = minimumTemperatureRowLabel,
                 field = minimumTemperatureField,
                 temperatureC = snapshot.status.minimumTemperatureC,
+                supported = temperatureReadbackSupported,
             )
+            setInformationalFieldText(
+                thermalShutdownThresholdField,
+                if (extendedTemperatureReadbackSupported) {
+                    DesktopInputSupport.formatTemperatureOrWaiting(
+                        snapshot.status.thermalShutdownThresholdC,
+                        displayPreferences.temperatureDisplayUnit,
+                    )
+                } else {
+                    "Not supported"
+                },
+                unreadPlaceholder = false,
+            )
+            thermalShutdownThresholdRowLabel.foreground = defaultRowLabelForeground
+            thermalShutdownThresholdField.foreground = defaultInformationalFieldForeground
             updateThermalHeadlineWarning(snapshot.status.temperatureC)
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
             if (recalculateClockOffset) {
@@ -4524,6 +4559,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     ) {
         cloneTemplateLabel.text = message
         cloneTemplateLabel.foreground = foreground
+    }
+
+    private fun cloneTemplateAttachedDeviceStateMessage(): String {
+        return "Clone template locked. Display shows attached device state."
+    }
+
+    private fun cloneTemplateCloningInProgressMessage(): String {
+        return "Clone template locked. Cloning in progress. Display will update after attached device refresh completes."
     }
 
     private fun currentConnectedTimedSettings(): DeviceSettings {
@@ -5377,16 +5420,24 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         rowLabel: JLabel,
         field: JTextField,
         temperatureC: Double?,
+        supported: Boolean,
     ) {
         setInformationalFieldText(
             field,
-            DesktopInputSupport.formatTemperatureOrWaiting(temperatureC, displayPreferences.temperatureDisplayUnit),
+            if (supported) {
+                DesktopInputSupport.formatTemperatureOrWaiting(temperatureC, displayPreferences.temperatureDisplayUnit)
+            } else {
+                "Not supported"
+            },
             unreadPlaceholder = false,
         )
-        val alertColor = when (TemperatureAlertSupport.alertLevel(temperatureC)) {
-            TemperatureAlertLevel.NORMAL -> null
-            TemperatureAlertLevel.WARNING -> warningForeground
-            TemperatureAlertLevel.DANGER -> alertForeground
+        val alertColor = when {
+            !supported -> null
+            else -> when (TemperatureAlertSupport.alertLevel(temperatureC)) {
+                TemperatureAlertLevel.NORMAL -> null
+                TemperatureAlertLevel.WARNING -> warningForeground
+                TemperatureAlertLevel.DANGER -> alertForeground
+            }
         }
         rowLabel.foreground = alertColor ?: defaultRowLabelForeground
         field.foreground = alertColor ?: defaultInformationalFieldForeground
@@ -5823,7 +5874,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 )
             } else {
                 updateCloneTemplateLabel(
-                    "Clone template locked. Display shows attached device state.",
+                    cloneTemplateAttachedDeviceStateMessage(),
                     Color(0x9A, 0x67, 0x11),
                 )
             }
@@ -6473,9 +6524,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setInformationalFieldText(versionInfoField, "Not read")
         setInformationalFieldText(internalBatteryField, "Not read")
         setInformationalFieldText(externalBatteryField, "Not read")
+        clearTemperatureRow(maximumEverTemperatureRowLabel, maximumEverTemperatureField)
         clearTemperatureRow(maximumTemperatureRowLabel, maximumTemperatureField)
         clearTemperatureRow(currentTemperatureRowLabel, currentTemperatureField)
         clearTemperatureRow(minimumTemperatureRowLabel, minimumTemperatureField)
+        thermalShutdownThresholdRowLabel.foreground = defaultRowLabelForeground
+        setInformationalFieldText(thermalShutdownThresholdField, "Not read")
         lastsRowLabel.foreground = defaultRowLabelForeground
         updateDisplayedClockFields()
         updateWritableControlAvailability(backgroundWorkInProgress)

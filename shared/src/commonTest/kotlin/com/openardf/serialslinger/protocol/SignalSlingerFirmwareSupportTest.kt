@@ -10,8 +10,10 @@ class SignalSlingerFirmwareSupportTest {
     fun resolvesModernProfileForCurrentFirmwareWithSuffix() {
         val profile = SignalSlingerFirmwareSupport.resolve("1.2s")
 
-        assertEquals("modern-1.2+", profile.id)
+        assertEquals("modern-1.2.0", profile.id)
         assertTrue(profile.capabilities.supportsScheduling)
+        assertTrue(profile.capabilities.supportsTemperatureReadback)
+        assertFalse(profile.capabilities.supportsExtendedTemperatureReadback)
         assertTrue("TMP" in profile.fullLoadCommands)
         assertTrue("FUN" in profile.fullLoadCommands)
         assertTrue("FOX" in profile.fullLoadCommands)
@@ -35,7 +37,18 @@ class SignalSlingerFirmwareSupportTest {
     fun defaultsUnknownVersionToModernProfile() {
         val profile = SignalSlingerFirmwareSupport.resolve(null)
 
-        assertEquals("modern-1.2+", profile.id)
+        assertEquals("modern-1.2.0", profile.id)
+    }
+
+    @Test
+    fun resolvesTmpOnlyTemperatureProfileForFirmware121AndLater() {
+        val profile = SignalSlingerFirmwareSupport.resolve("1.2.1")
+
+        assertEquals("modern-1.2.1+", profile.id)
+        assertTrue(profile.capabilities.supportsTemperatureReadback)
+        assertTrue(profile.capabilities.supportsExtendedTemperatureReadback)
+        assertTrue("TMP" in profile.fullLoadCommands)
+        assertFalse("FUN" in profile.fullLoadCommands)
     }
 
     @Test

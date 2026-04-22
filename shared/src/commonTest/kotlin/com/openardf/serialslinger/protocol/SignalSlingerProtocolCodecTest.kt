@@ -83,6 +83,21 @@ class SignalSlingerProtocolCodecTest {
     }
 
     @Test
+    fun parsesModernTmpTemperatureReportIntoDeviceStatus() {
+        val maximumEverUpdate = SignalSlingerProtocolCodec.parseReportLine("* Max Ever: 48.0C")
+        val maximumUpdate = SignalSlingerProtocolCodec.parseReportLine("* Max Temp: 42.5C")
+        val currentUpdate = SignalSlingerProtocolCodec.parseReportLine("* Temp: 40.0C")
+        val minimumUpdate = SignalSlingerProtocolCodec.parseReportLine("* Min Temp: 35.5C")
+        val thresholdUpdate = SignalSlingerProtocolCodec.parseReportLine("* Thermal shutdown threshold: 50C")
+
+        assertEquals(48.0, maximumEverUpdate?.deviceStatusPatch?.maximumEverTemperatureC)
+        assertEquals(42.5, maximumUpdate?.deviceStatusPatch?.maximumTemperatureC)
+        assertEquals(40.0, currentUpdate?.deviceStatusPatch?.temperatureC)
+        assertEquals(35.5, minimumUpdate?.deviceStatusPatch?.minimumTemperatureC)
+        assertEquals(50.0, thresholdUpdate?.deviceStatusPatch?.thermalShutdownThresholdC)
+    }
+
+    @Test
     fun parsesFoxReplyIntoFoxRole() {
         val update = SignalSlingerProtocolCodec.parseReportLine("""* Fox:Classic Fox 1 "MOE"""")
 

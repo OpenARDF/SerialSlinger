@@ -1378,6 +1378,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         }
 
+        val temperatureReadbackSupported = snapshot?.capabilities?.supportsTemperatureReadback == true
+        val extendedTemperatureReadbackSupported = snapshot?.capabilities?.supportsExtendedTemperatureReadback == true
         deviceDataCard.addView(sectionTitle("Device Data"))
         deviceDataCard.addView(
             compactLabeledRow(
@@ -1393,7 +1395,20 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 labelWidthDp = 128,
             ),
         )
-        val maximumTemperatureField = readOnlyField(formatTemperatureForUnit(loadedStatus?.maximumTemperatureC))
+        val maximumEverTemperatureField = readOnlyField(formatTemperatureForDeviceData(loadedStatus?.maximumEverTemperatureC, extendedTemperatureReadbackSupported))
+        var maximumEverTemperatureLabelView: TextView? = null
+        deviceDataCard.addView(
+            compactLabeledRow(
+                "Maximum Ever Temperature",
+                maximumEverTemperatureField,
+                labelWidthDp = 132,
+                captureLabelView = { maximumEverTemperatureLabelView = it },
+            ),
+        )
+        if (extendedTemperatureReadbackSupported) {
+            applyTemperatureRowAppearance(maximumEverTemperatureLabelView, maximumEverTemperatureField, loadedStatus?.maximumEverTemperatureC)
+        }
+        val maximumTemperatureField = readOnlyField(formatTemperatureForDeviceData(loadedStatus?.maximumTemperatureC, temperatureReadbackSupported))
         var maximumTemperatureLabelView: TextView? = null
         deviceDataCard.addView(
             compactLabeledRow(
@@ -1403,8 +1418,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 captureLabelView = { maximumTemperatureLabelView = it },
             ),
         )
-        applyTemperatureRowAppearance(maximumTemperatureLabelView, maximumTemperatureField, loadedStatus?.maximumTemperatureC)
-        val currentTemperatureField = readOnlyField(formatTemperatureForUnit(loadedStatus?.temperatureC))
+        if (temperatureReadbackSupported) {
+            applyTemperatureRowAppearance(maximumTemperatureLabelView, maximumTemperatureField, loadedStatus?.maximumTemperatureC)
+        }
+        val currentTemperatureField = readOnlyField(formatTemperatureForDeviceData(loadedStatus?.temperatureC, temperatureReadbackSupported))
         var currentTemperatureLabelView: TextView? = null
         val currentTemperatureRow =
             compactLabeledRow(
@@ -1414,8 +1431,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 captureLabelView = { currentTemperatureLabelView = it },
             )
         deviceDataCard.addView(currentTemperatureRow)
-        applyTemperatureRowAppearance(currentTemperatureLabelView, currentTemperatureField, loadedStatus?.temperatureC)
-        val minimumTemperatureField = readOnlyField(formatTemperatureForUnit(loadedStatus?.minimumTemperatureC))
+        if (temperatureReadbackSupported) {
+            applyTemperatureRowAppearance(currentTemperatureLabelView, currentTemperatureField, loadedStatus?.temperatureC)
+        }
+        val minimumTemperatureField = readOnlyField(formatTemperatureForDeviceData(loadedStatus?.minimumTemperatureC, temperatureReadbackSupported))
         var minimumTemperatureLabelView: TextView? = null
         deviceDataCard.addView(
             compactLabeledRow(
@@ -1425,7 +1444,16 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 captureLabelView = { minimumTemperatureLabelView = it },
             ),
         )
-        applyTemperatureRowAppearance(minimumTemperatureLabelView, minimumTemperatureField, loadedStatus?.minimumTemperatureC)
+        if (temperatureReadbackSupported) {
+            applyTemperatureRowAppearance(minimumTemperatureLabelView, minimumTemperatureField, loadedStatus?.minimumTemperatureC)
+        }
+        deviceDataCard.addView(
+            compactLabeledRow(
+                "Thermal Shutdown Threshold",
+                readOnlyField(formatTemperatureForDeviceData(loadedStatus?.thermalShutdownThresholdC, extendedTemperatureReadbackSupported)),
+                labelWidthDp = 132,
+            ),
+        )
         installTemperatureDisplayUnitToggle(currentTemperatureField, currentTemperatureLabelView, currentTemperatureRow)
         deviceDataCard.addView(
             compactLabeledRow(
@@ -1721,9 +1749,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("Serial port name: ${info.serialPortName.orUnknown()}")
             appendLine()
             appendLine("Status")
+            appendLine("Maximum ever temperature: ${formatTemperatureForUnit(status.maximumEverTemperatureC)}")
             appendLine("Maximum temperature: ${formatTemperatureForUnit(status.maximumTemperatureC)}")
             appendLine("Current temperature: ${formatTemperatureForUnit(status.temperatureC)}")
             appendLine("Minimum temperature: ${formatTemperatureForUnit(status.minimumTemperatureC)}")
+            appendLine("Thermal shutdown threshold: ${formatTemperatureForUnit(status.thermalShutdownThresholdC)}")
             appendLine("Internal battery V: ${status.internalBatteryVolts?.toString().orUnknown()}")
             appendLine("External battery V: ${status.externalBatteryVolts?.toString().orUnknown()}")
             appendLine("Event enabled: ${status.eventEnabled?.toString().orUnknown()}")
@@ -2033,9 +2063,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         appendLine("Derived event status: $derivedEventStatus")
                         appendLine("Starts in: ${status.eventStartsInSummary.orUnknown()}")
                         appendLine("Duration: ${JvmTimeSupport.describeEventDuration(settings.startTimeCompact, settings.finishTimeCompact, status.eventDurationSummary)}")
+                        appendLine("Maximum ever temperature: ${formatTemperatureForUnit(status.maximumEverTemperatureC)}")
                         appendLine("Maximum temperature: ${formatTemperatureForUnit(status.maximumTemperatureC)}")
                         appendLine("Current temperature: ${formatTemperatureForUnit(status.temperatureC)}")
                         appendLine("Minimum temperature: ${formatTemperatureForUnit(status.minimumTemperatureC)}")
+                        appendLine("Thermal shutdown threshold: ${formatTemperatureForUnit(status.thermalShutdownThresholdC)}")
                         appendLine("Internal battery: ${status.internalBatteryVolts?.let { "$it V" }.orUnknown()}")
                         appendLine("External battery: ${status.externalBatteryVolts?.let { "$it V" }.orUnknown()}")
                         append("Transmissions enabled: ${settings.transmissionsEnabled}")
@@ -3372,6 +3404,17 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         return when (temperatureDisplayUnit) {
             AndroidTemperatureDisplayUnit.CELSIUS -> String.format("%.1f C", value)
             AndroidTemperatureDisplayUnit.FAHRENHEIT -> String.format("%.1f F", (value * 9.0 / 5.0) + 32.0)
+        }
+    }
+
+    private fun formatTemperatureForDeviceData(
+        temperatureC: Double?,
+        supported: Boolean,
+    ): String {
+        return if (supported) {
+            formatTemperatureForUnit(temperatureC)
+        } else {
+            "Not supported"
         }
     }
 

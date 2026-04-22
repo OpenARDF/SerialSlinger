@@ -60,6 +60,7 @@ enum class ExternalBatteryControlMode(
 
 data class DeviceCapabilities(
     val supportsTemperatureReadback: Boolean = false,
+    val supportsExtendedTemperatureReadback: Boolean = false,
     val supportsExternalBatteryControl: Boolean = false,
     val supportsPatternEditing: Boolean = false,
     val supportsScheduling: Boolean = false,
@@ -78,6 +79,8 @@ data class DeviceStatus(
     val temperatureC: Double? = null,
     val minimumTemperatureC: Double? = null,
     val maximumTemperatureC: Double? = null,
+    val maximumEverTemperatureC: Double? = null,
+    val thermalShutdownThresholdC: Double? = null,
     val internalBatteryVolts: Double? = null,
     val externalBatteryVolts: Double? = null,
     val daysRemaining: Int? = null,
