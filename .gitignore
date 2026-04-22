@@ -1,6 +1,8 @@
 .idea/
 .gradle/
 .kotlin/
+.tmp/
+.tools/
 node_modules/
 build/
 **/build/
@@ -9,3 +11,12 @@ jdeploy/
 .DS_Store
 *.iml
 local.properties
+gradle/gradle-daemon-jvm.properties
+.externalNativeBuild/
+.cxx/
+captures/
+*.apk
+*.aab
+*.ap_
+*.jks
+*.keystore
