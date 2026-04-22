@@ -11,6 +11,8 @@ jdeploy-bundle/
 jdeploy/
 .DS_Store
 *.iml
+*.ipr
+*.iws
 local.properties
 gradle/gradle-daemon-jvm.properties
 .externalNativeBuild/
