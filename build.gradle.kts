@@ -7,18 +7,25 @@ plugins {
 val serialSlingerVersion = "1.0.98"
 // Bump this suffix for every new testable change set so desktop and Android builds expose
 // an unmistakable version string during iterative testing. Clear it before a full release.
-val serialSlingerVersionSuffix = ""
+val serialSlingerVersionSuffix = "a"
 val serialSlingerDisplayVersion = serialSlingerVersion + serialSlingerVersionSuffix
+val serialSlingerPackageVersion =
+    if (serialSlingerVersionSuffix.isBlank()) {
+        serialSlingerVersion
+    } else {
+        "$serialSlingerVersion-$serialSlingerVersionSuffix"
+    }
 val serialSlingerVendor = "OpenARDF"
 val serialSlingerDescription = "Desktop configuration tool for SignalSlinger devices."
 val serialSlingerProjectUrl = "https://github.com/OpenARDF/SerialSlinger"
 val serialSlingerLicenseLabel = "MIT License"
 val serialSlingerBuildDateUtc = java.time.Instant.now().toString()
 
-version = serialSlingerVersion
+version = serialSlingerPackageVersion
 
 extra["serialSlingerVersion"] = serialSlingerVersion
 extra["serialSlingerDisplayVersion"] = serialSlingerDisplayVersion
+extra["serialSlingerPackageVersion"] = serialSlingerPackageVersion
 extra["serialSlingerVendor"] = serialSlingerVendor
 extra["serialSlingerDescription"] = serialSlingerDescription
 extra["serialSlingerProjectUrl"] = serialSlingerProjectUrl

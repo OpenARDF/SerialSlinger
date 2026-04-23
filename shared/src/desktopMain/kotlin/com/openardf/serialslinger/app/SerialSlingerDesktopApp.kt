@@ -100,6 +100,7 @@ import javax.swing.JEditorPane
 import javax.swing.JRadioButtonMenuItem
 import javax.swing.JProgressBar
 import javax.swing.SpinnerNumberModel
+import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.JTextPane
 import javax.swing.UIManager
@@ -5670,8 +5671,47 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "Connected to SignalSlinger on ${currentConnectedPortPath.orEmpty()}",
                 )
                 setStatus("Sent raw command.")
+                showRawCommandReplyDialog(command, responseLines)
             }
         }
+    }
+
+    private fun showRawCommandReplyDialog(
+        command: String,
+        responseLines: List<String>,
+    ) {
+        val replyText = if (responseLines.isEmpty()) {
+            "No reply received."
+        } else {
+            responseLines.joinToString(separator = "\n")
+        }
+        val textArea =
+            JTextArea(
+                buildString {
+                    appendLine("Command: $command")
+                    appendLine()
+                    append(replyText)
+                },
+            ).apply {
+                isEditable = false
+                lineWrap = false
+                wrapStyleWord = false
+                rows = 12
+                columns = 72
+                caretPosition = 0
+                font = java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, font.size)
+                border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
+            }
+        val scrollPane =
+            JScrollPane(textArea).apply {
+                preferredSize = Dimension(760, 320)
+            }
+        JOptionPane.showMessageDialog(
+            this,
+            scrollPane,
+            "Reply From SignalSlinger",
+            JOptionPane.PLAIN_MESSAGE,
+        )
     }
 
     private fun showConnectionIndicator(state: ConnectionIndicatorState, message: String) {

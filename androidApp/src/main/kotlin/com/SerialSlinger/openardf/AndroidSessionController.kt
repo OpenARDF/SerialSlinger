@@ -111,6 +111,12 @@ private data class RelativeScheduleSubmitResult(
     val traceEntries: List<SerialTraceEntry>,
 )
 
+private data class RawCommandResult(
+    val state: DeviceSessionState,
+    val responseLines: List<String>,
+    val traceEntries: List<SerialTraceEntry>,
+)
+
 data class CloneSubmitResult(
     val state: DeviceSessionState,
     val writeCommandCount: Int,
@@ -3881,6 +3887,144 @@ object AndroidSessionController {
             onComplete?.let { callback ->
                 mainHandler.post {
                     callback(result.fold(onSuccess = { Result.success(it.reloadResult) }, onFailure = { Result.failure(it) }))
+                }
+            }
+        }
+    }
+
+    fun runRawCommand(
+        context: Context,
+        commandInput: String,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<List<String>>) -> Unit)? = null,
+    ) {
+        val command = commandInput.trim()
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+        if (command.isBlank()) {
+            val error = IllegalArgumentException("Enter a command to send.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "Raw command failed."
+                statusIsError = true
+            }
+            emitCommandLog("raw-command", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(Result.failure(error)) }
+            }
+            return
+        }
+        if (sessionState == null) {
+            val error = IllegalStateException("Load a SignalSlinger snapshot before sending a command.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "Raw command failed."
+                statusIsError = true
+            }
+            emitCommandLog("raw-command", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(Result.failure(error)) }
+            }
+            return
+        }
+
+        synchronized(this) {
+            latestSubmitSummary = "Sending raw command..."
+            statusText = "Sending raw command..."
+            statusIsError = false
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-raw-command") {
+            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
+            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
+            val result =
+                if (usbDevice == null) {
+                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
+                } else {
+                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
+                    try {
+                        transport.connect()
+                        val sentAtMs = System.currentTimeMillis()
+                        transport.sendCommands(listOf(command))
+                        val responseLines = transport.readAvailableLines()
+                        val receivedAtMs = System.currentTimeMillis()
+                        val deviceError = responseLines.firstOrNull { it.contains("* Err:") }
+                        if (deviceError != null) {
+                            Result.failure(IllegalStateException(deviceError.removePrefix("* ").trim()))
+                        } else {
+                            val nextState =
+                                if (responseLines.isNotEmpty()) {
+                                    DeviceSessionWorkflow.ingestReportLines(sessionState, responseLines)
+                                } else {
+                                    sessionState
+                                }
+                            Result.success(
+                                RawCommandResult(
+                                    state = nextState,
+                                    responseLines = responseLines,
+                                    traceEntries =
+                                        buildList {
+                                            add(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command))
+                                            addAll(responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) })
+                                        },
+                                ),
+                            )
+                        }
+                    } catch (error: Throwable) {
+                        Result.failure(error)
+                    } finally {
+                        transport.disconnect()
+                    }
+                }
+
+            synchronized(this) {
+                if (result.isSuccess) {
+                    val commandResult = result.getOrThrow()
+                    val normalizedState =
+                        commandResult.state.copy(
+                            editableSettings =
+                                commandResult.state.snapshot?.let { snapshot ->
+                                    EditableDeviceSettings.fromDeviceSettings(snapshot.settings)
+                                } ?: commandResult.state.editableSettings,
+                        )
+                    latestSessionViewState = AndroidSessionViewState(state = normalizedState, traceEntries = commandResult.traceEntries)
+                    latestLoadedDeviceName = usbDevice?.deviceName
+                    applySnapshotDrafts(normalizedState.snapshot, refreshClockDisplayAnchor = false)
+                    latestSubmitSummary =
+                        buildString {
+                            appendLine("Sent raw command.")
+                            appendLine("TX $command")
+                            commandResult.responseLines.forEach { line ->
+                                appendLine("RX $line")
+                            }
+                        }.trim()
+                    latestProbeSummary = "Latest load remains available above. Raw command completed."
+                    statusText = "Sent raw command."
+                    statusIsError = false
+                } else {
+                    latestSubmitSummary = buildString {
+                        appendLine("Submit failed.")
+                        append(result.exceptionOrNull()?.message ?: "Unknown error")
+                    }.trim()
+                    statusText = "Raw command failed."
+                    statusIsError = true
+                }
+            }
+
+            emitCommandLog(
+                command = "raw-command",
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = result.getOrNull()?.traceEntries.orEmpty(),
+            )
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post {
+                    callback(result.fold(onSuccess = { Result.success(it.responseLines) }, onFailure = { Result.failure(it) }))
                 }
             }
         }

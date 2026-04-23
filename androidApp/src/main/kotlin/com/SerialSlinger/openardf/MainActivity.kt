@@ -137,7 +137,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var rawSerialVisible: Boolean = true
     private var systemTimeVisible: Boolean = false
     private var deviceDataVisible: Boolean = true
-    private var loggingToolsVisible: Boolean = true
     private val autoDetectHandler = Handler(Looper.getMainLooper())
     private val clockDisplayHandler = Handler(Looper.getMainLooper())
     private var autoDetectGeneration: Int = 0
@@ -257,7 +256,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         rawSerialVisible = uiPreferences.getBoolean(PREF_RAW_SERIAL_VISIBLE, true)
         systemTimeVisible = uiPreferences.getBoolean(PREF_SYSTEM_TIME_VISIBLE, false)
         deviceDataVisible = uiPreferences.getBoolean(PREF_DEVICE_DATA_VISIBLE, true)
-        loggingToolsVisible = uiPreferences.getBoolean(PREF_LOGGING_TOOLS_VISIBLE, true)
         frequencyDisplayUnit =
             AndroidFrequencyDisplayUnit.valueOf(
                 uiPreferences.getString(PREF_FREQUENCY_DISPLAY_UNIT, AndroidFrequencyDisplayUnit.MHZ.name)
@@ -1915,9 +1913,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     addView(weightedButton("Settings") { showSettingsDialog() })
-                    if (loggingToolsVisible) {
-                        addView(weightedButton("Tools") { showToolsDialog(uiState) })
-                    }
+                    addView(weightedButton("Tools") { showToolsDialog(uiState) })
                 },
             )
         }
@@ -2098,9 +2094,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     addView(weightedButton("Settings") { showSettingsDialog() })
-                    if (loggingToolsVisible) {
-                        addView(weightedButton("Tools") { showToolsDialog(uiState) })
-                    }
+                    addView(weightedButton("Tools") { showToolsDialog(uiState) })
                 },
             )
         }
@@ -2188,7 +2182,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 "Default Event Length (${formatDefaultEventLength(defaultEventLengthMinutes)})",
                 "${if (systemTimeVisible) "Hide" else "Show"} System Time",
                 "${if (deviceDataVisible) "Hide" else "Show"} Device Data",
-                "${if (loggingToolsVisible) "Hide" else "Show"} Logging Tools",
                 "About (Ver $appVersionLabel)",
             )
         AlertDialog.Builder(this)
@@ -2202,8 +2195,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     4 -> showDefaultEventLengthDialog()
                     5 -> setSystemTimeVisible(!systemTimeVisible)
                     6 -> setDeviceDataVisible(!deviceDataVisible)
-                    7 -> setLoggingToolsVisible(!loggingToolsVisible)
-                    8 -> showAboutDialog()
+                    7 -> showAboutDialog()
                 }
                 dialog.dismiss()
             }
@@ -2716,20 +2708,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         clockDisplayHandler.post { animateHeaderStatusFeedback() }
     }
 
-    private fun setLoggingToolsVisible(isVisible: Boolean) {
-        if (loggingToolsVisible == isVisible) {
-            return
-        }
-        loggingToolsVisible = isVisible
-        saveLoggingToolsVisiblePreference()
-        AndroidSessionController.recordStatus(
-            "Logging Tools are now ${if (isVisible) "shown" else "hidden"}.",
-            isError = false,
-        )
-        renderContent()
-        clockDisplayHandler.post { animateHeaderStatusFeedback() }
-    }
-
     private fun animateToggleFeedback(
         primaryView: View,
         labelView: TextView?,
@@ -2785,6 +2763,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun showToolsDialog(uiState: AndroidUiState) {
         val options =
             buildList<Pair<String, () -> Unit>> {
+                add("Send Command To SignalSlinger" to {
+                    showSendCommandDialog(uiState)
+                })
                 add("Refresh USB Devices" to {
                     AndroidSessionController.recordStatus("USB device list refreshed.", isError = false)
                     renderContent()
@@ -2818,10 +2799,98 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             .showLogged("Tools")
     }
 
+    private fun showSendCommandDialog(uiState: AndroidUiState) {
+        val commandEditor =
+            EditText(this).apply {
+                hint = "Example: CLK"
+                inputType = InputType.TYPE_CLASS_TEXT
+                setSingleLine()
+                imeOptions = EditorInfo.IME_ACTION_DONE
+                val horizontalPadding = (16 * resources.displayMetrics.density).toInt()
+                val verticalPadding = (12 * resources.displayMetrics.density).toInt()
+                setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+            }
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Send Command To SignalSlinger")
+                .setMessage(
+                    uiState.latestLoadedDeviceName?.let { deviceName ->
+                        "Send one command to the currently loaded SignalSlinger on $deviceName."
+                    } ?: "Send one command to the currently loaded SignalSlinger.",
+                )
+                .setView(commandEditor)
+                .setPositiveButton("Send", null)
+                .setNegativeButton("Cancel", null)
+                .showLogged("Send Command To SignalSlinger")
+
+        fun sendCommand() {
+            val command = commandEditor.text.toString().trim()
+            if (command.isBlank()) {
+                commandEditor.error = "Enter a command."
+                return
+            }
+            dismissKeyboard(commandEditor)
+            AndroidSessionController.runRawCommand(
+                context = applicationContext,
+                commandInput = command,
+                source = "tools",
+                onComplete = { result ->
+                    result.onSuccess { responseLines ->
+                        showCommandReplyDialog(command = command, responseLines = responseLines)
+                    }.onFailure { error ->
+                        showLargeTextDialog(
+                            title = "Command Failed",
+                            text = error.message ?: "Unknown error",
+                            monospace = true,
+                        )
+                    }
+                },
+            )
+            dialog.dismiss()
+        }
+
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            sendCommand()
+        }
+        commandEditor.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                sendCommand()
+                true
+            } else {
+                false
+            }
+        }
+        commandEditor.requestFocus()
+    }
+
+    private fun showCommandReplyDialog(
+        command: String,
+        responseLines: List<String>,
+    ) {
+        val replyText =
+            if (responseLines.isEmpty()) {
+                "No reply received."
+            } else {
+                responseLines.joinToString(separator = "\n")
+            }
+        showLargeTextDialog(
+            title = "Reply From SignalSlinger",
+            text = buildString {
+                appendLine("Command: $command")
+                appendLine()
+                append(replyText)
+            },
+            monospace = true,
+            minimumVisibleLines = 12,
+        )
+    }
+
     private fun showLargeTextDialog(
         title: String,
         text: String,
         colorizeLogCategories: Boolean = false,
+        monospace: Boolean = false,
+        minimumVisibleLines: Int? = null,
     ) {
         val padding = (16 * resources.displayMetrics.density).toInt()
         val textView =
@@ -2829,6 +2898,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 this.text = if (colorizeLogCategories) buildColorizedLogText(text) else text.ifBlank { "<empty>" }
                 textSize = 14f
                 setTextColor(Color.parseColor("#2B2B2B"))
+                if (monospace) {
+                    typeface = Typeface.MONOSPACE
+                }
+                minimumVisibleLines?.let { minLines = it }
+                setTextIsSelectable(true)
                 setPadding(padding, padding, padding, padding)
             }
         AlertDialog.Builder(this)
@@ -3778,10 +3852,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         uiPreferences.edit().putBoolean(PREF_DEVICE_DATA_VISIBLE, deviceDataVisible).apply()
     }
 
-    private fun saveLoggingToolsVisiblePreference() {
-        uiPreferences.edit().putBoolean(PREF_LOGGING_TOOLS_VISIBLE, loggingToolsVisible).apply()
-    }
-
     private fun saveScheduleTimeInputModePreference() {
         uiPreferences.edit().putString(PREF_SCHEDULE_TIME_INPUT_MODE, scheduleTimeInputMode.name).apply()
     }
@@ -4470,7 +4540,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val PREF_RAW_SERIAL_VISIBLE = "raw_serial_visible"
         private const val PREF_SYSTEM_TIME_VISIBLE = "system_time_visible"
         private const val PREF_DEVICE_DATA_VISIBLE = "device_data_visible"
-        private const val PREF_LOGGING_TOOLS_VISIBLE = "logging_tools_visible"
         private const val PREF_SCHEDULE_TIME_INPUT_MODE = "schedule_time_input_mode"
         private const val PREF_DEFAULT_EVENT_LENGTH_MINUTES = "default_event_length_minutes"
         private const val PREF_FREQUENCY_DISPLAY_UNIT = "frequency_display_unit"

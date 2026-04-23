@@ -35,6 +35,22 @@ Notes:
 - `npm run jdeploy:pack-preview` shows the exact npm and jDeploy package payload without publishing anything.
 - `npm run jdeploy:release-preflight` checks that the Gradle version, npm version, jDeploy workflow, and intended `v*` release tag are aligned before a public release tag is pushed.
 
+## Iterative Test Builds
+
+For testable in-progress Android and desktop builds, keep the release version at `x.y.z` and increment only the alphabetical suffix:
+
+- app-visible version: `1.0.98a`
+- npm/jDeploy package version: `1.0.98-a`
+
+Current workflow:
+
+1. leave `serialSlingerVersion` in [build.gradle.kts](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/build.gradle.kts) at the intended release version
+2. increment `serialSlingerVersionSuffix` for each new test build: `a`, `b`, `c`, ... then `aa`, `ab`, ...
+3. keep `package.json` and `package-lock.json` aligned to the npm-safe form with a hyphen before the suffix
+4. clear the suffix before a full release so both app-visible and package versions return to plain `x.y.z`
+
+This keeps Android and desktop builds visibly distinct during testing without accidentally rolling the release version forward.
+
 ## GitHub Release Workflow
 
 The repository includes a macOS-focused GitHub Actions workflow at [.github/workflows/jdeploy-release.yml](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/.github/workflows/jdeploy-release.yml).
