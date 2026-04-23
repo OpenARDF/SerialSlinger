@@ -35,7 +35,8 @@ object StartTimeAdjustmentPlanner {
             )
         }
 
-        return buildList {
+        val options =
+            buildList {
             if (existingDuration != defaultDuration) {
                 add(
                     StartTimeAdjustmentOption(
@@ -70,6 +71,17 @@ object StartTimeAdjustmentPlanner {
                     )
                 }
             }
+        }
+
+        return if (options.isEmpty()) {
+            listOf(
+                StartTimeAdjustmentOption(
+                    kind = StartTimeAdjustmentOptionKind.ADJUST_FOR_DEFAULT_DURATION,
+                    duration = defaultDuration,
+                ),
+            )
+        } else {
+            options
         }
     }
 }

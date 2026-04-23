@@ -16,12 +16,18 @@ data class ValidatedScheduleTimes(
     val finishTimeCompact: String?,
 )
 
+data class NormalizedStartTimeSelection(
+    val startTimeCompact: String?,
+    val wasAdjustedToMinimum: Boolean,
+)
+
 object JvmTimeSupport {
     private val displayTimestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val textualDurationComponentPattern =
         Regex("""(\d+)\s+(day|days|hour|hours|minute|minutes|second|seconds)""", RegexOption.IGNORE_CASE)
     private const val timeSyncThresholdSeconds = 1L
     private const val syncLeadSeconds = 2L
+    private const val startTimeBeforeDeviceTimeValidationMessage = "Start Time must not be earlier than Device Time."
     private val minimumValidTimestamp = LocalDateTime.of(2021, 1, 1, 0, 0, 0)
 
     fun truncateToMinute(value: LocalDateTime): LocalDateTime {
@@ -97,9 +103,33 @@ object JvmTimeSupport {
             ?: error("Set Device Time first before changing Start Time.")
         val start = requireValidTimestampForWrite("Start Time", startTimeCompact) ?: return null
         require(!start.isBefore(current)) {
-            "Start Time must not be earlier than Device Time."
+            startTimeBeforeDeviceTimeValidationMessage
         }
         return formatCompactTimestamp(start)
+    }
+
+    fun startTimeBeforeDeviceTimeMessage(): String {
+        return startTimeBeforeDeviceTimeValidationMessage
+    }
+
+    fun normalizeStartTimeForChange(
+        startTimeCompact: String?,
+        currentTimeCompact: String?,
+        stepMinutes: Int = 5,
+    ): NormalizedStartTimeSelection {
+        val current = requireValidTimestampForWrite("Device Time", currentTimeCompact)
+            ?: error("Set Device Time first before changing Start Time.")
+        val start = requireValidTimestampForWrite("Start Time", startTimeCompact)
+            ?: return NormalizedStartTimeSelection(
+                startTimeCompact = null,
+                wasAdjustedToMinimum = false,
+            )
+        val minimumStart = minimumStartTimeBoundary(formatCompactTimestamp(current), stepMinutes = stepMinutes)
+        val normalized = if (start.isBefore(minimumStart)) minimumStart else start
+        return NormalizedStartTimeSelection(
+            startTimeCompact = formatCompactTimestamp(normalized),
+            wasAdjustedToMinimum = start.isBefore(minimumStart),
+        )
     }
 
     fun resolveScheduleForFinishTimeChange(

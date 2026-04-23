@@ -3037,7 +3037,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             currentFinishTimeCompact = currentDurationFinishTime,
             proposedStartTimeCompact = normalizedStartTime,
             onCancel = {
-                restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
+                restoreAbsoluteStartTimeEditor(normalizedStartTime)
             },
         ) { choice ->
             if (choice.disablesEvent) {
@@ -3049,7 +3049,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 currentDaysToRun = connectedTimedSettings.daysToRun,
                 proposedDuration = chosenDuration,
                 onCancel = {
-                    restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
+                    restoreAbsoluteStartTimeEditor(normalizedStartTime)
                 },
             ) { preserveDaysToRun, effectiveDuration ->
                 val editRequest = ScheduleSubmitSupport.absoluteStartEdit(
@@ -3306,15 +3306,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return null
         }
 
-        val minimumStart = DesktopInputSupport.minimumStartTimeBoundary(validatedDeviceTime, stepMinutes = 5)
-        val selectedStart = DesktopInputSupport.parseCompactTimestamp(validatedSelected)
-        return if (selectedStart.isBefore(minimumStart)) {
-            JOptionPane.showMessageDialog(this, "Start Time can't be set earlier than Device Time.")
-            setDateTimeSpinnerValue(startTimeSpinner, minimumStart)
-            DesktopInputSupport.formatCompactTimestamp(minimumStart)
-        } else {
-            validatedSelected
+        val normalizedSelection = try {
+            DesktopInputSupport.normalizeStartTimeForChange(
+                startTimeCompact = validatedSelected,
+                currentTimeCompact = validatedDeviceTime,
+                stepMinutes = 5,
+            )
+        } catch (exception: Exception) {
+            JOptionPane.showMessageDialog(this, exception.message ?: "Invalid Start Time.")
+            return null
         }
+
+        val normalizedStart = normalizedSelection.startTimeCompact ?: return null
+        if (normalizedSelection.wasAdjustedToMinimum) {
+            JOptionPane.showMessageDialog(this, DesktopInputSupport.startTimeBeforeDeviceTimeMessage())
+            setDateTimeSpinnerValue(startTimeSpinner, DesktopInputSupport.parseCompactTimestamp(normalizedStart))
+        }
+        return normalizedStart
     }
 
     private fun normalizedFinishTimeSelectionForCommit(

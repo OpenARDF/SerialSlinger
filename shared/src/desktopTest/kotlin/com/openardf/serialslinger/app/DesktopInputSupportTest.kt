@@ -798,6 +798,20 @@ class DesktopInputSupportTest {
                 startTimeCompact = "260411140000",
             ),
         )
+
+        val desktopNormalizedStart =
+            DesktopInputSupport.normalizeStartTimeForChange(
+                startTimeCompact = "260411131000",
+                currentTimeCompact = "260411131242",
+            )
+        val sharedNormalizedStart =
+            JvmTimeSupport.normalizeStartTimeForChange(
+                startTimeCompact = "260411131000",
+                currentTimeCompact = "260411131242",
+            )
+
+        assertEquals(sharedNormalizedStart.startTimeCompact, desktopNormalizedStart.startTimeCompact)
+        assertEquals(sharedNormalizedStart.wasAdjustedToMinimum, desktopNormalizedStart.wasAdjustedToMinimum)
     }
 
     @Test
