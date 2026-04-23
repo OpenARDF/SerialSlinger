@@ -11,31 +11,31 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SerialSlinger">
         <receiver
-            android:name=".AndroidDebugCommandReceiver"
+            android:name="com.SerialSlinger.openardf.AndroidDebugCommandReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_GET_STATE" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_GET_SNAPSHOT" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_GET_TRACE" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_GET_LOG" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_CLEAR_LOG" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_LOAD" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_EVENT_TYPE" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_FOX_ROLE" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_STATION_ID" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_ID_SPEED" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_PATTERN_SPEED" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_CURRENT_FREQUENCY" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_FREQUENCY_BANK" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_PATTERN_TEXT" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_CURRENT_TIME" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_START_TIME" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_FINISH_TIME" />
-                <action android:name="com.openardf.serialslinger.androidapp.DEBUG_SET_DAYS_TO_RUN" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_GET_STATE" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_GET_SNAPSHOT" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_GET_TRACE" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_GET_LOG" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_CLEAR_LOG" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_LOAD" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_EVENT_TYPE" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_FOX_ROLE" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_STATION_ID" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_ID_SPEED" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_PATTERN_SPEED" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_CURRENT_FREQUENCY" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_FREQUENCY_BANK" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_PATTERN_TEXT" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_CURRENT_TIME" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_START_TIME" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_FINISH_TIME" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_SET_DAYS_TO_RUN" />
             </intent-filter>
         </receiver>
         <activity
-            android:name=".MainActivity"
+            android:name="com.SerialSlinger.openardf.MainActivity"
             android:launchMode="singleTop"
             android:screenOrientation="sensorLandscape"
             android:exported="true">

@@ -30,11 +30,11 @@ plugins {
 }
 
 android {
-    namespace = "com.openardf.serialslinger.androidapp"
+    namespace = "com.SerialSlinger.openardf"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.openardf.serialslinger.androidapp"
+        applicationId = "com.SerialSlinger.openardf"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
