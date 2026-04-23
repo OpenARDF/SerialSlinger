@@ -14,6 +14,7 @@ jdeploy/
 *.ipr
 *.iws
 local.properties
+keystore.properties
 gradle/gradle-daemon-jvm.properties
 .externalNativeBuild/
 .cxx/

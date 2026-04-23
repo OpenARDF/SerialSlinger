@@ -1,5 +1,6 @@
 package com.openardf.serialslinger.androidapp
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.DatePickerDialog
@@ -73,6 +74,7 @@ import java.time.Duration
 import java.time.LocalDateTime
 import java.util.WeakHashMap
 
+@SuppressLint("NewApi")
 class MainActivity : Activity() {
 
     private enum class AndroidFrequencyDisplayUnit {
@@ -332,6 +334,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         super.onDestroy()
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerUsbReceiver() {
         val filter =
             IntentFilter().apply {

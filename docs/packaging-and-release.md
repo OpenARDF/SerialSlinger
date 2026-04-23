@@ -93,3 +93,28 @@ Notes:
 - `desktopExe` is the simplest Windows installer target to start with.
 - `desktopMsi` may require Windows packaging tooling such as WiX depending on the local JDK and `jpackage` setup.
 - Windows installers use the same shared version line as macOS packaging, the in-app SerialSlinger version, and the jDeploy/npm package.
+
+## Android Signed Bundles
+
+SerialSlinger's Android module can load release signing inputs from either:
+
+- a local `keystore.properties` file in the repository root
+- environment variables prefixed with `SERIALSLINGER_UPLOAD_`
+
+The recommended local setup is:
+
+1. copy [keystore.properties.example](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/keystore.properties.example) to `keystore.properties`
+2. fill in:
+   - `storeFile`
+   - `storePassword`
+   - `keyAlias`
+   - `keyPassword`
+
+The real `keystore.properties` file is ignored by git and should not be committed.
+
+Useful commands:
+
+- `./gradlew printAndroidReleaseSigningStatus`
+- `./gradlew :androidApp:bundleRelease`
+
+If signing inputs are present, `bundleRelease` produces a signed release bundle. If they are absent, Gradle still builds the release bundle, but it will not be configured with the local upload key.

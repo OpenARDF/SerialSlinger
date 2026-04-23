@@ -1,5 +1,6 @@
 package com.openardf.serialslinger.androidapp
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -126,6 +127,7 @@ private data class ClockDisplayAnchor(
     val phaseErrorMillis: Long?,
 )
 
+@SuppressLint("NewApi")
 object AndroidSessionController {
     private const val logTag = "SerialSlingerDebug"
     private const val syncLatencySampleCount = 3

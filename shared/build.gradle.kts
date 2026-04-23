@@ -27,6 +27,7 @@ kotlin {
         namespace = "com.openardf.serialslinger.shared"
         compileSdk = 36
         minSdk = 24
+        withHostTest {}
 
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_17)
@@ -264,23 +265,21 @@ val desktopJdeployJar = tasks.register<Jar>("desktopJdeployJar") {
     dependsOn(stageDesktopJdeployLibs)
 
     val desktopJarTask = tasks.named<Jar>("desktopJar")
-    val runtimeClasspathEntriesProvider =
-        desktopMainCompilation.runtimeDependencyFiles.elements.map { elements ->
-            elements
-                .map { "libs/${it.asFile.name}" }
-                .sorted()
-                .joinToString(" ")
-        }
-
     archiveFileName.set(desktopJdeployJarName)
     destinationDirectory.set(desktopJdeployBundleDir)
 
     from(desktopJarTask.map { zipTree(it.archiveFile) })
 
-    manifest {
-        attributes(
+    doFirst {
+        val runtimeClasspathEntries =
+            desktopMainCompilation.runtimeDependencyFiles.files
+                .map { "libs/${it.name}" }
+                .sorted()
+                .joinToString(" ")
+
+        manifest.attributes(
             "Main-Class" to desktopMainClass,
-            "Class-Path" to runtimeClasspathEntriesProvider.get(),
+            "Class-Path" to runtimeClasspathEntries,
             "Implementation-Title" to desktopAppName,
             "Implementation-Version" to desktopPackageVersion,
         )
