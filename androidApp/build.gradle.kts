@@ -31,13 +31,13 @@ plugins {
 
 android {
     namespace = "com.SerialSlinger.openardf"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.SerialSlinger.openardf"
         minSdk = 24
-        targetSdk = 36
-        versionCode = 1
+        targetSdk = 37
+        versionCode = 2
         versionName = rootProject.extra["serialSlingerDisplayVersion"].toString()
         buildConfigField("String", "PROJECT_URL", "\"${rootProject.extra["serialSlingerProjectUrl"]}\"")
         buildConfigField("String", "LICENSE_LABEL", "\"${rootProject.extra["serialSlingerLicenseLabel"]}\"")
