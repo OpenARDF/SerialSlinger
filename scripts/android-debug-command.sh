@@ -16,6 +16,7 @@ Usage:
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] get-log
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] clear-log
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] load
+  ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] load-emulator
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-event-type <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-fox-role <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-station-id <value>
@@ -139,6 +140,9 @@ case "$COMMAND" in
     ;;
   load)
     ACTION="com.SerialSlinger.openardf.DEBUG_LOAD"
+    ;;
+  load-emulator)
+    ACTION="com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR"
     ;;
   set-event-type)
     if [ -z "$ARG1" ]; then

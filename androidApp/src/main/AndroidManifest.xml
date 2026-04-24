@@ -20,6 +20,7 @@
                 <action android:name="com.SerialSlinger.openardf.DEBUG_GET_LOG" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_CLEAR_LOG" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_LOAD" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_SET_EVENT_TYPE" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_SET_FOX_ROLE" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_SET_STATION_ID" />

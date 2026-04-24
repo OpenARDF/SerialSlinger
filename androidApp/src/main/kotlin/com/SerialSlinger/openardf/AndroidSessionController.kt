@@ -30,7 +30,9 @@ import com.openardf.serialslinger.session.DeviceSubmitResult
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
+import com.openardf.serialslinger.transport.AndroidDirectSerialTransport
 import com.openardf.serialslinger.transport.AndroidUsbTransport
+import com.openardf.serialslinger.transport.DeviceTransport
 import java.time.Duration
 import java.time.LocalDateTime
 import kotlin.concurrent.thread
@@ -46,6 +48,8 @@ data class AndroidUiState(
     val statusIsError: Boolean,
     val latestProbeSummary: String,
     val sessionViewState: AndroidSessionViewState?,
+    val latestLoadedTarget: AndroidConnectionTarget?,
+    val latestLoadedTargetLabel: String?,
     val latestLoadedDeviceName: String?,
     val draftStationId: String?,
     val draftEventType: String?,
@@ -134,6 +138,11 @@ private data class ClockDisplayAnchor(
     val phaseErrorMillis: Long?,
 )
 
+private data class ResolvedTransport(
+    val target: AndroidConnectionTarget,
+    val transport: DeviceTransport,
+)
+
 @SuppressLint("NewApi")
 object AndroidSessionController {
     private const val logTag = "SerialSlingerDebug"
@@ -149,6 +158,7 @@ object AndroidSessionController {
     private var statusIsError: Boolean = false
     private var latestProbeSummary: String = "No SignalSlinger probe has been run yet."
     private var latestSessionViewState: AndroidSessionViewState? = null
+    private var latestLoadedTarget: AndroidConnectionTarget? = null
     private var latestLoadedDeviceName: String? = null
     private var draftStationId: String? = null
     private var draftEventType: String? = null
@@ -200,6 +210,8 @@ object AndroidSessionController {
                 statusIsError = statusIsError,
                 latestProbeSummary = latestProbeSummary,
                 sessionViewState = latestSessionViewState,
+                latestLoadedTarget = latestLoadedTarget,
+                latestLoadedTargetLabel = latestLoadedTarget?.label,
                 latestLoadedDeviceName = latestLoadedDeviceName,
                 draftStationId = draftStationId,
                 draftEventType = draftEventType,
@@ -270,6 +282,7 @@ object AndroidSessionController {
     fun clearLoadedSession(reasonText: String) {
         synchronized(this) {
             latestSessionViewState = null
+            latestLoadedTarget = null
             latestLoadedDeviceName = null
             applySnapshotDrafts(null)
             deviceTimeOffset = null
@@ -288,6 +301,7 @@ object AndroidSessionController {
     fun runCloneTimedEventSettings(
         context: Context,
         requestedDeviceName: String? = null,
+        requestedTarget: AndroidConnectionTarget? = null,
         source: String = "ui",
         onComplete: ((Result<CloneSubmitResult>) -> Unit)? = null,
     ) {
@@ -315,59 +329,52 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-clone-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val targetRefresh = DeviceSessionController.refreshFromDevice(sessionState, transport, startEditing = true)
-                        val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
-                        val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
-                        val validated = editable.toValidatedDeviceSettings()
-                        val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
-                        val submitResult = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
-                        val verificationFailures = submitResult.verifications.filter { !it.verified }
-                        val refreshed = DeviceSessionController.refreshFromDevice(submitResult.state, transport, startEditing = true)
-                        var finalState = refreshed.state
-                        var syncOperation: TimeSyncOperationResult? = null
-                        if (verificationFailures.isEmpty() && refreshed.state.snapshot?.capabilities?.supportsScheduling == true) {
-                            syncOperation =
-                                performAlignedTimeSync(
-                                    transport = transport,
-                                    state = refreshed.state,
-                                    snapshot = requireNotNull(refreshed.state.snapshot),
-                                )
-                            finalState = syncOperation.finalAttempt.state
-                        }
-                        Result.success(
-                            CloneSubmitResult(
-                                state = finalState,
-                                writeCommandCount = writePlan.changes.size,
-                                writeResponseLineCount = submitResult.linesReceived.size,
-                                refreshCommandCount = refreshed.commandsSent.size,
-                                refreshResponseLineCount = refreshed.linesReceived.size,
-                                syncAttemptCount = syncOperation?.attempts?.size ?: 0,
-                                syncSucceeded = syncOperation?.succeeded ?: true,
-                                traceEntries =
-                                    buildList {
-                                        addAll(targetRefresh.traceEntries)
-                                        addAll(submitResult.submitTraceEntries)
-                                        addAll(submitResult.readbackTraceEntries)
-                                        addAll(refreshed.traceEntries)
-                                        syncOperation?.let { addAll(buildSyncTraceEntries(it)) }
-                                    },
-                            ),
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = requestedTarget,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val targetRefresh = DeviceSessionController.refreshFromDevice(sessionState, transport, startEditing = true)
+                val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
+                val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
+                val validated = editable.toValidatedDeviceSettings()
+                val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
+                val submitResult = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
+                val verificationFailures = submitResult.verifications.filter { !it.verified }
+                val refreshed = DeviceSessionController.refreshFromDevice(submitResult.state, transport, startEditing = true)
+                var finalState = refreshed.state
+                var syncOperation: TimeSyncOperationResult? = null
+                if (verificationFailures.isEmpty() && refreshed.state.snapshot?.capabilities?.supportsScheduling == true) {
+                    syncOperation =
+                        performAlignedTimeSync(
+                            transport = transport,
+                            state = refreshed.state,
+                            snapshot = requireNotNull(refreshed.state.snapshot),
                         )
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
+                    finalState = syncOperation.finalAttempt.state
                 }
+                CloneSubmitResult(
+                    state = finalState,
+                    writeCommandCount = writePlan.changes.size,
+                    writeResponseLineCount = submitResult.linesReceived.size,
+                    refreshCommandCount = refreshed.commandsSent.size,
+                    refreshResponseLineCount = refreshed.linesReceived.size,
+                    syncAttemptCount = syncOperation?.attempts?.size ?: 0,
+                    syncSucceeded = syncOperation?.succeeded ?: true,
+                    traceEntries =
+                        buildList {
+                            addAll(targetRefresh.traceEntries)
+                            addAll(submitResult.submitTraceEntries)
+                            addAll(submitResult.readbackTraceEntries)
+                            addAll(refreshed.traceEntries)
+                            syncOperation?.let { addAll(buildSyncTraceEntries(it)) }
+                        },
+                )
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -376,7 +383,7 @@ object AndroidSessionController {
                         state = cloneResult.state,
                         traceEntries = cloneResult.traceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     cloneResult.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
                     applySnapshotDrafts(cloneResult.state.snapshot, refreshClockDisplayAnchor = cloneResult.syncAttemptCount == 0)
                     timeWorkflowNotice = null
@@ -520,19 +527,27 @@ object AndroidSessionController {
     fun runProbe(
         context: Context,
         requestedDeviceName: String? = null,
+        requestedTarget: AndroidConnectionTarget? = null,
+        requestedTargets: List<AndroidConnectionTarget>? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
     ) {
         val probeStart =
             synchronized(this) {
+                val desiredTarget =
+                    if (requestedTargets.isNullOrEmpty()) {
+                        resolveRequestedTargetLocked(requestedTarget = requestedTarget, requestedDeviceName = requestedDeviceName)
+                    } else {
+                        requestedTargets.first()
+                    }
                 if (probeInFlight) {
-                    false to (requestedDeviceName ?: latestLoadedDeviceName)
+                    false to desiredTarget
                 } else {
                     probeInFlight = true
-                    true to (requestedDeviceName ?: latestLoadedDeviceName)
+                    true to desiredTarget
                 }
             }
-        val (startedProbe, deviceName) = probeStart
+        val (startedProbe, target) = probeStart
         if (!startedProbe) {
             onComplete?.let { callback ->
                 mainHandler.post {
@@ -548,25 +563,69 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-probe") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, deviceName)
+            var resolvedTarget: AndroidConnectionTarget? = null
+            fun attemptProbe(
+                requestedDeviceNameForAttempt: String?,
+                requestedTargetForAttempt: AndroidConnectionTarget?,
+                allowUsbAutoDetect: Boolean,
+                missingMessage: String,
+            ): Result<Pair<DeviceLoadResult, ClockDisplayAnchor?>> =
+                runWithResolvedTransport(
+                    context = context,
+                    requestedDeviceName = requestedDeviceNameForAttempt,
+                    requestedTarget = requestedTargetForAttempt,
+                    allowUsbAutoDetect = allowUsbAutoDetect,
+                    missingMessage = missingMessage,
+                ) { activeTarget, transport ->
+                    resolvedTarget = activeTarget
+                    val initialLoad = DeviceSessionController.connectAndLoad(transport)
+                    val postLoadClockSample = postLoadClockSample(transport, initialLoad)
+                    mergeLoadResults(initialLoad, postLoadClockSample?.first) to postLoadClockSample?.second
+                }
+
             val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("No permitted supported USB serial device is connected."))
+                if (requestedTargets.isNullOrEmpty()) {
+                    attemptProbe(
+                        requestedDeviceNameForAttempt = (target as? AndroidConnectionTarget.Usb)?.deviceName,
+                        requestedTargetForAttempt = target,
+                        allowUsbAutoDetect = true,
+                        missingMessage = "No permitted supported USB serial device is connected.",
+                    )
                 } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val initialLoad = DeviceSessionController.connectAndLoad(transport)
-                        val postLoadClockSample = postLoadClockSample(transport, initialLoad)
-                        Result.success(
-                            mergeLoadResults(initialLoad, postLoadClockSample?.first) to postLoadClockSample?.second,
-                        )
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
+                    val attemptSummaries = mutableListOf<String>()
+                    var successfulResult: Result<Pair<DeviceLoadResult, ClockDisplayAnchor?>>? = null
+                    for (candidateTarget in requestedTargets) {
+                        val candidateResult =
+                            attemptProbe(
+                                requestedDeviceNameForAttempt = (candidateTarget as? AndroidConnectionTarget.Usb)?.deviceName,
+                                requestedTargetForAttempt = candidateTarget,
+                                allowUsbAutoDetect = false,
+                                missingMessage = "${candidateTarget.label} is not available.",
+                            )
+                        if (candidateResult.isSuccess) {
+                            val (loadResult, _) = candidateResult.getOrThrow()
+                            if (loadResult.linesReceived.isNotEmpty()) {
+                                successfulResult = candidateResult
+                                break
+                            }
+                            attemptSummaries += "${candidateTarget.label}: no response lines were received."
+                        } else {
+                            attemptSummaries += buildString {
+                                append(candidateTarget.label)
+                                append(": ")
+                                append(candidateResult.exceptionOrNull()?.message ?: "Unknown error")
+                            }
+                        }
                     }
+                    successfulResult
+                        ?: Result.failure(
+                            IllegalStateException(
+                                buildString {
+                                    appendLine("No emulator serial path responded successfully.")
+                                    append(attemptSummaries.joinToString("\n"))
+                                }.trim(),
+                            ),
+                        )
                 }
 
             synchronized(this) {
@@ -576,7 +635,7 @@ object AndroidSessionController {
                         state = loadResult.state,
                         traceEntries = loadResult.traceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     if (cloneTemplateSettings == null) {
                         loadResult.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
                     }
@@ -657,25 +716,20 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editedSettings = editableSettings.copy(
-                            stationId = editableSettings.stationId.copy(editedValue = stationId.trim()),
-                        )
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
-                }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editedSettings = editableSettings.copy(
+                    stationId = editableSettings.stationId.copy(editedValue = stationId.trim()),
+                )
+                DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -685,7 +739,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -779,25 +833,20 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-id-speed-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editedSettings = editableSettings.copy(
-                            idCodeSpeedWpm = editableSettings.idCodeSpeedWpm.copy(editedValue = parsedSpeed),
-                        )
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
-                }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editedSettings = editableSettings.copy(
+                    idCodeSpeedWpm = editableSettings.idCodeSpeedWpm.copy(editedValue = parsedSpeed),
+                )
+                DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -807,7 +856,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -920,29 +969,23 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-low-battery-threshold-submit") {
-            var resolvedDeviceName: String? = null
+            var resolvedTarget: AndroidConnectionTarget? = null
             val result =
                 if (snapshot.settings.lowBatteryThresholdVolts == parsedThreshold) {
                     Result.success(noOpSubmitResult(sessionState))
                 } else {
-                    val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-                    val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-                    if (usbDevice == null) {
-                        Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                    } else {
-                        resolvedDeviceName = usbDevice.deviceName
-                        val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                        try {
-                            transport.connect()
-                            val editedSettings = editableSettings.copy(
-                                lowBatteryThresholdVolts = editableSettings.lowBatteryThresholdVolts.copy(editedValue = parsedThreshold),
-                            )
-                            Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                        } catch (error: Throwable) {
-                            Result.failure(error)
-                        } finally {
-                            transport.disconnect()
-                        }
+                    runWithResolvedTransport(
+                        context = context,
+                        requestedDeviceName = requestedDeviceName,
+                        requestedTarget = null,
+                        allowUsbAutoDetect = false,
+                        missingMessage = "SignalSlinger is no longer connected.",
+                    ) { target, transport ->
+                        resolvedTarget = target
+                        val editedSettings = editableSettings.copy(
+                            lowBatteryThresholdVolts = editableSettings.lowBatteryThresholdVolts.copy(editedValue = parsedThreshold),
+                        )
+                        DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
                     }
                 }
 
@@ -954,7 +997,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = resolvedDeviceName ?: latestLoadedDeviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     latestSubmitSummary = renderSubmitSummary(submitResult)
                     latestProbeSummary =
@@ -1041,29 +1084,23 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-external-battery-control-submit") {
-            var resolvedDeviceName: String? = null
+            var resolvedTarget: AndroidConnectionTarget? = null
             val result =
                 if (snapshot.settings.externalBatteryControlMode == mode) {
                     Result.success(noOpSubmitResult(sessionState))
                 } else {
-                    val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-                    val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-                    if (usbDevice == null) {
-                        Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                    } else {
-                        resolvedDeviceName = usbDevice.deviceName
-                        val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                        try {
-                            transport.connect()
-                            val editedSettings = editableSettings.copy(
-                                externalBatteryControlMode = editableSettings.externalBatteryControlMode.copy(editedValue = mode),
-                            )
-                            Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                        } catch (error: Throwable) {
-                            Result.failure(error)
-                        } finally {
-                            transport.disconnect()
-                        }
+                    runWithResolvedTransport(
+                        context = context,
+                        requestedDeviceName = requestedDeviceName,
+                        requestedTarget = null,
+                        allowUsbAutoDetect = false,
+                        missingMessage = "SignalSlinger is no longer connected.",
+                    ) { target, transport ->
+                        resolvedTarget = target
+                        val editedSettings = editableSettings.copy(
+                            externalBatteryControlMode = editableSettings.externalBatteryControlMode.copy(editedValue = mode),
+                        )
+                        DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
                     }
                 }
 
@@ -1075,7 +1112,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = resolvedDeviceName ?: latestLoadedDeviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     latestSubmitSummary = renderSubmitSummary(submitResult)
                     latestProbeSummary =
@@ -1179,25 +1216,20 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-pattern-speed-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editedSettings = editableSettings.copy(
-                            patternCodeSpeedWpm = editableSettings.patternCodeSpeedWpm.copy(editedValue = parsedSpeed),
-                        )
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
-                }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editedSettings = editableSettings.copy(
+                    patternCodeSpeedWpm = editableSettings.patternCodeSpeedWpm.copy(editedValue = parsedSpeed),
+                )
+                DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -1207,7 +1239,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1302,25 +1334,20 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-pattern-text-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editedSettings = editableSettings.copy(
-                            patternText = editableSettings.patternText.copy(editedValue = normalizedPatternText),
-                        )
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
-                }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editedSettings = editableSettings.copy(
+                    patternText = editableSettings.patternText.copy(editedValue = normalizedPatternText),
+                )
+                DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -1330,7 +1357,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1424,25 +1451,20 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-current-frequency-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editedSettings = editableSettings.copy(
-                            defaultFrequencyHz = editableSettings.defaultFrequencyHz.copy(editedValue = parsedFrequencyHz),
-                        )
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
-                }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editedSettings = editableSettings.copy(
+                    defaultFrequencyHz = editableSettings.defaultFrequencyHz.copy(editedValue = parsedFrequencyHz),
+                )
+                DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -1452,7 +1474,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1562,41 +1584,36 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-frequency-bank-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editedSettings =
-                            when (bankId) {
-                                FrequencyBankId.ONE ->
-                                    editableSettings.copy(
-                                        lowFrequencyHz = editableSettings.lowFrequencyHz.copy(editedValue = parsedFrequencyHz),
-                                    )
-                                FrequencyBankId.TWO ->
-                                    editableSettings.copy(
-                                        mediumFrequencyHz = editableSettings.mediumFrequencyHz.copy(editedValue = parsedFrequencyHz),
-                                    )
-                                FrequencyBankId.THREE ->
-                                    editableSettings.copy(
-                                        highFrequencyHz = editableSettings.highFrequencyHz.copy(editedValue = parsedFrequencyHz),
-                                    )
-                                FrequencyBankId.BEACON ->
-                                    editableSettings.copy(
-                                        beaconFrequencyHz = editableSettings.beaconFrequencyHz.copy(editedValue = parsedFrequencyHz),
-                                    )
-                            }
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editedSettings =
+                    when (bankId) {
+                        FrequencyBankId.ONE ->
+                            editableSettings.copy(
+                                lowFrequencyHz = editableSettings.lowFrequencyHz.copy(editedValue = parsedFrequencyHz),
+                            )
+                        FrequencyBankId.TWO ->
+                            editableSettings.copy(
+                                mediumFrequencyHz = editableSettings.mediumFrequencyHz.copy(editedValue = parsedFrequencyHz),
+                            )
+                        FrequencyBankId.THREE ->
+                            editableSettings.copy(
+                                highFrequencyHz = editableSettings.highFrequencyHz.copy(editedValue = parsedFrequencyHz),
+                            )
+                        FrequencyBankId.BEACON ->
+                            editableSettings.copy(
+                                beaconFrequencyHz = editableSettings.beaconFrequencyHz.copy(editedValue = parsedFrequencyHz),
+                            )
                     }
-                }
+                DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -1606,7 +1623,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1706,25 +1723,20 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-fox-role-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editedSettings = editableSettings.copy(
-                            foxRole = editableSettings.foxRole.copy(editedValue = parsedFoxRole),
-                        )
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
-                }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editedSettings = editableSettings.copy(
+                    foxRole = editableSettings.foxRole.copy(editedValue = parsedFoxRole),
+                )
+                DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -1734,7 +1746,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1829,25 +1841,20 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-event-type-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editedSettings = editableSettings.copy(
-                            eventType = editableSettings.eventType.copy(editedValue = parsedEventType),
-                        )
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
-                }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editedSettings = editableSettings.copy(
+                    eventType = editableSettings.eventType.copy(editedValue = parsedEventType),
+                )
+                DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -1857,7 +1864,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1971,26 +1978,21 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-event-profile-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editedSettings = editableSettings.copy(
-                            eventType = editableSettings.eventType.copy(editedValue = parsedEventType),
-                            foxRole = editableSettings.foxRole.copy(editedValue = parsedFoxRole),
-                        )
-                        Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
-                }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editedSettings = editableSettings.copy(
+                    eventType = editableSettings.eventType.copy(editedValue = parsedEventType),
+                    foxRole = editableSettings.foxRole.copy(editedValue = parsedFoxRole),
+                )
+                DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -2000,7 +2002,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     latestSubmitSummary = renderSubmitSummary(submitResult)
                     latestProbeSummary =
@@ -2129,52 +2131,45 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-days-to-run-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val editRequest = ScheduleSubmitSupport.daysToRunEdit(
+                    currentSettings = snapshot.settings,
+                    requestedDaysToRun = parsedDaysToRun,
+                    requestedFinishTimeCompact = normalizedRequestedFinishTime,
+                )
+                if (
+                    editRequest.daysToRun == snapshot.settings.daysToRun &&
+                    editRequest.startTimeCompact == snapshot.settings.startTimeCompact &&
+                    editRequest.finishTimeCompact == snapshot.settings.finishTimeCompact &&
+                    editRequest.forceWriteKeys.isEmpty()
+                ) {
+                    noOpSubmitResult(sessionState)
                 } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val editRequest = ScheduleSubmitSupport.daysToRunEdit(
-                            currentSettings = snapshot.settings,
-                            requestedDaysToRun = parsedDaysToRun,
-                            requestedFinishTimeCompact = normalizedRequestedFinishTime,
-                        )
-                        if (
-                            editRequest.daysToRun == snapshot.settings.daysToRun &&
-                            editRequest.startTimeCompact == snapshot.settings.startTimeCompact &&
-                            editRequest.finishTimeCompact == snapshot.settings.finishTimeCompact &&
-                            editRequest.forceWriteKeys.isEmpty()
-                        ) {
-                            Result.success(noOpSubmitResult(sessionState))
-                        } else {
-                            val editedSettings = editableSettings.copy(
-                                daysToRun = editableSettings.daysToRun.copy(editedValue = editRequest.daysToRun),
-                                startTimeCompact = editableSettings.startTimeCompact.copy(
-                                    editedValue = editRequest.startTimeCompact,
-                                ),
-                                finishTimeCompact = editableSettings.finishTimeCompact.copy(
-                                    editedValue = editRequest.finishTimeCompact,
-                                ),
-                            )
-                            Result.success(
-                                DeviceSessionController.submitEdits(
-                                    sessionState,
-                                    editedSettings,
-                                    transport,
-                                    forceWriteKeys = editRequest.forceWriteKeys,
-                                ),
-                            )
-                        }
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
+                    val editedSettings = editableSettings.copy(
+                        daysToRun = editableSettings.daysToRun.copy(editedValue = editRequest.daysToRun),
+                        startTimeCompact = editableSettings.startTimeCompact.copy(
+                            editedValue = editRequest.startTimeCompact,
+                        ),
+                        finishTimeCompact = editableSettings.finishTimeCompact.copy(
+                            editedValue = editRequest.finishTimeCompact,
+                        ),
+                    )
+                    DeviceSessionController.submitEdits(
+                        sessionState,
+                        editedSettings,
+                        transport,
+                        forceWriteKeys = editRequest.forceWriteKeys,
+                    )
                 }
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -2184,7 +2179,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     timeWorkflowNotice = null
                     clearScheduleDerivedDataPendingLocked()
@@ -2367,28 +2362,21 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-current-time-sync") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        Result.success(
-                            performAlignedTimeSync(
-                                transport = transport,
-                                state = sessionState,
-                                snapshot = snapshot,
-                            ),
-                        )
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
-                }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                performAlignedTimeSync(
+                    transport = transport,
+                    state = sessionState,
+                    snapshot = snapshot,
+                )
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -2398,6 +2386,7 @@ object AndroidSessionController {
                         state = finalAttempt.state,
                         traceEntries = buildSyncTraceEntries(syncResult),
                     )
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(finalAttempt.state.snapshot)
                     applyClockDisplayAnchor(
                         currentTimeCompact = finalAttempt.state.snapshot?.settings?.currentTimeCompact,
@@ -2519,39 +2508,32 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-current-time-submit") {
-            val result =
-                run {
-                    val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-                    val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-                    if (usbDevice == null) {
-                        Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                    } else {
-                        val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                        try {
-                            transport.connect()
-                            val estimatedWriteDelayMillis = synchronized(this@AndroidSessionController) { cachedManualWriteDelayMillis } ?: 0L
-                            val adjustedCurrentTime =
-                                JvmTimeSupport.formatCompactTimestamp(
-                                    JvmTimeSupport.adjustManualTimeTargetForWrite(
-                                        selectedTime = JvmTimeSupport.parseCompactTimestamp(normalizedCurrentTime),
-                                        estimatedWriteDelayMillis = estimatedWriteDelayMillis,
-                                    ),
-                                )
-                            if (adjustedCurrentTime == snapshot.settings.currentTimeCompact) {
-                                Result.success(noOpSubmitResult(sessionState))
-                            } else {
-                                val editedSettings = editableSettings.copy(
-                                    currentTimeCompact = editableSettings.currentTimeCompact.copy(editedValue = adjustedCurrentTime),
-                                )
-                                Result.success(DeviceSessionController.submitEdits(sessionState, editedSettings, transport))
-                            }
-                        } catch (error: Throwable) {
-                            Result.failure(error)
-                        } finally {
-                            transport.disconnect()
-                        }
-                    }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val estimatedWriteDelayMillis = synchronized(this@AndroidSessionController) { cachedManualWriteDelayMillis } ?: 0L
+                val adjustedCurrentTime =
+                    JvmTimeSupport.formatCompactTimestamp(
+                        JvmTimeSupport.adjustManualTimeTargetForWrite(
+                            selectedTime = JvmTimeSupport.parseCompactTimestamp(normalizedCurrentTime),
+                            estimatedWriteDelayMillis = estimatedWriteDelayMillis,
+                        ),
+                    )
+                if (adjustedCurrentTime == snapshot.settings.currentTimeCompact) {
+                    noOpSubmitResult(sessionState)
+                } else {
+                    val editedSettings = editableSettings.copy(
+                        currentTimeCompact = editableSettings.currentTimeCompact.copy(editedValue = adjustedCurrentTime),
+                    )
+                    DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
                 }
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -2562,6 +2544,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(submitResult.state.snapshot)
                     timeWorkflowNotice = scheduleImpact.noticeText
                     clearScheduleDerivedDataPendingLocked()
@@ -2737,6 +2720,7 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-start-time-submit") {
+            var resolvedTarget: AndroidConnectionTarget? = null
             val result =
                 try {
                     val normalizedRequestedFinishTime =
@@ -2766,31 +2750,24 @@ object AndroidSessionController {
                     ) {
                         Result.success(noOpSubmitResult(sessionState))
                     } else {
-                        val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-                        val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-                        if (usbDevice == null) {
-                            Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                        } else {
-                            val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                            try {
-                                transport.connect()
-                                val editedSettings = editableSettings.copy(
-                                    startTimeCompact = editableSettings.startTimeCompact.copy(editedValue = editRequest.startTimeCompact),
-                                    finishTimeCompact = editableSettings.finishTimeCompact.copy(editedValue = editRequest.finishTimeCompact),
-                                )
-                                Result.success(
-                                    DeviceSessionController.submitEdits(
-                                        sessionState,
-                                        editedSettings,
-                                        transport,
-                                        forceWriteKeys = editRequest.forceWriteKeys,
-                                    ),
-                                )
-                            } catch (error: Throwable) {
-                                Result.failure(error)
-                            } finally {
-                                transport.disconnect()
-                            }
+                        runWithResolvedTransport(
+                            context = context,
+                            requestedDeviceName = requestedDeviceName,
+                            requestedTarget = null,
+                            allowUsbAutoDetect = false,
+                            missingMessage = "SignalSlinger is no longer connected.",
+                        ) { target, transport ->
+                            resolvedTarget = target
+                            val editedSettings = editableSettings.copy(
+                                startTimeCompact = editableSettings.startTimeCompact.copy(editedValue = editRequest.startTimeCompact),
+                                finishTimeCompact = editableSettings.finishTimeCompact.copy(editedValue = editRequest.finishTimeCompact),
+                            )
+                            DeviceSessionController.submitEdits(
+                                sessionState,
+                                editedSettings,
+                                transport,
+                                forceWriteKeys = editRequest.forceWriteKeys,
+                            )
                         }
                     }
                 } catch (error: Throwable) {
@@ -2806,6 +2783,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(submitResult.state.snapshot)
                     timeWorkflowNotice = scheduleImpact.noticeText
                     clearScheduleDerivedDataPendingLocked()
@@ -2916,6 +2894,7 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-finish-time-submit") {
+            var resolvedTarget: AndroidConnectionTarget? = null
             val result =
                 runCatching {
                     val editRequest = ScheduleSubmitSupport.absoluteFinishEdit(
@@ -2928,38 +2907,31 @@ object AndroidSessionController {
                         editRequest.startTimeCompact == snapshot.settings.startTimeCompact &&
                         editRequest.forceWriteKeys.isEmpty()
                     ) {
-                    Result.success(noOpSubmitResult(sessionState))
+                        Result.success(noOpSubmitResult(sessionState))
                     } else {
-                        val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-                        val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-                        if (usbDevice == null) {
-                            Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                        } else {
-                            val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                            try {
-                                transport.connect()
-                                val editedSettings =
-                                    editableSettings.copy(
-                                        startTimeCompact = editableSettings.startTimeCompact.copy(
-                                            editedValue = editRequest.startTimeCompact,
-                                        ),
-                                        finishTimeCompact = editableSettings.finishTimeCompact.copy(
-                                            editedValue = editRequest.finishTimeCompact,
-                                        ),
-                                    )
-                                Result.success(
-                                    DeviceSessionController.submitEdits(
-                                        sessionState,
-                                        editedSettings,
-                                        transport,
-                                        forceWriteKeys = editRequest.forceWriteKeys,
+                        runWithResolvedTransport(
+                            context = context,
+                            requestedDeviceName = requestedDeviceName,
+                            requestedTarget = null,
+                            allowUsbAutoDetect = false,
+                            missingMessage = "SignalSlinger is no longer connected.",
+                        ) { target, transport ->
+                            resolvedTarget = target
+                            val editedSettings =
+                                editableSettings.copy(
+                                    startTimeCompact = editableSettings.startTimeCompact.copy(
+                                        editedValue = editRequest.startTimeCompact,
+                                    ),
+                                    finishTimeCompact = editableSettings.finishTimeCompact.copy(
+                                        editedValue = editRequest.finishTimeCompact,
                                     ),
                                 )
-                            } catch (error: Throwable) {
-                                Result.failure(error)
-                            } finally {
-                                transport.disconnect()
-                            }
+                            DeviceSessionController.submitEdits(
+                                sessionState,
+                                editedSettings,
+                                transport,
+                                forceWriteKeys = editRequest.forceWriteKeys,
+                            )
                         }
                     }
                 }.getOrElse { error -> Result.failure(error) }
@@ -2973,6 +2945,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(submitResult.state.snapshot)
                     timeWorkflowNotice = scheduleImpact.noticeText
                     clearScheduleDerivedDataPendingLocked()
@@ -3062,6 +3035,7 @@ object AndroidSessionController {
             appendLine("status=${uiState.statusText}")
             appendLine("statusIsError=${uiState.statusIsError}")
             appendLine("loadedDevice=${uiState.latestLoadedDeviceName ?: "<none>"}")
+            appendLine("loadedTarget=${uiState.latestLoadedTargetLabel ?: "<none>"}")
             appendLine("softwareVersion=${snapshot?.info?.softwareVersion ?: "<none>"}")
             appendLine("stationId=${snapshot?.settings?.stationId ?: "<none>"}")
             appendLine("currentLogFile=${currentLogFile ?: "<none>"}")
@@ -3225,6 +3199,88 @@ object AndroidSessionController {
         }
     }
 
+    private fun resolveRequestedTargetLocked(
+        requestedTarget: AndroidConnectionTarget?,
+        requestedDeviceName: String?,
+    ): AndroidConnectionTarget? {
+        return requestedTarget
+            ?: requestedDeviceName?.let(AndroidConnectionTarget::Usb)
+            ?: latestLoadedTarget
+    }
+
+    private fun rememberLoadedTargetLocked(target: AndroidConnectionTarget) {
+        latestLoadedTarget = target
+        latestLoadedDeviceName = (target as? AndroidConnectionTarget.Usb)?.deviceName
+    }
+
+    private fun resolveTransport(
+        context: Context,
+        requestedDeviceName: String?,
+        requestedTarget: AndroidConnectionTarget?,
+        allowUsbAutoDetect: Boolean,
+    ): ResolvedTransport? {
+        val desiredTarget =
+            synchronized(this) {
+                resolveRequestedTargetLocked(
+                    requestedTarget = requestedTarget,
+                    requestedDeviceName = requestedDeviceName,
+                )
+            }
+
+        return when (desiredTarget) {
+            is AndroidConnectionTarget.DirectSerial ->
+                ResolvedTransport(
+                    target = desiredTarget,
+                    transport = AndroidDirectSerialTransport(path = desiredTarget.path),
+                )
+            is AndroidConnectionTarget.Usb -> {
+                val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
+                val usbDevice = resolveUsbDevice(usbManager, desiredTarget.deviceName) ?: return null
+                ResolvedTransport(
+                    target = AndroidConnectionTarget.Usb(usbDevice.deviceName),
+                    transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice),
+                )
+            }
+            null -> {
+                if (!allowUsbAutoDetect) {
+                    return null
+                }
+                val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
+                val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName = null) ?: return null
+                ResolvedTransport(
+                    target = AndroidConnectionTarget.Usb(usbDevice.deviceName),
+                    transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice),
+                )
+            }
+        }
+    }
+
+    private inline fun <T> runWithResolvedTransport(
+        context: Context,
+        requestedDeviceName: String?,
+        requestedTarget: AndroidConnectionTarget?,
+        allowUsbAutoDetect: Boolean,
+        missingMessage: String,
+        block: (AndroidConnectionTarget, DeviceTransport) -> T,
+    ): Result<T> {
+        val resolvedTransport =
+            resolveTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = requestedTarget,
+                allowUsbAutoDetect = allowUsbAutoDetect,
+            ) ?: return Result.failure(IllegalStateException(missingMessage))
+
+        return try {
+            resolvedTransport.transport.connect()
+            Result.success(block(resolvedTransport.target, resolvedTransport.transport))
+        } catch (error: Throwable) {
+            Result.failure(error)
+        } finally {
+            resolvedTransport.transport.disconnect()
+        }
+    }
+
     private fun buildSyncTraceEntries(result: TimeSyncOperationResult): List<SerialTraceEntry> {
         val traceEntries = mutableListOf<SerialTraceEntry>()
         result.attempts.forEach { attempt ->
@@ -3256,7 +3312,7 @@ object AndroidSessionController {
     }
 
     private fun postLoadClockSample(
-        transport: AndroidUsbTransport,
+        transport: DeviceTransport,
         result: DeviceLoadResult,
     ): Pair<DeviceLoadResult, ClockDisplayAnchor>? {
         val loadedSnapshot = result.state.snapshot ?: return null
@@ -3304,7 +3360,7 @@ object AndroidSessionController {
     }
 
     private fun sampleClockReadLatency(
-        transport: AndroidUsbTransport,
+        transport: DeviceTransport,
         sampleCount: Int,
     ): List<ClockReadSample> {
         return buildList {
@@ -3325,7 +3381,7 @@ object AndroidSessionController {
     }
 
     private fun performAlignedTimeSync(
-        transport: AndroidUsbTransport,
+        transport: DeviceTransport,
         state: DeviceSessionState,
         snapshot: DeviceSnapshot,
     ): TimeSyncOperationResult {
@@ -3379,7 +3435,7 @@ object AndroidSessionController {
     }
 
     private fun performSyncAttempt(
-        transport: AndroidUsbTransport,
+        transport: DeviceTransport,
         state: DeviceSessionState,
         snapshot: DeviceSnapshot,
         targetTime: LocalDateTime,
@@ -3431,7 +3487,7 @@ object AndroidSessionController {
     }
 
     private fun observeClockPhaseSamples(
-        transport: AndroidUsbTransport,
+        transport: DeviceTransport,
         maxSamples: Int = syncVerificationSampleMax,
     ): List<ClockReadSample> {
         val samples = mutableListOf<ClockReadSample>()
@@ -3450,7 +3506,7 @@ object AndroidSessionController {
     }
 
     private fun readClockSample(
-        transport: AndroidUsbTransport,
+        transport: DeviceTransport,
         command: String = "CLK T",
     ): ClockReadSample {
         val sentAt = LocalDateTime.now()
@@ -3800,55 +3856,47 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-relative-schedule-submit") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val sentAtMs = System.currentTimeMillis()
-                        transport.sendCommands(commands)
-                        val responseLines = transport.readAvailableLines()
-                        val receivedAtMs = System.currentTimeMillis()
-                        val deviceError = responseLines.firstOrNull { it.contains("* Err:") }
-                        if (deviceError != null) {
-                            Result.failure(IllegalStateException(deviceError.removePrefix("* ").trim()))
-                        } else {
-                            var nextState = sessionState
-                            if (responseLines.isNotEmpty()) {
-                                nextState = DeviceSessionWorkflow.ingestReportLines(nextState, responseLines)
-                            }
-                            val reloadResult = DeviceSessionController.refreshFromDevice(nextState, transport, startEditing = false)
-                            val refreshedState =
-                                reloadResult.state.copy(
-                                    editableSettings = reloadResult.state.snapshot?.let { snapshot ->
-                                        EditableDeviceSettings.fromDeviceSettings(snapshot.settings)
-                                    },
-                                )
-                            Result.success(
-                                RelativeScheduleSubmitResult(
-                                    state = refreshedState,
-                                    commandsSent = commands,
-                                    responseLines = responseLines,
-                                    reloadResult = reloadResult,
-                                    traceEntries =
-                                        buildList {
-                                            addAll(commands.map { command -> SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command) })
-                                            addAll(responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) })
-                                            addAll(reloadResult.traceEntries)
-                                        },
-                                ),
-                            )
-                        }
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val sentAtMs = System.currentTimeMillis()
+                transport.sendCommands(commands)
+                val responseLines = transport.readAvailableLines()
+                val receivedAtMs = System.currentTimeMillis()
+                val deviceError = responseLines.firstOrNull { it.contains("* Err:") }
+                if (deviceError != null) {
+                    throw IllegalStateException(deviceError.removePrefix("* ").trim())
                 }
+                var nextState = sessionState
+                if (responseLines.isNotEmpty()) {
+                    nextState = DeviceSessionWorkflow.ingestReportLines(nextState, responseLines)
+                }
+                val reloadResult = DeviceSessionController.refreshFromDevice(nextState, transport, startEditing = false)
+                val refreshedState =
+                    reloadResult.state.copy(
+                        editableSettings = reloadResult.state.snapshot?.let { snapshot ->
+                            EditableDeviceSettings.fromDeviceSettings(snapshot.settings)
+                        },
+                    )
+                RelativeScheduleSubmitResult(
+                    state = refreshedState,
+                    commandsSent = commands,
+                    responseLines = responseLines,
+                    reloadResult = reloadResult,
+                    traceEntries =
+                        buildList {
+                            addAll(commands.map { command -> SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command) })
+                            addAll(responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) })
+                            addAll(reloadResult.traceEntries)
+                        },
+                )
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -3858,7 +3906,7 @@ object AndroidSessionController {
                         state = submitResult.state,
                         traceEntries = submitResult.traceEntries,
                     )
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     timeWorkflowNotice = scheduleImpact.noticeText
                     clearScheduleDerivedDataPendingLocked()
@@ -3896,6 +3944,7 @@ object AndroidSessionController {
         context: Context,
         commandInput: String,
         requestedDeviceName: String? = null,
+        requestedTarget: AndroidConnectionTarget? = null,
         source: String = "ui",
         onComplete: ((Result<List<String>>) -> Unit)? = null,
     ) {
@@ -3938,47 +3987,39 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-raw-command") {
-            val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-            val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName ?: synchronized(this) { latestLoadedDeviceName })
-            val result =
-                if (usbDevice == null) {
-                    Result.failure(IllegalStateException("SignalSlinger is no longer connected."))
-                } else {
-                    val transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice)
-                    try {
-                        transport.connect()
-                        val sentAtMs = System.currentTimeMillis()
-                        transport.sendCommands(listOf(command))
-                        val responseLines = transport.readAvailableLines()
-                        val receivedAtMs = System.currentTimeMillis()
-                        val deviceError = responseLines.firstOrNull { it.contains("* Err:") }
-                        if (deviceError != null) {
-                            Result.failure(IllegalStateException(deviceError.removePrefix("* ").trim()))
-                        } else {
-                            val nextState =
-                                if (responseLines.isNotEmpty()) {
-                                    DeviceSessionWorkflow.ingestReportLines(sessionState, responseLines)
-                                } else {
-                                    sessionState
-                                }
-                            Result.success(
-                                RawCommandResult(
-                                    state = nextState,
-                                    responseLines = responseLines,
-                                    traceEntries =
-                                        buildList {
-                                            add(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command))
-                                            addAll(responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) })
-                                        },
-                                ),
-                            )
-                        }
-                    } catch (error: Throwable) {
-                        Result.failure(error)
-                    } finally {
-                        transport.disconnect()
-                    }
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = requestedTarget,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val sentAtMs = System.currentTimeMillis()
+                transport.sendCommands(listOf(command))
+                val responseLines = transport.readAvailableLines()
+                val receivedAtMs = System.currentTimeMillis()
+                val deviceError = responseLines.firstOrNull { it.contains("* Err:") }
+                if (deviceError != null) {
+                    throw IllegalStateException(deviceError.removePrefix("* ").trim())
                 }
+                val nextState =
+                    if (responseLines.isNotEmpty()) {
+                        DeviceSessionWorkflow.ingestReportLines(sessionState, responseLines)
+                    } else {
+                        sessionState
+                    }
+                RawCommandResult(
+                    state = nextState,
+                    responseLines = responseLines,
+                    traceEntries =
+                        buildList {
+                            add(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command))
+                            addAll(responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) })
+                        },
+                )
+            }
 
             synchronized(this) {
                 if (result.isSuccess) {
@@ -3991,7 +4032,7 @@ object AndroidSessionController {
                                 } ?: commandResult.state.editableSettings,
                         )
                     latestSessionViewState = AndroidSessionViewState(state = normalizedState, traceEntries = commandResult.traceEntries)
-                    latestLoadedDeviceName = usbDevice?.deviceName
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(normalizedState.snapshot, refreshClockDisplayAnchor = false)
                     latestSubmitSummary =
                         buildString {

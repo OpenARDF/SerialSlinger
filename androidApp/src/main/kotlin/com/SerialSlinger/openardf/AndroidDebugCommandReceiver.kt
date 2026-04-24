@@ -53,6 +53,23 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                     pendingResult.finish()
                 }
             }
+            ACTION_LOAD_EMULATOR -> {
+                val pendingResult = goAsync()
+                AndroidSessionController.runProbe(
+                    context = context,
+                    requestedTargets = emulatorDirectSerialTargets(),
+                    source = "adb",
+                ) { result ->
+                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
+                    pendingResult.resultData =
+                        if (result.isSuccess) {
+                            AndroidSessionController.debugStateSummary()
+                        } else {
+                            result.exceptionOrNull()?.message ?: "Unknown load failure"
+                        }
+                    pendingResult.finish()
+                }
+            }
             ACTION_SET_EVENT_TYPE -> {
                 val eventType = intent.getStringExtra(EXTRA_EVENT_TYPE)
                 if (eventType == null) {
@@ -396,6 +413,7 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val ACTION_GET_LOG = "com.SerialSlinger.openardf.DEBUG_GET_LOG"
         const val ACTION_CLEAR_LOG = "com.SerialSlinger.openardf.DEBUG_CLEAR_LOG"
         const val ACTION_LOAD = "com.SerialSlinger.openardf.DEBUG_LOAD"
+        const val ACTION_LOAD_EMULATOR = "com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR"
         const val ACTION_SET_EVENT_TYPE = "com.SerialSlinger.openardf.DEBUG_SET_EVENT_TYPE"
         const val ACTION_SET_FOX_ROLE = "com.SerialSlinger.openardf.DEBUG_SET_FOX_ROLE"
         const val ACTION_SET_STATION_ID = "com.SerialSlinger.openardf.DEBUG_SET_STATION_ID"
