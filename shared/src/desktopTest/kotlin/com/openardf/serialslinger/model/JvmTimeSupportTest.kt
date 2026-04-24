@@ -1,6 +1,7 @@
 package com.openardf.serialslinger.model
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -51,5 +52,29 @@ class JvmTimeSupportTest {
                 currentTimeCompact = "260421115500",
             ),
         )
+    }
+
+    @Test
+    fun `normalize start time for change snaps past selection to minimum boundary`() {
+        val normalized =
+            JvmTimeSupport.normalizeStartTimeForChange(
+                startTimeCompact = "260421115000",
+                currentTimeCompact = "260421115542",
+            )
+
+        assertEquals("260421120000", normalized.startTimeCompact)
+        assertTrue(normalized.wasAdjustedToMinimum)
+    }
+
+    @Test
+    fun `normalize start time for change keeps valid future selection unchanged`() {
+        val normalized =
+            JvmTimeSupport.normalizeStartTimeForChange(
+                startTimeCompact = "260421120500",
+                currentTimeCompact = "260421115542",
+            )
+
+        assertEquals("260421120500", normalized.startTimeCompact)
+        assertFalse(normalized.wasAdjustedToMinimum)
     }
 }

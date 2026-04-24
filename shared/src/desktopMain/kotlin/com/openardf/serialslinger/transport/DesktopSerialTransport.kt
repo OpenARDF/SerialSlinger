@@ -29,6 +29,8 @@ class DesktopSerialTransport(
             return
         }
 
+        lineBuffer.clear()
+
         val port = SerialPort.getCommPort(portDescriptor)
         port.setComPortParameters(
             baudRate,
@@ -51,6 +53,7 @@ class DesktopSerialTransport(
         serialPort?.closePort()
         serialPort = null
         lastWriteAtMs = null
+        lineBuffer.clear()
     }
 
     override fun sendCommands(commands: List<String>) {

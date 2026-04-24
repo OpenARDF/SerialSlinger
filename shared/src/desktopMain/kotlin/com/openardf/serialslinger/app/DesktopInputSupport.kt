@@ -6,6 +6,7 @@ import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.JvmTimeSupport
+import com.openardf.serialslinger.model.NormalizedStartTimeSelection
 import com.openardf.serialslinger.model.RelativeScheduleSelection
 import com.openardf.serialslinger.model.RelativeScheduleSupport
 import com.openardf.serialslinger.model.TimedEventFrequencyVisibility
@@ -188,6 +189,18 @@ object DesktopInputSupport {
         currentTimeCompact: String?,
     ): String? {
         return JvmTimeSupport.resolveStartTimeForChange(startTimeCompact, currentTimeCompact)
+    }
+
+    fun normalizeStartTimeForChange(
+        startTimeCompact: String?,
+        currentTimeCompact: String?,
+        stepMinutes: Int = 5,
+    ): NormalizedStartTimeSelection {
+        return JvmTimeSupport.normalizeStartTimeForChange(startTimeCompact, currentTimeCompact, stepMinutes)
+    }
+
+    fun startTimeBeforeDeviceTimeMessage(): String {
+        return JvmTimeSupport.startTimeBeforeDeviceTimeMessage()
     }
 
     fun resolveScheduleForFinishTimeChange(

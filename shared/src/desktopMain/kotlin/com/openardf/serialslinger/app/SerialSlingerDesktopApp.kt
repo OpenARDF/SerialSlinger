@@ -100,6 +100,7 @@ import javax.swing.JEditorPane
 import javax.swing.JRadioButtonMenuItem
 import javax.swing.JProgressBar
 import javax.swing.SpinnerNumberModel
+import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.JTextPane
 import javax.swing.UIManager
@@ -3037,7 +3038,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             currentFinishTimeCompact = currentDurationFinishTime,
             proposedStartTimeCompact = normalizedStartTime,
             onCancel = {
-                restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
+                restoreAbsoluteStartTimeEditor(normalizedStartTime)
             },
         ) { choice ->
             if (choice.disablesEvent) {
@@ -3049,7 +3050,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 currentDaysToRun = connectedTimedSettings.daysToRun,
                 proposedDuration = chosenDuration,
                 onCancel = {
-                    restoreAbsoluteStartTimeEditor(connectedTimedSettings.startTimeCompact)
+                    restoreAbsoluteStartTimeEditor(normalizedStartTime)
                 },
             ) { preserveDaysToRun, effectiveDuration ->
                 val editRequest = ScheduleSubmitSupport.absoluteStartEdit(
@@ -3306,15 +3307,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return null
         }
 
-        val minimumStart = DesktopInputSupport.minimumStartTimeBoundary(validatedDeviceTime, stepMinutes = 5)
-        val selectedStart = DesktopInputSupport.parseCompactTimestamp(validatedSelected)
-        return if (selectedStart.isBefore(minimumStart)) {
-            JOptionPane.showMessageDialog(this, "Start Time can't be set earlier than Device Time.")
-            setDateTimeSpinnerValue(startTimeSpinner, minimumStart)
-            DesktopInputSupport.formatCompactTimestamp(minimumStart)
-        } else {
-            validatedSelected
+        val normalizedSelection = try {
+            DesktopInputSupport.normalizeStartTimeForChange(
+                startTimeCompact = validatedSelected,
+                currentTimeCompact = validatedDeviceTime,
+                stepMinutes = 5,
+            )
+        } catch (exception: Exception) {
+            JOptionPane.showMessageDialog(this, exception.message ?: "Invalid Start Time.")
+            return null
         }
+
+        val normalizedStart = normalizedSelection.startTimeCompact ?: return null
+        if (normalizedSelection.wasAdjustedToMinimum) {
+            JOptionPane.showMessageDialog(this, DesktopInputSupport.startTimeBeforeDeviceTimeMessage())
+            setDateTimeSpinnerValue(startTimeSpinner, DesktopInputSupport.parseCompactTimestamp(normalizedStart))
+        }
+        return normalizedStart
     }
 
     private fun normalizedFinishTimeSelectionForCommit(
@@ -5662,8 +5671,47 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "Connected to SignalSlinger on ${currentConnectedPortPath.orEmpty()}",
                 )
                 setStatus("Sent raw command.")
+                showRawCommandReplyDialog(command, responseLines)
             }
         }
+    }
+
+    private fun showRawCommandReplyDialog(
+        command: String,
+        responseLines: List<String>,
+    ) {
+        val replyText = if (responseLines.isEmpty()) {
+            "No reply received."
+        } else {
+            responseLines.joinToString(separator = "\n")
+        }
+        val textArea =
+            JTextArea(
+                buildString {
+                    appendLine("Command: $command")
+                    appendLine()
+                    append(replyText)
+                },
+            ).apply {
+                isEditable = false
+                lineWrap = false
+                wrapStyleWord = false
+                rows = 12
+                columns = 72
+                caretPosition = 0
+                font = java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, font.size)
+                border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
+            }
+        val scrollPane =
+            JScrollPane(textArea).apply {
+                preferredSize = Dimension(760, 320)
+            }
+        JOptionPane.showMessageDialog(
+            this,
+            scrollPane,
+            "Reply From SignalSlinger",
+            JOptionPane.PLAIN_MESSAGE,
+        )
     }
 
     private fun showConnectionIndicator(state: ConnectionIndicatorState, message: String) {

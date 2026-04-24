@@ -3,16 +3,26 @@ package com.openardf.serialslinger.transport
 internal class DesktopSerialLineBuffer {
     private val pendingText = StringBuilder()
     private val completeLines = mutableListOf<String>()
+    private var lastByteWasCarriageReturn = false
 
     fun appendAscii(bytes: ByteArray) {
         for (byte in bytes) {
             val ch = byte.toInt().toChar()
             when (ch) {
-                '\n' -> {
-                    completeLines += pendingText.toString().trimEnd('\r')
-                    pendingText.clear()
+                '\r' -> {
+                    flushPendingLine()
+                    lastByteWasCarriageReturn = true
                 }
-                else -> pendingText.append(ch)
+                '\n' -> {
+                    if (!lastByteWasCarriageReturn) {
+                        flushPendingLine()
+                    }
+                    lastByteWasCarriageReturn = false
+                }
+                else -> {
+                    pendingText.append(ch)
+                    lastByteWasCarriageReturn = false
+                }
             }
         }
     }
@@ -21,5 +31,16 @@ internal class DesktopSerialLineBuffer {
         val lines = completeLines.toList()
         completeLines.clear()
         return lines
+    }
+
+    fun clear() {
+        pendingText.clear()
+        completeLines.clear()
+        lastByteWasCarriageReturn = false
+    }
+
+    private fun flushPendingLine() {
+        completeLines += pendingText.toString()
+        pendingText.clear()
     }
 }

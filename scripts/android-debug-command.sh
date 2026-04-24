@@ -16,6 +16,7 @@ Usage:
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] get-log
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] clear-log
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] load
+  ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] load-emulator
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-event-type <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-fox-role <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-station-id <value>
@@ -123,29 +124,32 @@ ACTION=""
 EXTRA_ARGS=()
 case "$COMMAND" in
   get-state)
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_GET_STATE"
+    ACTION="com.SerialSlinger.openardf.DEBUG_GET_STATE"
     ;;
   get-snapshot)
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_GET_SNAPSHOT"
+    ACTION="com.SerialSlinger.openardf.DEBUG_GET_SNAPSHOT"
     ;;
   get-trace)
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_GET_TRACE"
+    ACTION="com.SerialSlinger.openardf.DEBUG_GET_TRACE"
     ;;
   get-log)
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_GET_LOG"
+    ACTION="com.SerialSlinger.openardf.DEBUG_GET_LOG"
     ;;
   clear-log)
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_CLEAR_LOG"
+    ACTION="com.SerialSlinger.openardf.DEBUG_CLEAR_LOG"
     ;;
   load)
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_LOAD"
+    ACTION="com.SerialSlinger.openardf.DEBUG_LOAD"
+    ;;
+  load-emulator)
+    ACTION="com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR"
     ;;
   set-event-type)
     if [ -z "$ARG1" ]; then
       echo "set-event-type requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_EVENT_TYPE"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_EVENT_TYPE"
     EXTRA_ARGS+=(--es event_type "$ARG1")
     ;;
   set-fox-role)
@@ -153,7 +157,7 @@ case "$COMMAND" in
       echo "set-fox-role requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_FOX_ROLE"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_FOX_ROLE"
     EXTRA_ARGS+=(--es fox_role "$ARG1")
     ;;
   set-station-id)
@@ -161,7 +165,7 @@ case "$COMMAND" in
       echo "set-station-id requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_STATION_ID"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_STATION_ID"
     EXTRA_ARGS+=(--es station_id "$ARG1")
     ;;
   set-id-speed)
@@ -169,7 +173,7 @@ case "$COMMAND" in
       echo "set-id-speed requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_ID_SPEED"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_ID_SPEED"
     EXTRA_ARGS+=(--es id_speed_wpm "$ARG1")
     ;;
   set-pattern-speed)
@@ -177,7 +181,7 @@ case "$COMMAND" in
       echo "set-pattern-speed requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_PATTERN_SPEED"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_PATTERN_SPEED"
     EXTRA_ARGS+=(--es pattern_speed_wpm "$ARG1")
     ;;
   set-current-frequency)
@@ -185,7 +189,7 @@ case "$COMMAND" in
       echo "set-current-frequency requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_CURRENT_FREQUENCY"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_CURRENT_FREQUENCY"
     EXTRA_ARGS+=(--es current_frequency "$ARG1")
     ;;
   set-frequency-bank)
@@ -193,7 +197,7 @@ case "$COMMAND" in
       echo "set-frequency-bank requires a bank id and a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_FREQUENCY_BANK"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_FREQUENCY_BANK"
     EXTRA_ARGS+=(--es bank_id "$ARG1" --es bank_frequency "$ARG2")
     ;;
   set-pattern-text)
@@ -201,7 +205,7 @@ case "$COMMAND" in
       echo "set-pattern-text requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_PATTERN_TEXT"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_PATTERN_TEXT"
     EXTRA_ARGS+=(--es pattern_text "$ARG1")
     ;;
   set-current-time)
@@ -209,7 +213,7 @@ case "$COMMAND" in
       echo "set-current-time requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_CURRENT_TIME"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_CURRENT_TIME"
     EXTRA_ARGS+=(--es current_time "$ARG1")
     ;;
   set-start-time)
@@ -217,7 +221,7 @@ case "$COMMAND" in
       echo "set-start-time requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_START_TIME"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_START_TIME"
     EXTRA_ARGS+=(--es start_time "$ARG1")
     ;;
   set-finish-time)
@@ -225,7 +229,7 @@ case "$COMMAND" in
       echo "set-finish-time requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_FINISH_TIME"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_FINISH_TIME"
     EXTRA_ARGS+=(--es finish_time "$ARG1")
     ;;
   set-days-to-run)
@@ -233,7 +237,7 @@ case "$COMMAND" in
       echo "set-days-to-run requires a value." >&2
       exit 1
     fi
-    ACTION="com.openardf.serialslinger.androidapp.DEBUG_SET_DAYS_TO_RUN"
+    ACTION="com.SerialSlinger.openardf.DEBUG_SET_DAYS_TO_RUN"
     EXTRA_ARGS+=(--es days_to_run "$ARG1")
     ;;
   *)
@@ -250,7 +254,7 @@ fi
 REMOTE_ARGS=(
   am broadcast
   -a "$ACTION"
-  -n com.openardf.serialslinger.androidapp/.AndroidDebugCommandReceiver
+  -n com.SerialSlinger.openardf/.AndroidDebugCommandReceiver
   "${EXTRA_ARGS[@]}"
 )
 

@@ -1,4 +1,5 @@
-package com.openardf.serialslinger.androidapp
+@file:Suppress("PackageName")
+package com.SerialSlinger.openardf
 
 import android.content.Context
 import android.content.BroadcastReceiver
@@ -40,6 +41,23 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                 AndroidSessionController.runProbe(
                     context = context,
                     requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
+                    source = "adb",
+                ) { result ->
+                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
+                    pendingResult.resultData =
+                        if (result.isSuccess) {
+                            AndroidSessionController.debugStateSummary()
+                        } else {
+                            result.exceptionOrNull()?.message ?: "Unknown load failure"
+                        }
+                    pendingResult.finish()
+                }
+            }
+            ACTION_LOAD_EMULATOR -> {
+                val pendingResult = goAsync()
+                AndroidSessionController.runProbe(
+                    context = context,
+                    requestedTargets = emulatorDirectSerialTargets(),
                     source = "adb",
                 ) { result ->
                     pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
@@ -389,24 +407,25 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         private const val resultOk = 1
         private const val resultCanceled = 0
 
-        const val ACTION_GET_STATE = "com.openardf.serialslinger.androidapp.DEBUG_GET_STATE"
-        const val ACTION_GET_SNAPSHOT = "com.openardf.serialslinger.androidapp.DEBUG_GET_SNAPSHOT"
-        const val ACTION_GET_TRACE = "com.openardf.serialslinger.androidapp.DEBUG_GET_TRACE"
-        const val ACTION_GET_LOG = "com.openardf.serialslinger.androidapp.DEBUG_GET_LOG"
-        const val ACTION_CLEAR_LOG = "com.openardf.serialslinger.androidapp.DEBUG_CLEAR_LOG"
-        const val ACTION_LOAD = "com.openardf.serialslinger.androidapp.DEBUG_LOAD"
-        const val ACTION_SET_EVENT_TYPE = "com.openardf.serialslinger.androidapp.DEBUG_SET_EVENT_TYPE"
-        const val ACTION_SET_FOX_ROLE = "com.openardf.serialslinger.androidapp.DEBUG_SET_FOX_ROLE"
-        const val ACTION_SET_STATION_ID = "com.openardf.serialslinger.androidapp.DEBUG_SET_STATION_ID"
-        const val ACTION_SET_ID_SPEED = "com.openardf.serialslinger.androidapp.DEBUG_SET_ID_SPEED"
-        const val ACTION_SET_PATTERN_SPEED = "com.openardf.serialslinger.androidapp.DEBUG_SET_PATTERN_SPEED"
-        const val ACTION_SET_CURRENT_FREQUENCY = "com.openardf.serialslinger.androidapp.DEBUG_SET_CURRENT_FREQUENCY"
-        const val ACTION_SET_FREQUENCY_BANK = "com.openardf.serialslinger.androidapp.DEBUG_SET_FREQUENCY_BANK"
-        const val ACTION_SET_PATTERN_TEXT = "com.openardf.serialslinger.androidapp.DEBUG_SET_PATTERN_TEXT"
-        const val ACTION_SET_CURRENT_TIME = "com.openardf.serialslinger.androidapp.DEBUG_SET_CURRENT_TIME"
-        const val ACTION_SET_START_TIME = "com.openardf.serialslinger.androidapp.DEBUG_SET_START_TIME"
-        const val ACTION_SET_FINISH_TIME = "com.openardf.serialslinger.androidapp.DEBUG_SET_FINISH_TIME"
-        const val ACTION_SET_DAYS_TO_RUN = "com.openardf.serialslinger.androidapp.DEBUG_SET_DAYS_TO_RUN"
+        const val ACTION_GET_STATE = "com.SerialSlinger.openardf.DEBUG_GET_STATE"
+        const val ACTION_GET_SNAPSHOT = "com.SerialSlinger.openardf.DEBUG_GET_SNAPSHOT"
+        const val ACTION_GET_TRACE = "com.SerialSlinger.openardf.DEBUG_GET_TRACE"
+        const val ACTION_GET_LOG = "com.SerialSlinger.openardf.DEBUG_GET_LOG"
+        const val ACTION_CLEAR_LOG = "com.SerialSlinger.openardf.DEBUG_CLEAR_LOG"
+        const val ACTION_LOAD = "com.SerialSlinger.openardf.DEBUG_LOAD"
+        const val ACTION_LOAD_EMULATOR = "com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR"
+        const val ACTION_SET_EVENT_TYPE = "com.SerialSlinger.openardf.DEBUG_SET_EVENT_TYPE"
+        const val ACTION_SET_FOX_ROLE = "com.SerialSlinger.openardf.DEBUG_SET_FOX_ROLE"
+        const val ACTION_SET_STATION_ID = "com.SerialSlinger.openardf.DEBUG_SET_STATION_ID"
+        const val ACTION_SET_ID_SPEED = "com.SerialSlinger.openardf.DEBUG_SET_ID_SPEED"
+        const val ACTION_SET_PATTERN_SPEED = "com.SerialSlinger.openardf.DEBUG_SET_PATTERN_SPEED"
+        const val ACTION_SET_CURRENT_FREQUENCY = "com.SerialSlinger.openardf.DEBUG_SET_CURRENT_FREQUENCY"
+        const val ACTION_SET_FREQUENCY_BANK = "com.SerialSlinger.openardf.DEBUG_SET_FREQUENCY_BANK"
+        const val ACTION_SET_PATTERN_TEXT = "com.SerialSlinger.openardf.DEBUG_SET_PATTERN_TEXT"
+        const val ACTION_SET_CURRENT_TIME = "com.SerialSlinger.openardf.DEBUG_SET_CURRENT_TIME"
+        const val ACTION_SET_START_TIME = "com.SerialSlinger.openardf.DEBUG_SET_START_TIME"
+        const val ACTION_SET_FINISH_TIME = "com.SerialSlinger.openardf.DEBUG_SET_FINISH_TIME"
+        const val ACTION_SET_DAYS_TO_RUN = "com.SerialSlinger.openardf.DEBUG_SET_DAYS_TO_RUN"
 
         const val EXTRA_DEVICE_NAME = "device_name"
         const val EXTRA_EVENT_TYPE = "event_type"

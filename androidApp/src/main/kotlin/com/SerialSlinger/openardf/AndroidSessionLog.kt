@@ -1,4 +1,5 @@
-package com.openardf.serialslinger.androidapp
+@file:Suppress("PackageName")
+package com.SerialSlinger.openardf
 
 import com.openardf.serialslinger.session.SerialTraceEntry
 import java.io.File

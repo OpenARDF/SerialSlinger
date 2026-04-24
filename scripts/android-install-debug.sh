@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_ID="com.openardf.serialslinger.androidapp"
-MAIN_ACTIVITY="com.openardf.serialslinger.androidapp.MainActivity"
+APP_ID="com.SerialSlinger.openardf"
+MAIN_ACTIVITY="com.SerialSlinger.openardf.MainActivity"
 DEFAULT_ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
 TARGET_SERIAL="${1:-${ANDROID_SERIAL:-}}"
 APK_PATH="$ROOT_DIR/androidApp/build/outputs/apk/debug/androidApp-debug.apk"

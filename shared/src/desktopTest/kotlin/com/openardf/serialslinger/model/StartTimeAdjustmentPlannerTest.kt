@@ -69,4 +69,28 @@ class StartTimeAdjustmentPlannerTest {
             options,
         )
     }
+
+    @Test
+    fun plan_includesExistingDurationAndDefaultWhenOldEventLengthDiffersAndFinishCannotStayUnchanged() {
+        val options = StartTimeAdjustmentPlanner.plan(
+            currentStartTimeCompact = "260420090000",
+            currentFinishTimeCompact = "260420140000",
+            proposedStartTimeCompact = "260420200000",
+            defaultEventLengthMinutes = 360,
+        )
+
+        assertEquals(
+            listOf(
+                StartTimeAdjustmentOption(
+                    kind = StartTimeAdjustmentOptionKind.KEEP_EXISTING_DURATION,
+                    duration = Duration.ofHours(5),
+                ),
+                StartTimeAdjustmentOption(
+                    kind = StartTimeAdjustmentOptionKind.ADJUST_FOR_DEFAULT_DURATION,
+                    duration = Duration.ofHours(6),
+                ),
+            ),
+            options,
+        )
+    }
 }

@@ -1,16 +1,40 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
+
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+
+if (keystorePropertiesFile.isFile) {
+    keystorePropertiesFile.inputStream().use(keystoreProperties::load)
+}
+
+fun signingValue(propertyName: String, environmentName: String): String? {
+    return keystoreProperties.getProperty(propertyName)?.trim()?.takeIf(String::isNotEmpty)
+        ?: providers.environmentVariable(environmentName).orNull?.trim()?.takeIf(String::isNotEmpty)
+}
+
+val releaseStoreFilePath = signingValue("storeFile", "SERIALSLINGER_UPLOAD_STORE_FILE")
+val releaseStorePassword = signingValue("storePassword", "SERIALSLINGER_UPLOAD_STORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "SERIALSLINGER_UPLOAD_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "SERIALSLINGER_UPLOAD_KEY_PASSWORD")
+
+val hasCompleteReleaseSigningConfig =
+    listOf(
+        releaseStoreFilePath,
+        releaseStorePassword,
+        releaseKeyAlias,
+        releaseKeyPassword,
+    ).all { !it.isNullOrBlank() }
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
 }
 
 android {
-    namespace = "com.openardf.serialslinger.androidapp"
+    namespace = "com.SerialSlinger.openardf"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.openardf.serialslinger.androidapp"
+        applicationId = "com.SerialSlinger.openardf"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -20,9 +44,23 @@ android {
         buildConfigField("String", "BUILD_DATE_UTC", "\"${rootProject.extra["serialSlingerBuildDateUtc"]}\"")
     }
 
+    signingConfigs {
+        if (hasCompleteReleaseSigningConfig) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseStoreFilePath))
+                storePassword = requireNotNull(releaseStorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasCompleteReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -33,17 +71,26 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 }
-
-kotlin {
-    jvmToolchain(17)
-
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
-    }
-}
-
 dependencies {
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
     implementation(project(":shared"))
+}
+
+tasks.register("printAndroidReleaseSigningStatus") {
+    group = "help"
+    description = "Prints whether the Android release signing inputs are available."
+
+    doLast {
+        if (hasCompleteReleaseSigningConfig) {
+            logger.lifecycle("Android release signing is configured.")
+        } else {
+            logger.lifecycle(
+                "Android release signing is not fully configured. " +
+                    "Provide keystore.properties or SERIALSLINGER_UPLOAD_* environment variables.",
+            )
+        }
+    }
 }

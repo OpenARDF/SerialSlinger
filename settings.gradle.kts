@@ -1,5 +1,3 @@
-rootProject.name = "SerialSlinger"
-
 pluginManagement {
     repositories {
         gradlePluginPortal()
@@ -7,6 +5,12 @@ pluginManagement {
         google()
     }
 }
+
+plugins {
+    id("org.gradle.toolchains.foojay-resolver-convention") version "0.9.0"
+}
+
+rootProject.name = "SerialSlinger"
 
 dependencyResolutionManagement {
     repositories {

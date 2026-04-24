@@ -85,6 +85,7 @@ class AndroidUsbTransport(
         connection?.close()
         serialPort = null
         connection = null
+        lineBuffer.clear()
         lastWriteAtMs = null
     }
 

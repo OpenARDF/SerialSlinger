@@ -2,6 +2,8 @@
 .claude/
 .gradle/
 .kotlin/
+.tmp/
+.tools/
 node_modules/
 build/
 **/build/
@@ -9,4 +11,16 @@ jdeploy-bundle/
 jdeploy/
 .DS_Store
 *.iml
+*.ipr
+*.iws
 local.properties
+keystore.properties
+gradle/gradle-daemon-jvm.properties
+.externalNativeBuild/
+.cxx/
+captures/
+*.apk
+*.aab
+*.ap_
+*.jks
+*.keystore

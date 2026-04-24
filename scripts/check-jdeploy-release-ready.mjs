@@ -22,12 +22,19 @@ function readFile(filePath, missingMessage) {
   return fs.readFileSync(filePath, "utf8");
 }
 
-function extractGradleVersion(buildGradleText) {
-  const match = buildGradleText.match(/serialSlingerVersion\s*=\s*"([^"]+)"/);
-  if (!match) {
+function extractGradleVersions(buildGradleText) {
+  const baseMatch = buildGradleText.match(/serialSlingerVersion\s*=\s*"([^"]+)"/);
+  if (!baseMatch) {
     fail("Could not find serialSlingerVersion in build.gradle.kts.");
   }
-  return match[1];
+  const suffixMatch = buildGradleText.match(/serialSlingerVersionSuffix\s*=\s*"([^"]*)"/);
+  if (!suffixMatch) {
+    fail("Could not find serialSlingerVersionSuffix in build.gradle.kts.");
+  }
+  const baseVersion = baseMatch[1];
+  const displayVersion = baseVersion + suffixMatch[1];
+  const packageVersion = suffixMatch[1].length === 0 ? baseVersion : `${baseVersion}-${suffixMatch[1]}`;
+  return { baseVersion, displayVersion, packageVersion };
 }
 
 function ensure(condition, message) {
@@ -41,12 +48,15 @@ const packageLock = JSON.parse(readFile(packageLockPath, "package-lock.json is m
 const buildGradleText = readFile(buildGradlePath, "build.gradle.kts is missing.");
 const workflowText = readFile(workflowPath, "The jDeploy release workflow is missing.");
 
-const gradleVersion = extractGradleVersion(buildGradleText);
+const gradleVersions = extractGradleVersions(buildGradleText);
 const expectedTag = `v${packageJson.version}`;
 
 ensure(packageJson.name === "serialslinger", `Expected package.json name to be 'serialslinger', found '${packageJson.name}'.`);
 ensure(/^[a-z0-9-]+$/.test(packageJson.name), "package.json name must stay lowercase and npm-safe.");
-ensure(packageJson.version === gradleVersion, `package.json version '${packageJson.version}' does not match build.gradle.kts version '${gradleVersion}'.`);
+ensure(
+  packageJson.version === gradleVersions.packageVersion,
+  `package.json version '${packageJson.version}' does not match build.gradle.kts package version '${gradleVersions.packageVersion}'.`,
+);
 ensure(packageLock.version === packageJson.version, `package-lock.json version '${packageLock.version}' does not match package.json version '${packageJson.version}'.`);
 ensure(packageLock.packages?.[""]?.version === packageJson.version, "package-lock.json root package version does not match package.json.");
 ensure(packageJson.devDependencies?.jdeploy, "package.json is missing the local jdeploy devDependency.");
@@ -65,7 +75,9 @@ console.log(
   [
     "jDeploy release preflight passed.",
     `Package: ${packageJson.name}@${packageJson.version}`,
-    `Gradle version: ${gradleVersion}`,
+    `Gradle base version: ${gradleVersions.baseVersion}`,
+    `Gradle display version: ${gradleVersions.displayVersion}`,
+    `Gradle package version: ${gradleVersions.packageVersion}`,
     `Target tag: ${expectedTag}`,
     "Workflow target: GitHub releases",
   ].join("\n"),
