@@ -25,7 +25,7 @@ kotlin {
 
     android {
         namespace = "com.openardf.serialslinger.shared"
-        compileSdk = 36
+        compileSdk = 37
         minSdk = 24
         withHostTest {}
 
