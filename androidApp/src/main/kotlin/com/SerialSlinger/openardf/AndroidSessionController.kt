@@ -33,6 +33,7 @@ import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.transport.AndroidDirectSerialTransport
 import com.openardf.serialslinger.transport.AndroidUsbTransport
 import com.openardf.serialslinger.transport.DeviceTransport
+import java.io.File
 import java.time.Duration
 import java.time.LocalDateTime
 import kotlin.concurrent.thread
@@ -3121,6 +3122,14 @@ object AndroidSessionController {
             1 -> "Deleted 1 Android session log."
             else -> "Deleted $deletedCount Android session logs."
         }
+    }
+
+    fun currentSessionLogFile(): File? {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return null
+        return log.ensureCurrentLogFile()
     }
 
     fun logAppEvent(

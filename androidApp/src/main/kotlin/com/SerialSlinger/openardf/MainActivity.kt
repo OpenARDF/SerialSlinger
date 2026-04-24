@@ -3,16 +3,19 @@ package com.SerialSlinger.openardf
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.app.AlertDialog
 import android.app.DatePickerDialog
 import android.app.Dialog
 import android.app.TimePickerDialog
+import android.content.ClipData
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -46,6 +49,7 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.util.TypedValue
+import androidx.core.content.FileProvider
 import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.DeviceSnapshot
@@ -2160,42 +2164,16 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             )
 
             if (!device.hasPermission) {
-                addView(
-                    rowButton("Request USB Permission") {
-                        val usbDevice = usbManager.deviceList.values.firstOrNull { it.deviceName == device.deviceName }
-                        if (usbDevice == null) {
-                            AndroidSessionController.recordStatus(
-                                "USB device disappeared before permission could be requested.",
-                                isError = true,
-                            )
-                            return@rowButton
-                        }
-                        AndroidUsbTransport.requestPermission(
-                            context = this@MainActivity,
-                            usbManager = usbManager,
-                            usbDevice = usbDevice,
-                            action = ACTION_USB_PERMISSION,
-                        )
-                        AndroidSessionController.recordStatus(
-                            "Permission request sent for ${device.productName ?: device.deviceName}.",
-                            isError = false,
-                        )
-                    },
-                )
+                addView(sectionBody("Android permission will be requested automatically when this device is detected."))
             } else if (device.supportedSerialDriver) {
                 addView(
-                    rowButton(
+                    sectionBody(
                         if (latestLoadedDeviceName == device.deviceName) {
-                            "Refresh SignalSlinger Snapshot"
+                            "This SignalSlinger is connected. Snapshot refresh happens automatically."
                         } else {
-                            "Load SignalSlinger Snapshot"
+                            "This SignalSlinger is ready. SerialSlinger will probe it automatically."
                         },
-                    ) {
-                        AndroidSessionController.runProbe(
-                            context = applicationContext,
-                            requestedDeviceName = device.deviceName,
-                        )
-                    },
+                    ),
                 )
             } else {
                 addView(sectionBody("USB permission is already available for this device."))
@@ -2611,12 +2589,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     ): LinearLayout {
         return cardLayout().apply {
             addView(sectionTitle("Actions"))
-            addView(
-                rowButton("Refresh USB Devices") {
-                    AndroidSessionController.recordStatus("USB device list refreshed.", isError = false)
-                    renderContent()
-                },
-            )
             addView(
                 disclosureButton(
                     label = "Developer Diagnostics",
@@ -3268,25 +3240,23 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun showToolsDialog(uiState: AndroidUiState) {
         val options =
             buildList<Pair<String, () -> Unit>> {
-                add(
-                    (if (isEmulatorDirectSerialTarget(uiState.latestLoadedTarget)) {
-                        "Refresh Emulator SignalSlinger"
-                    } else {
-                        "Load Emulator SignalSlinger"
-                    }) to {
-                        AndroidSessionController.runProbe(
-                            context = applicationContext,
-                            requestedTargets = emulatorDirectSerialTargets(),
-                            source = "tools",
-                        )
-                    },
-                )
+                if (isRunningInAndroidEmulator()) {
+                    add(
+                        (if (isEmulatorDirectSerialTarget(uiState.latestLoadedTarget)) {
+                            "Refresh Emulator SignalSlinger"
+                        } else {
+                            "Load Emulator SignalSlinger"
+                        }) to {
+                            AndroidSessionController.runProbe(
+                                context = applicationContext,
+                                requestedTargets = emulatorDirectSerialTargets(),
+                                source = "tools",
+                            )
+                        },
+                    )
+                }
                 add("Send Command To SignalSlinger" to {
                     showSendCommandDialog(uiState)
-                })
-                add("Refresh USB Devices" to {
-                    AndroidSessionController.recordStatus("USB device list refreshed.", isError = false)
-                    renderContent()
                 })
                 add("View Android Session Log" to {
                     showLargeTextDialog(
@@ -3294,6 +3264,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         text = AndroidSessionController.debugSessionLogSummary(),
                         colorizeLogCategories = true,
                     )
+                })
+                add("Email Android Session Log" to {
+                    emailAndroidSessionLog()
                 })
                 add("Clear Android Session Logs" to {
                     AlertDialog.Builder(this@MainActivity)
@@ -3315,6 +3288,89 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
             .setNegativeButton("Close", null)
             .showLogged("Tools")
+    }
+
+    private fun isRunningInAndroidEmulator(): Boolean {
+        val fingerprint = Build.FINGERPRINT.orEmpty().lowercase()
+        val model = Build.MODEL.orEmpty().lowercase()
+        val manufacturer = Build.MANUFACTURER.orEmpty().lowercase()
+        val brand = Build.BRAND.orEmpty().lowercase()
+        val device = Build.DEVICE.orEmpty().lowercase()
+        val product = Build.PRODUCT.orEmpty().lowercase()
+        val hardware = Build.HARDWARE.orEmpty().lowercase()
+
+        return fingerprint.startsWith("generic") ||
+            fingerprint.contains("emulator") ||
+            fingerprint.contains("sdk_gphone") ||
+            model.contains("android sdk built for") ||
+            model.contains("sdk_gphone") ||
+            manufacturer.contains("genymotion") ||
+            hardware == "goldfish" ||
+            hardware == "ranchu" ||
+            brand.startsWith("generic") && device.startsWith("generic") ||
+            product.contains("sdk") ||
+            product.contains("emulator") ||
+            product.contains("simulator")
+    }
+
+    private fun emailAndroidSessionLog() {
+        val candidates =
+            buildList {
+                currentSessionLogAttachmentUriOrNull()?.let { add(createAndroidSessionLogAttachmentIntent(it)) }
+                add(createAndroidSessionLogFallbackIntent())
+            }
+
+        candidates.forEach { intent ->
+            try {
+                startActivity(Intent.createChooser(intent, "Email Android Session Log"))
+                return
+            } catch (_: ActivityNotFoundException) {
+                // Try the next export path before reporting failure.
+            } catch (_: Throwable) {
+                // Some vendor builds throw non-standard activity launch errors here.
+            }
+        }
+
+        AndroidSessionController.recordStatus(
+            "No app is available to send the Android session log.",
+            isError = true,
+        )
+        renderContent()
+    }
+
+    private fun androidSessionLogEmailBody(): String {
+        return "Log file attached. Problem description:"
+    }
+
+    private fun currentSessionLogAttachmentUriOrNull(): Uri? {
+        val logFile = AndroidSessionController.currentSessionLogFile() ?: return null
+        return runCatching {
+            FileProvider.getUriForFile(
+                this,
+                "${BuildConfig.APPLICATION_ID}.fileprovider",
+                logFile,
+            )
+        }.getOrNull()
+    }
+
+    private fun createAndroidSessionLogAttachmentIntent(attachmentUri: Uri): Intent {
+        return Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_EMAIL, arrayOf("openardf@gmail.com"))
+            putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Android Session Log")
+            putExtra(Intent.EXTRA_TEXT, androidSessionLogEmailBody())
+            putExtra(Intent.EXTRA_STREAM, attachmentUri)
+            clipData = ClipData.newRawUri("SerialSlinger Android Session Log", attachmentUri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
+
+    private fun createAndroidSessionLogFallbackIntent(): Intent {
+        return Intent(Intent.ACTION_SENDTO).apply {
+            data = Uri.parse("mailto:openardf@gmail.com")
+            putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Android Session Log")
+            putExtra(Intent.EXTRA_TEXT, androidSessionLogEmailBody())
+        }
     }
 
     private fun showSendCommandDialog(uiState: AndroidUiState) {
