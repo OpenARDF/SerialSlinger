@@ -35,4 +35,3 @@ The project currently includes:
 ## More Information
 
 - [SignalSlinger Partner Project](https://github.com/OpenARDF/SignalSlinger)
-- [Developer Guide](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/developer-guide.md)
