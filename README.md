@@ -27,10 +27,9 @@ The goal is to make SignalSlinger setup practical without memorizing serial comm
 
 The project currently includes:
 
-- a desktop UI for loading, editing, and submitting settings
-- automatic desktop-side serial-port discovery and SignalSlinger probing
+- a UI for loading, editing, and submitting settings
+- automatic serial-port discovery and SignalSlinger probing
 - shared protocol, settings, and session logic in a Kotlin Multiplatform core
-- an initial Android app scaffold with USB-device discovery and shared-core integration
 
 ## More Information
 
