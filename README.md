@@ -20,9 +20,8 @@ The goal is to make SignalSlinger setup practical without memorizing serial comm
 
 ## Platform Status
 
-- macOS is the currently verified desktop path
-- Windows and Linux remain target platforms, but should still be treated as early-stage
-- Android is a planned target
+- Verified on Windows, macOS, and Android
+- Linux is a planned target, but has not yet been verified
 
 ## Project Status
 
@@ -37,8 +36,3 @@ The project currently includes:
 
 - [SignalSlinger Partner Project](https://github.com/OpenARDF/SignalSlinger)
 - [Developer Guide](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/developer-guide.md)
-- [Packaging And Release](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/packaging-and-release.md)
-- [Design Goals](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/design-goals.md)
-- [High-Level Design](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/high-level-design.md)
-- [Stack Decision](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/stack-decision.md)
-- [Domain Model](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/domain-model.md)
