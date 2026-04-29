@@ -57,10 +57,17 @@ object DeviceSessionController {
         transport: DeviceTransport,
         baseSettings: DeviceSettings = DeviceSettings.empty(),
         progress: ((completed: Int, total: Int) -> Unit)? = null,
+        onReportReceived: (() -> Unit)? = null,
     ): DeviceLoadResult {
         transport.connect()
         val connectedState = DeviceSessionWorkflow.connected(baseSettings)
-        return refreshFromDevice(connectedState, transport, startEditing = true, progress = progress)
+        return refreshFromDevice(
+            connectedState,
+            transport,
+            startEditing = true,
+            progress = progress,
+            onReportReceived = onReportReceived,
+        )
     }
 
     fun refreshFromDevice(
@@ -68,12 +75,20 @@ object DeviceSessionController {
         transport: DeviceTransport,
         startEditing: Boolean = false,
         progress: ((completed: Int, total: Int) -> Unit)? = null,
+        onReportReceived: (() -> Unit)? = null,
     ): DeviceLoadResult {
         val commands = mutableListOf<String>()
         val lines = mutableListOf<String>()
         val traceEntries = mutableListOf<SerialTraceEntry>()
         var updatedState = state.copy(connectionState = ConnectionState.CONNECTED)
         val bootstrapCommands = SignalSlingerFirmwareSupport.bootstrapLoadCommands()
+        var reportReceived = false
+        fun notifyReportReceived(responseLines: List<String>) {
+            if (!reportReceived && responseLines.any { SignalSlingerProtocolCodec.parseReportLine(it) != null }) {
+                reportReceived = true
+                onReportReceived?.invoke()
+            }
+        }
         progress?.invoke(0, bootstrapCommands.size.coerceAtLeast(1))
 
         for (command in bootstrapCommands) {
@@ -87,6 +102,7 @@ object DeviceSessionController {
             traceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
             }
+            notifyReportReceived(responseLines)
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
             progress?.invoke(commands.size, bootstrapCommands.size.coerceAtLeast(1))
         }
@@ -114,6 +130,7 @@ object DeviceSessionController {
             traceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
             }
+            notifyReportReceived(responseLines)
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
             progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
         }

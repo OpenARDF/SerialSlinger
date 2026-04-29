@@ -76,6 +76,7 @@ android {
 }
 dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
+    implementation(libs.androidx.core)
     implementation(project(":shared"))
 }
 

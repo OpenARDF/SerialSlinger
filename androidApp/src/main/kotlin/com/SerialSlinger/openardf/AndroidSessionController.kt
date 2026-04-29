@@ -30,9 +30,11 @@ import com.openardf.serialslinger.session.DeviceSubmitResult
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
+import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.transport.AndroidDirectSerialTransport
 import com.openardf.serialslinger.transport.AndroidUsbTransport
 import com.openardf.serialslinger.transport.DeviceTransport
+import java.io.File
 import java.time.Duration
 import java.time.LocalDateTime
 import kotlin.concurrent.thread
@@ -65,6 +67,9 @@ data class AndroidUiState(
     val latestSubmitSummary: String,
     val timeWorkflowNotice: String?,
     val scheduleDerivedDataPending: Boolean,
+    val probeInFlight: Boolean,
+    val signalSlingerReadInFlight: Boolean,
+    val currentTimeSyncInFlight: Boolean,
     val clockPhaseErrorMillis: Long?,
     val hasClockPhaseWarning: Boolean,
     val canClone: Boolean,
@@ -145,6 +150,7 @@ private data class ResolvedTransport(
 
 @SuppressLint("NewApi")
 object AndroidSessionController {
+    const val CLOCK_PHASE_WARNING_THRESHOLD_MILLIS = 500L
     private const val logTag = "SerialSlingerDebug"
     private const val syncLatencySampleCount = 3
     private const val syncMaxAttempts = 2
@@ -175,6 +181,8 @@ object AndroidSessionController {
     private var timeWorkflowNotice: String? = null
     private var scheduleDerivedDataPending: Boolean = false
     private var probeInFlight: Boolean = false
+    private var signalSlingerReadInFlight: Boolean = false
+    private var currentTimeSyncInFlight: Boolean = false
     private var deviceTimeOffset: Duration? = null
     private var lastClockPhaseErrorMillis: Long? = null
     private var cachedManualWriteDelayMillis: Long? = null
@@ -227,6 +235,9 @@ object AndroidSessionController {
                 latestSubmitSummary = latestSubmitSummary,
                 timeWorkflowNotice = timeWorkflowNotice,
                 scheduleDerivedDataPending = scheduleDerivedDataPending,
+                probeInFlight = probeInFlight,
+                signalSlingerReadInFlight = signalSlingerReadInFlight,
+                currentTimeSyncInFlight = currentTimeSyncInFlight,
                 clockPhaseErrorMillis = currentClockSkewMillisLocked(),
                 hasClockPhaseWarning = hasClockPhaseWarningLocked(),
                 canClone = canCloneLocked(),
@@ -251,6 +262,12 @@ object AndroidSessionController {
     fun isDisplayedDeviceTimeSynchronized(systemNow: LocalDateTime = LocalDateTime.now()): Boolean {
         synchronized(this) {
             return JvmTimeSupport.isTimeSynchronizedToSystem(displayedDeviceTimeCompactLocked(systemNow), systemNow)
+        }
+    }
+
+    fun currentClockSkewMillis(systemNow: LocalDateTime = LocalDateTime.now()): Long? {
+        synchronized(this) {
+            return currentClockSkewMillisLocked(systemNow)
         }
     }
 
@@ -454,7 +471,7 @@ object AndroidSessionController {
     }
 
     private fun canCloneLocked(): Boolean {
-        if (probeInFlight || scheduleDerivedDataPending) {
+        if (probeInFlight) {
             return false
         }
         val snapshot = latestSessionViewState?.state?.snapshot ?: return false
@@ -462,17 +479,17 @@ object AndroidSessionController {
         if (!snapshot.capabilities.supportsScheduling) {
             return false
         }
-        return hasRequiredCloneEventData(template) && hasRequiredCloneEventData(snapshot.settings)
+        return hasCompleteCloneTimedEventSettings(template)
     }
 
     private fun hasClockPhaseWarningLocked(): Boolean {
-        return currentClockSkewMillisLocked()?.let { abs(it) > 500L } == true
+        return currentClockSkewMillisLocked()?.let { abs(it) > CLOCK_PHASE_WARNING_THRESHOLD_MILLIS } == true
     }
 
     private fun currentClockSkewMillisLocked(systemNow: LocalDateTime = LocalDateTime.now()): Long? {
-        val exactMeasuredSkew = lastClockPhaseErrorMillis
-        if (exactMeasuredSkew != null) {
-            return exactMeasuredSkew
+        val offset = deviceTimeOffset
+        if (offset != null) {
+            return Duration.between(systemNow.plus(offset), systemNow).toMillis()
         }
 
         val displayedDeviceTime = displayedDeviceTimeCompactLocked(systemNow)
@@ -482,14 +499,23 @@ object AndroidSessionController {
         return Duration.between(displayedDeviceTime, systemNow).toMillis()
     }
 
-    private fun hasRequiredCloneEventData(settings: DeviceSettings): Boolean {
-        if (settings.eventType == EventType.NONE) {
+    private fun hasCompleteCloneTimedEventSettings(settings: DeviceSettings): Boolean {
+        if (settings.idCodeSpeedWpm !in 5..20) {
             return false
         }
-        if (settings.stationId.isBlank()) {
+        if (
+            EventProfileSupport.patternSpeedBelongsToTimedEventSettings(settings.eventType) &&
+            settings.patternCodeSpeedWpm !in 5..20
+        ) {
             return false
         }
         if (settings.startTimeCompact == null || settings.finishTimeCompact == null) {
+            return false
+        }
+        if (JvmTimeSupport.validEventDuration(settings.startTimeCompact, settings.finishTimeCompact) == null) {
+            return false
+        }
+        if (settings.daysToRun !in 1..255) {
             return false
         }
         val frequencyVisibility = EventProfileSupport.timedEventFrequencyVisibility(settings.eventType)
@@ -506,6 +532,27 @@ object AndroidSessionController {
             return false
         }
         return true
+    }
+
+    private fun markSignalSlingerReadInFlight() {
+        val shouldNotify =
+            synchronized(this) {
+                if (signalSlingerReadInFlight) {
+                    false
+                } else {
+                    signalSlingerReadInFlight = true
+                    statusText = "Reading data..."
+                    statusIsError = false
+                    true
+                }
+            }
+        if (shouldNotify) {
+            notifyListeners()
+        }
+    }
+
+    private fun hasSignalSlingerReportLine(lines: List<String>): Boolean {
+        return lines.any { line -> SignalSlingerProtocolCodec.parseReportLine(line) != null }
     }
 
     fun clearLoadedSessionIfMatches(
@@ -544,6 +591,7 @@ object AndroidSessionController {
                     false to desiredTarget
                 } else {
                     probeInFlight = true
+                    signalSlingerReadInFlight = false
                     true to desiredTarget
                 }
             }
@@ -578,7 +626,13 @@ object AndroidSessionController {
                     missingMessage = missingMessage,
                 ) { activeTarget, transport ->
                     resolvedTarget = activeTarget
-                    val initialLoad = DeviceSessionController.connectAndLoad(transport)
+                    val initialLoad = DeviceSessionController.connectAndLoad(
+                        transport = transport,
+                        onReportReceived = ::markSignalSlingerReadInFlight,
+                    )
+                    require(hasSignalSlingerReportLine(initialLoad.linesReceived)) {
+                        "No SignalSlinger response was received."
+                    }
                     val postLoadClockSample = postLoadClockSample(transport, initialLoad)
                     mergeLoadResults(initialLoad, postLoadClockSample?.first) to postLoadClockSample?.second
                 }
@@ -649,17 +703,18 @@ object AndroidSessionController {
                     }
                     timeWorkflowNotice = null
                     latestProbeSummary = renderProbeSummary(loadResult)
-                    statusText = "SignalSlinger loaded."
+                    statusText = "SignalSlinger Data Read Successfully"
                     statusIsError = false
                 } else {
                     latestProbeSummary = buildString {
-                        appendLine("Probe failed.")
+                        appendLine("No SignalSlinger found.")
                         append(result.exceptionOrNull()?.message ?: "Unknown error")
                     }.trim()
-                    statusText = "SignalSlinger probe failed."
+                    statusText = "No SignalSlinger found."
                     statusIsError = true
                 }
                 probeInFlight = false
+                signalSlingerReadInFlight = false
             }
 
             emitCommandLog(
@@ -2354,6 +2409,7 @@ object AndroidSessionController {
         }
 
         synchronized(this) {
+            currentTimeSyncInFlight = true
             latestSubmitSummary = "Synchronizing Device Time to Android system time..."
             statusText = "Synchronizing Device Time..."
             statusIsError = false
@@ -2378,10 +2434,14 @@ object AndroidSessionController {
                 )
             }
 
+            var commandSucceeded = false
+            var callbackResult: Result<DeviceSubmitResult>
             synchronized(this) {
+                currentTimeSyncInFlight = false
                 if (result.isSuccess) {
                     val syncResult = result.getOrThrow()
                     val finalAttempt = syncResult.finalAttempt
+                    commandSucceeded = syncResult.succeeded
                     latestSessionViewState = AndroidSessionViewState(
                         state = finalAttempt.state,
                         traceEntries = buildSyncTraceEntries(syncResult),
@@ -2396,18 +2456,47 @@ object AndroidSessionController {
                     clearScheduleDerivedDataPendingLocked()
                     latestSubmitSummary =
                         buildString {
-                            appendLine("Device Time synchronized to Android system time.")
+                            appendLine(
+                                if (syncResult.succeeded) {
+                                    "Device Time synchronized to Android system time."
+                                } else {
+                                    "Device Time sync failed."
+                                },
+                            )
                             finalAttempt.phaseErrorMillis?.let { phase ->
                                 appendLine("Measured phase error: ${JvmTimeSupport.formatSignedDurationMillis(phase)}")
                             }
                             append("Attempts: ${syncResult.attempts.size}")
                         }.trim()
-                    latestProbeSummary = "Latest load remains available above. Device Time sync completed."
+                    latestProbeSummary =
+                        if (syncResult.succeeded) {
+                            "Latest load remains available above. Device Time sync completed."
+                        } else {
+                            "Latest load remains available above. Device Time sync failed."
+                        }
                     statusText =
-                        finalAttempt.phaseErrorMillis?.let { phase ->
-                            "Device Time synchronized (${JvmTimeSupport.formatSignedDurationMillis(phase)})."
-                        } ?: "Device Time synchronized."
-                    statusIsError = false
+                        if (syncResult.succeeded) {
+                            finalAttempt.phaseErrorMillis?.let { phase ->
+                                "Device Time synchronized (${JvmTimeSupport.formatSignedDurationMillis(phase)})."
+                            } ?: "Device Time synchronized."
+                        } else {
+                            finalAttempt.phaseErrorMillis?.let { phase ->
+                                "Device Time sync failed (${JvmTimeSupport.formatSignedDurationMillis(phase)})."
+                            } ?: "Device Time sync failed."
+                        }
+                    statusIsError = !syncResult.succeeded
+                    callbackResult =
+                        if (syncResult.succeeded) {
+                            Result.success(finalAttempt.submitResult)
+                        } else {
+                            Result.failure(
+                                IllegalStateException(
+                                    finalAttempt.phaseErrorMillis?.let { phase ->
+                                        "Device Time sync failed; measured phase error ${JvmTimeSupport.formatSignedDurationMillis(phase)}."
+                                    } ?: "Device Time sync failed; measured phase error is unavailable.",
+                                ),
+                            )
+                        }
                 } else {
                     latestSubmitSummary = buildString {
                         appendLine("Submit failed.")
@@ -2416,24 +2505,20 @@ object AndroidSessionController {
                     statusText = "Device Time sync failed."
                     statusIsError = true
                     clearScheduleDerivedDataPendingLocked()
+                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Device Time sync failed."))
                 }
             }
 
             emitCommandLog(
                 command = "sync-current-time",
                 source = source,
-                success = result.isSuccess,
+                success = commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
             )
             notifyListeners()
             onComplete?.let { callback ->
                 mainHandler.post {
-                    callback(
-                        result.fold(
-                            onSuccess = { syncResult -> Result.success(syncResult.finalAttempt.submitResult) },
-                            onFailure = { error -> Result.failure(error) },
-                        ),
-                    )
+                    callback(callbackResult)
                 }
             }
         }
@@ -3123,6 +3208,14 @@ object AndroidSessionController {
         }
     }
 
+    fun currentSessionLogFile(): File? {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return null
+        return log.ensureCurrentLogFile()
+    }
+
     fun logAppEvent(
         title: String,
         lines: List<String>,
@@ -3418,7 +3511,7 @@ object AndroidSessionController {
                 syncComplete = true
                 return@repeat
             }
-            if (abs(phaseErrorMillis) <= 500L) {
+            if (abs(phaseErrorMillis) <= CLOCK_PHASE_WARNING_THRESHOLD_MILLIS) {
                 syncComplete = true
                 return@repeat
             }
@@ -3430,7 +3523,7 @@ object AndroidSessionController {
             latencySamples = latencySamples,
             attempts = attempts,
             finalAttempt = finalAttempt,
-            succeeded = finalAttempt.phaseErrorMillis?.let { abs(it) <= 500L } ?: true,
+            succeeded = finalAttempt.phaseErrorMillis?.let { abs(it) <= CLOCK_PHASE_WARNING_THRESHOLD_MILLIS } ?: true,
         )
     }
 

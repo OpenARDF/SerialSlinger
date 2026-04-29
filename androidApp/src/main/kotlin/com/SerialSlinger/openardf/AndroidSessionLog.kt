@@ -37,6 +37,20 @@ class AndroidSessionLog(
         return File(logDirectory(), "serialslinger-$date.log")
     }
 
+    fun ensureCurrentLogFile(): File {
+        val file = currentLogFile()
+        if (!file.exists()) {
+            file.parentFile?.mkdirs()
+            file.writeText(
+                renderSection(
+                    title = "Android Session Log",
+                    entries = listOf(AndroidLogEntry(message = "<no log entries captured yet>")),
+                ),
+            )
+        }
+        return file
+    }
+
     fun appendSection(title: String, entries: List<AndroidLogEntry>): String {
         val rendered = renderSection(title, entries)
         currentLogFile().appendText(rendered)

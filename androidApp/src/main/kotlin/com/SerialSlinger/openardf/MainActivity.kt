@@ -3,19 +3,24 @@ package com.SerialSlinger.openardf
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.app.AlertDialog
 import android.app.DatePickerDialog
 import android.app.Dialog
 import android.app.TimePickerDialog
+import android.content.ClipData
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
@@ -25,6 +30,7 @@ import android.os.Looper
 import android.view.View
 import android.view.SoundEffectConstants
 import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.text.InputType
 import android.text.SpannableStringBuilder
 import android.text.method.LinkMovementMethod
@@ -42,10 +48,15 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.PopupWindow
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.util.TypedValue
+import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.DeviceSnapshot
@@ -78,6 +89,7 @@ import com.openardf.serialslinger.transport.SignalSlingerReadPlan
 import java.time.Duration
 import java.time.LocalDateTime
 import java.util.WeakHashMap
+import kotlin.math.abs
 
 @SuppressLint("NewApi")
 class MainActivity : Activity() {
@@ -145,6 +157,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private val autoDetectHandler = Handler(Looper.getMainLooper())
     private val clockDisplayHandler = Handler(Looper.getMainLooper())
     private var autoDetectGeneration: Int = 0
+    private var autoDetectSearchingForHeader: Boolean = false
     private var pendingAutoPermissionDeviceName: String? = null
     private var autoProbeInFlightDeviceName: String? = null
     private val autoPermissionDeniedDeviceNames = mutableSetOf<String>()
@@ -156,6 +169,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var displayedScheduleSnapshot: com.openardf.serialslinger.model.DeviceSnapshot? = null
     private var scheduleDerivedDataPending: Boolean = false
     private var headerStatusMessageView: TextView? = null
+    private var statusPopupWindow: PopupWindow? = null
+    private var statusPopupDismissRunnable: Runnable? = null
+    private var lastStatusPopupKey: String? = null
     private var thermalHeaderWarningText: String? = null
     private var thermalHeaderWarningDetail: String? = null
     private var relativeStartDisplaySelectionOverride: RelativeTimeSelection? = null
@@ -258,6 +274,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enterImmersiveFullScreen()
 
         AndroidSessionController.initialize(applicationContext)
         uiPreferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -307,7 +324,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
         registerUsbReceiver()
         if (!handleUsbLaunchIntent(intent, fromNewIntent = false)) {
-            AndroidSessionController.recordStatus("SignalSlinger disconnected.", isError = false)
+            AndroidSessionController.recordStatus("Searching for SignalSlinger...", isError = true)
             scheduleAutoDetect(delayMs = 0L)
         }
         renderContent()
@@ -322,6 +339,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     override fun onResume() {
         super.onResume()
+        enterImmersiveFullScreen()
         AndroidSessionController.addListener(refreshListener)
         scheduleAutoDetect(delayMs = 0L)
         renderContent()
@@ -332,13 +350,30 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         autoDetectGeneration += 1
         autoDetectHandler.removeCallbacksAndMessages(null)
         clockDisplayHandler.removeCallbacksAndMessages(null)
+        dismissStatusPopup()
         AndroidSessionController.removeListener(refreshListener)
         super.onPause()
     }
 
     override fun onDestroy() {
+        dismissStatusPopup()
         unregisterReceiver(usbReceiver)
         super.onDestroy()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            enterImmersiveFullScreen()
+        }
+    }
+
+    private fun enterImmersiveFullScreen() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
     }
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
@@ -361,19 +396,31 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun scheduleAutoDetect(
         delayMs: Long,
         attempt: Int = 0,
+        forceReload: Boolean = false,
     ) {
+        val shouldShowSearch = forceReload || AndroidSessionController.snapshotUiState().sessionViewState == null
+        if (shouldShowSearch && !autoDetectSearchingForHeader) {
+            autoDetectSearchingForHeader = true
+            renderContent()
+        }
         val generation = ++autoDetectGeneration
         autoDetectHandler.postDelayed(
             {
                 if (generation == autoDetectGeneration) {
-                    runAutoDetect(attempt)
+                    runAutoDetect(
+                        attempt = attempt,
+                        forceReload = forceReload,
+                    )
                 }
             },
             delayMs,
         )
     }
 
-    private fun runAutoDetect(attempt: Int) {
+    private fun runAutoDetect(
+        attempt: Int,
+        forceReload: Boolean = false,
+    ) {
         val usbDevices = AndroidUsbTransport.connectedDevices(usbManager)
         val supportedDevices = usbDevices.filter { it.supportedSerialDriver }
         val permittedSupportedDevices = supportedDevices.filter { it.hasPermission }
@@ -391,7 +438,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     latestLoadedDeviceName = loadedDeviceName,
                 )
             if (targetDevice != null) {
-                if (uiState.sessionViewState != null && uiState.latestLoadedDeviceName == targetDevice.deviceName) {
+                if (!forceReload && uiState.sessionViewState != null && uiState.latestLoadedDeviceName == targetDevice.deviceName) {
+                    autoDetectSearchingForHeader = false
                     return
                 }
                 if (autoProbeInFlightDeviceName == targetDevice.deviceName) {
@@ -412,6 +460,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     source = "auto",
                 ) { result ->
                     autoProbeInFlightDeviceName = null
+                    if (result.isSuccess) {
+                        autoDetectSearchingForHeader = false
+                    } else if (attempt >= AUTO_DETECT_MAX_RETRIES) {
+                        autoDetectSearchingForHeader = false
+                        if (AndroidSessionController.snapshotUiState().sessionViewState == null) {
+                            AndroidSessionController.recordStatus("No SignalSlinger found.", isError = true)
+                        }
+                    }
+                    renderContent()
                     AndroidSessionController.logAppEvent(
                         title = "usb",
                         lines = listOf(
@@ -424,6 +481,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         scheduleAutoDetect(
                             delayMs = AUTO_DETECT_RETRY_DELAY_MS,
                             attempt = attempt + 1,
+                            forceReload = forceReload,
                         )
                     }
                 }
@@ -469,8 +527,25 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             scheduleAutoDetect(
                 delayMs = AUTO_DETECT_RETRY_DELAY_MS,
                 attempt = attempt + 1,
+                forceReload = forceReload,
             )
+        } else if (autoDetectSearchingForHeader) {
+            autoDetectSearchingForHeader = false
+            if (AndroidSessionController.snapshotUiState().sessionViewState == null) {
+                AndroidSessionController.recordStatus("No SignalSlinger found.", isError = true)
+            } else {
+                renderContent()
+            }
         }
+    }
+
+    private fun requestSignalSlingerReload() {
+        autoDetectSearchingForHeader = true
+        AndroidSessionController.recordStatus("Searching for SignalSlinger...", isError = true)
+        scheduleAutoDetect(
+            delayMs = 0L,
+            forceReload = true,
+        )
     }
 
     private fun preferredAutoDetectDevice(
@@ -517,9 +592,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val loadedStatus = snapshot?.status
         val loadedInfo = snapshot?.info
         val mainRow = tabletRow()
-        val deviceSettingsCard = cardLayout()
-        val timedEventCard = cardLayout()
-        val deviceDataCard = cardLayout()
+        val deviceSettingsCard = outlinedCardLayout()
+        val timedEventCard = timedEventCardLayout()
+        val deviceDataCard = outlinedCardLayout()
         val deviceDataInOwnColumn = deviceDataVisible && isExpandedScreen
 
         val eventTypeOptions = EventProfileSupport.selectableEventTypes()
@@ -707,7 +782,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val currentTimeRow =
             if (deviceDataVisible) {
                 stackedLabeledRow(
-                    deviceTimeRowLabel(),
+                    deviceTimeRowLabel(
+                        systemNow = LocalDateTime.now(),
+                        syncInProgress = uiState.currentTimeSyncInFlight,
+                    ),
                     currentTimeField,
                     captureLabelView = { labelView ->
                         currentTimeLabelView = labelView
@@ -716,7 +794,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
             } else {
                 compactLabeledRow(
-                    deviceTimeRowLabel(),
+                    deviceTimeRowLabel(
+                        systemNow = LocalDateTime.now(),
+                        syncInProgress = uiState.currentTimeSyncInFlight,
+                    ),
                     currentTimeField,
                     labelWidthDp = 132,
                     captureLabelView = { labelView ->
@@ -726,6 +807,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
             }
         deviceSettingsCard.addView(currentTimeRow)
+        if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) {
+            currentTimeLabelField?.apply {
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { runCurrentTimeSystemSyncOrPreview() }
+            }
+        }
         installDeviceTimeSettingToggle(currentTimeField, currentTimeLabelField, currentTimeRow)
         currentTimeDisplayField = currentTimeField
         if (systemTimeVisible) {
@@ -816,7 +904,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             ),
         )
 
-        timedEventCard.addView(sectionTitle("Timed Event Settings"))
+        timedEventCard.addView(sectionTitle("Timed Event Settings", textColor = CLONE_THEME_BLUE))
         uiState.timeWorkflowNotice?.let { notice ->
             timedEventCard.addView(calloutView(notice))
         }
@@ -1266,6 +1354,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         } else {
             null
         })
+        if (finishTimeEditable) {
+            lastsLabelView?.installTapOnlyClick()
+        }
 
         val daysToRunSpinner =
             integerSpinner(
@@ -1505,7 +1596,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         } else {
             val leftColumn =
                 tabletColumn().apply {
-                    addView(stackedCard(deviceSettingsCard))
+                    addView(stackedCard(deviceSettingsCard, includeTopMargin = false))
                     if (deviceDataVisible) {
                         addView(stackedCard(deviceDataCard))
                     }
@@ -1723,8 +1814,16 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         return displayedDeviceTimeCompactForUi(systemNow)?.let(JvmTimeSupport::formatCompactTimestamp).orEmpty()
     }
 
-    private fun isDisplayedDeviceTimeSynchronizedForUi(systemNow: LocalDateTime = LocalDateTime.now()): Boolean {
-        return JvmTimeSupport.isTimeSynchronizedToSystem(displayedDeviceTimeCompactForUi(systemNow), systemNow)
+    private fun deviceTimeClockSkewMillisForUi(systemNow: LocalDateTime = LocalDateTime.now()): Long? {
+        if (!isPreviewModeActive()) {
+            return AndroidSessionController.currentClockSkewMillis(systemNow)
+        }
+        val displayedDeviceTime =
+            displayedDeviceTimeCompactForUi(systemNow)
+                ?.let(JvmTimeSupport::normalizeCurrentTimeCompactForDisplay)
+                ?.let(JvmTimeSupport::parseCompactTimestamp)
+                ?: return null
+        return Duration.between(displayedDeviceTime, systemNow).toMillis()
     }
 
     private fun displayedDaysToRunRemainingSummaryForUi(systemNow: LocalDateTime = LocalDateTime.now()): String {
@@ -1808,6 +1907,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             updatePreviewSettings { settings ->
                 settings.copy(currentTimeCompact = JvmTimeSupport.currentSystemTimeCompact())
             }
+            return
+        }
+        if (AndroidSessionController.snapshotUiState().currentTimeSyncInFlight) {
             return
         }
         AndroidSessionController.runCurrentTimeSystemSync(context = applicationContext)
@@ -1984,22 +2086,49 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun updateDisplayedClockFields() {
         val systemNow = LocalDateTime.now()
+        val uiState = AndroidSessionController.snapshotUiState()
         currentTimeDisplayField?.setText(displayedDeviceTimeTextForUi(systemNow))
-        val deviceTimeOutOfSync =
-            deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC &&
-                !isDisplayedDeviceTimeSynchronizedForUi(systemNow)
-        val warningColor = Color.parseColor("#9E1C1C")
+        val deviceTimeSkewMillis = deviceTimeClockSkewMillisForUi(systemNow)
+        val deviceTimeSyncFailed =
+            !uiState.currentTimeSyncInFlight &&
+                uiState.statusIsError &&
+                uiState.statusText.startsWith("Device Time sync failed")
+        val deviceTimeColor =
+            when {
+                uiState.currentTimeSyncInFlight -> Color.parseColor("#B45309")
+                deviceTimeSyncFailed -> Color.parseColor("#9E1C1C")
+                deviceTimeSkewMillis == null -> null
+                abs(deviceTimeSkewMillis) > AndroidSessionController.CLOCK_PHASE_WARNING_THRESHOLD_MILLIS -> Color.parseColor("#9E1C1C")
+                else -> Color.parseColor("#166534")
+            }
         val normalLabelColor = Color.parseColor("#1F1F1F")
         val normalFieldColor = Color.parseColor("#1F2937")
-        currentTimeLabelView?.setTextColor(if (deviceTimeOutOfSync) warningColor else normalLabelColor)
-        currentTimeDisplayField?.setTextColor(if (deviceTimeOutOfSync) warningColor else normalFieldColor)
+        currentTimeLabelView?.text =
+            deviceTimeRowLabel(
+                systemNow = systemNow,
+                syncInProgress = uiState.currentTimeSyncInFlight,
+            )
+        currentTimeLabelView?.setTextColor(deviceTimeColor ?: normalLabelColor)
+        currentTimeDisplayField?.apply {
+            if (uiState.currentTimeSyncInFlight) {
+                setBackgroundColor(Color.parseColor("#B45309"))
+                setTextColor(Color.WHITE)
+            } else {
+                if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) {
+                    setBackgroundColor(Color.WHITE)
+                } else {
+                    background = null
+                }
+                setTextColor(deviceTimeColor ?: normalFieldColor)
+            }
+        }
         currentTimeDisplayField?.hint =
             if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) {
                 "Tap to sync Device Time"
             } else {
                 "Device Time"
             }
-        systemTimeDisplayField?.text = formatDisplayTimestamp(LocalDateTime.now().withNano(0))
+        systemTimeDisplayField?.text = formatDisplayTimestamp(systemNow.withNano(0))
         val currentSchedulePending = AndroidSessionController.isScheduleDerivedDataPending()
         scheduleDerivedDataPending = currentSchedulePending
         eventStatusDisplayField?.text =
@@ -2160,42 +2289,16 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             )
 
             if (!device.hasPermission) {
-                addView(
-                    rowButton("Request USB Permission") {
-                        val usbDevice = usbManager.deviceList.values.firstOrNull { it.deviceName == device.deviceName }
-                        if (usbDevice == null) {
-                            AndroidSessionController.recordStatus(
-                                "USB device disappeared before permission could be requested.",
-                                isError = true,
-                            )
-                            return@rowButton
-                        }
-                        AndroidUsbTransport.requestPermission(
-                            context = this@MainActivity,
-                            usbManager = usbManager,
-                            usbDevice = usbDevice,
-                            action = ACTION_USB_PERMISSION,
-                        )
-                        AndroidSessionController.recordStatus(
-                            "Permission request sent for ${device.productName ?: device.deviceName}.",
-                            isError = false,
-                        )
-                    },
-                )
+                addView(sectionBody("Android permission will be requested automatically when this device is detected."))
             } else if (device.supportedSerialDriver) {
                 addView(
-                    rowButton(
+                    sectionBody(
                         if (latestLoadedDeviceName == device.deviceName) {
-                            "Refresh SignalSlinger Snapshot"
+                            "This SignalSlinger is connected. Snapshot refresh happens automatically."
                         } else {
-                            "Load SignalSlinger Snapshot"
+                            "This SignalSlinger is ready. SerialSlinger will probe it automatically."
                         },
-                    ) {
-                        AndroidSessionController.runProbe(
-                            context = applicationContext,
-                            requestedDeviceName = device.deviceName,
-                        )
-                    },
+                    ),
                 )
             } else {
                 addView(sectionBody("USB permission is already available for this device."))
@@ -2293,21 +2396,40 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         headerStatusMessageView = null
         val disconnectedLocked = uiState.sessionViewState == null && !previewModeEnabled
         val thermalWarningActive = thermalHeaderWarningText != null
+        val readingData = uiState.signalSlingerReadInFlight
         val connectionText =
             thermalHeaderWarningText ?: when {
-                uiState.latestLoadedTarget != null && uiState.sessionViewState != null -> "SignalSlinger loaded."
-                uiState.sessionViewState == null -> "SignalSlinger disconnected."
-                else -> uiState.statusText
+                readingData -> "Reading data..."
+                autoDetectSearchingForHeader -> "Searching for SignalSlinger..."
+                else -> "Reload SignalSlinger Data"
+            }
+        val connectionColor =
+            when {
+                thermalWarningActive -> Color.parseColor("#9E1C1C")
+                readingData -> Color.parseColor("#B45309")
+                autoDetectSearchingForHeader -> Color.parseColor("#9E1C1C")
+                uiState.sessionViewState != null -> Color.parseColor("#1F5F2C")
+                else -> Color.parseColor("#9E1C1C")
+            }
+        val connectionClick =
+            if (!thermalWarningActive && !readingData && !autoDetectSearchingForHeader) {
+                { requestSignalSlingerReload() }
+            } else {
+                null
             }
         val headerMessage =
             thermalHeaderWarningDetail ?: when {
                 uiState.sessionViewState == null && previewModeEnabled ->
                     "Preview Mode. Connect SignalSlinger to the USB port for live operation."
-                uiState.sessionViewState == null ->
+                uiState.sessionViewState == null && !autoDetectSearchingForHeader && !readingData ->
                     "Connect SignalSlinger to the USB port"
-                else -> uiState.statusText.takeIf { it.isNotBlank() && it != connectionText }
+                else ->
+                    uiState.statusText
+                        .takeIf { it.isNotBlank() && it != connectionText }
+                        ?.takeUnless { it in setOf("SignalSlinger loaded.", "Loading SignalSlinger...") }
             }
         val headerIsError = thermalWarningActive || uiState.statusIsError
+        maybeShowStatusPopup(headerMessage, headerIsError)
         return cardLayout().apply {
             addView(
                 LinearLayout(this@MainActivity).apply {
@@ -2335,16 +2457,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             addView(
                                 statusView(
                                     text = connectionText,
-                                    isError = headerIsError,
-                                    onClick =
-                                        uiState.latestLoadedTarget?.let { target ->
-                                            {
-                                                AndroidSessionController.runProbe(
-                                                    context = applicationContext,
-                                                    requestedTarget = target,
-                                                )
-                                            }
-                                        },
+                                    textColor = connectionColor,
+                                    underlined = connectionClick != null,
+                                    onClick = connectionClick,
                                 ).apply {
                                     layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
                                     setPadding(0, 0, 0, (6 * resources.displayMetrics.density).toInt())
@@ -2373,7 +2488,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 addView(
                                     TextView(this@MainActivity).apply {
                                         text = message
-                                        textSize = 13f
+                                        textSize = 15f
                                         gravity = if (isNarrowScreen) Gravity.START else Gravity.END
                                         textAlignment = if (isNarrowScreen) View.TEXT_ALIGNMENT_VIEW_START else View.TEXT_ALIGNMENT_VIEW_END
                                         setTextColor(if (headerIsError) Color.parseColor("#9E1C1C") else Color.parseColor("#475569"))
@@ -2397,6 +2512,84 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 },
             )
         }
+    }
+
+    private fun maybeShowStatusPopup(
+        message: String?,
+        isError: Boolean,
+    ) {
+        val statusText = message?.trim().takeIf { !it.isNullOrBlank() } ?: return
+        val popupKey = "${if (isError) "error" else "info"}|$statusText"
+        if (popupKey == lastStatusPopupKey) {
+            return
+        }
+        lastStatusPopupKey = popupKey
+
+        dismissStatusPopup()
+        val density = resources.displayMetrics.density
+        val backgroundColor =
+            if (isError) {
+                Color.parseColor("#9E1C1C")
+            } else {
+                Color.parseColor("#166534")
+            }
+        val popupContent =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background =
+                    GradientDrawable().apply {
+                        setColor(backgroundColor)
+                        cornerRadius = 12 * density
+                    }
+                elevation = 10 * density
+                setPadding((18 * density).toInt(), (14 * density).toInt(), (18 * density).toInt(), (14 * density).toInt())
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text = statusText
+                        textSize = 17f
+                        setTypeface(Typeface.DEFAULT_BOLD)
+                        setTextColor(Color.WHITE)
+                    },
+                )
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text = "Tap to dismiss"
+                        textSize = 13f
+                        setTextColor(Color.WHITE)
+                        alpha = 0.82f
+                        setPadding(0, (6 * density).toInt(), 0, 0)
+                    },
+                )
+                setOnClickListener { dismissStatusPopup() }
+            }
+        val popupWidth = (resources.displayMetrics.widthPixels - (32 * density).toInt()).coerceAtMost((520 * density).toInt())
+        statusPopupWindow =
+            PopupWindow(popupContent, popupWidth, WRAP_CONTENT, false).apply {
+                isOutsideTouchable = true
+                setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                elevation = 12 * density
+            }
+        content.post {
+            statusPopupWindow?.takeIf { !it.isShowing }?.showAtLocation(
+                content,
+                Gravity.CENTER,
+                0,
+                0,
+            )
+        }
+        statusPopupDismissRunnable =
+            Runnable {
+                dismissStatusPopup()
+            }.also { dismissRunnable ->
+                clockDisplayHandler.postDelayed(dismissRunnable, STATUS_POPUP_DURATION_MS)
+            }
+    }
+
+    private fun dismissStatusPopup() {
+        statusPopupDismissRunnable?.let(clockDisplayHandler::removeCallbacks)
+        statusPopupDismissRunnable = null
+        statusPopupWindow?.dismiss()
+        statusPopupWindow = null
     }
 
     // Keep portrait phones stacked, but let landscape phones use the wider split layout.
@@ -2441,11 +2634,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         return view
     }
 
-    private fun <T : View> stackedCard(view: T): T {
+    private fun <T : View> stackedCard(
+        view: T,
+        includeTopMargin: Boolean = true,
+    ): T {
         view.layoutParams =
             LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
                 val verticalMargin = (8 * resources.displayMetrics.density).toInt()
-                topMargin = verticalMargin
+                topMargin = if (includeTopMargin) verticalMargin else 0
                 bottomMargin = verticalMargin
             }
         return view
@@ -2611,12 +2807,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     ): LinearLayout {
         return cardLayout().apply {
             addView(sectionTitle("Actions"))
-            addView(
-                rowButton("Refresh USB Devices") {
-                    AndroidSessionController.recordStatus("USB device list refreshed.", isError = false)
-                    renderContent()
-                },
-            )
             addView(
                 disclosureButton(
                     label = "Developer Diagnostics",
@@ -3017,10 +3207,17 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         labelView: TextView?,
         extraTouchTarget: View? = null,
     ) {
-        installDelayedLongPressToggle(view, labelView, extraTouchTarget) {
+        val onLongPress = {
             performAnimatedToggle(view, labelView) {
                 toggleDeviceTimeSetMode()
             }
+        }
+        installLongPressGesture(view, allowShortTap = true, onLongPress = onLongPress)
+        labelView?.let { label ->
+            installLongPressGesture(label, allowShortTap = true, onLongPress = onLongPress)
+        }
+        extraTouchTarget?.takeIf { it !== view && it !== labelView }?.let { target ->
+            installLongPressGesture(target, allowShortTap = false, onLongPress = onLongPress)
         }
     }
 
@@ -3063,11 +3260,18 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         allowShortTap: Boolean,
         onLongPress: () -> Unit,
     ) {
+        val touchSlop = ViewConfiguration.get(view.context).scaledTouchSlop
+        var downX = 0f
+        var downY = 0f
+        var movedBeyondTap = false
         var longPressTriggered = false
         var longPressRunnable: Runnable? = null
         view.setOnTouchListener { touchedView, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                    movedBeyondTap = false
                     longPressTriggered = false
                     longPressRunnable =
                         Runnable {
@@ -3078,11 +3282,18 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         }
                     true
                 }
-                MotionEvent.ACTION_MOVE -> true
+                MotionEvent.ACTION_MOVE -> {
+                    if (abs(event.x - downX) > touchSlop || abs(event.y - downY) > touchSlop) {
+                        movedBeyondTap = true
+                        longPressRunnable?.let(clockDisplayHandler::removeCallbacks)
+                        longPressRunnable = null
+                    }
+                    true
+                }
                 MotionEvent.ACTION_UP -> {
                     longPressRunnable?.let(clockDisplayHandler::removeCallbacks)
                     longPressRunnable = null
-                    if (!longPressTriggered && allowShortTap) {
+                    if (!movedBeyondTap && !longPressTriggered && allowShortTap) {
                         touchedView.performClick()
                     }
                     true
@@ -3268,25 +3479,23 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun showToolsDialog(uiState: AndroidUiState) {
         val options =
             buildList<Pair<String, () -> Unit>> {
-                add(
-                    (if (isEmulatorDirectSerialTarget(uiState.latestLoadedTarget)) {
-                        "Refresh Emulator SignalSlinger"
-                    } else {
-                        "Load Emulator SignalSlinger"
-                    }) to {
-                        AndroidSessionController.runProbe(
-                            context = applicationContext,
-                            requestedTargets = emulatorDirectSerialTargets(),
-                            source = "tools",
-                        )
-                    },
-                )
+                if (isRunningInAndroidEmulator()) {
+                    add(
+                        (if (isEmulatorDirectSerialTarget(uiState.latestLoadedTarget)) {
+                            "Refresh Emulator SignalSlinger"
+                        } else {
+                            "Load Emulator SignalSlinger"
+                        }) to {
+                            AndroidSessionController.runProbe(
+                                context = applicationContext,
+                                requestedTargets = emulatorDirectSerialTargets(),
+                                source = "tools",
+                            )
+                        },
+                    )
+                }
                 add("Send Command To SignalSlinger" to {
                     showSendCommandDialog(uiState)
-                })
-                add("Refresh USB Devices" to {
-                    AndroidSessionController.recordStatus("USB device list refreshed.", isError = false)
-                    renderContent()
                 })
                 add("View Android Session Log" to {
                     showLargeTextDialog(
@@ -3294,6 +3503,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         text = AndroidSessionController.debugSessionLogSummary(),
                         colorizeLogCategories = true,
                     )
+                })
+                add("Email Android Session Log" to {
+                    emailAndroidSessionLog()
                 })
                 add("Clear Android Session Logs" to {
                     AlertDialog.Builder(this@MainActivity)
@@ -3315,6 +3527,89 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
             .setNegativeButton("Close", null)
             .showLogged("Tools")
+    }
+
+    private fun isRunningInAndroidEmulator(): Boolean {
+        val fingerprint = Build.FINGERPRINT.orEmpty().lowercase()
+        val model = Build.MODEL.orEmpty().lowercase()
+        val manufacturer = Build.MANUFACTURER.orEmpty().lowercase()
+        val brand = Build.BRAND.orEmpty().lowercase()
+        val device = Build.DEVICE.orEmpty().lowercase()
+        val product = Build.PRODUCT.orEmpty().lowercase()
+        val hardware = Build.HARDWARE.orEmpty().lowercase()
+
+        return fingerprint.startsWith("generic") ||
+            fingerprint.contains("emulator") ||
+            fingerprint.contains("sdk_gphone") ||
+            model.contains("android sdk built for") ||
+            model.contains("sdk_gphone") ||
+            manufacturer.contains("genymotion") ||
+            hardware == "goldfish" ||
+            hardware == "ranchu" ||
+            brand.startsWith("generic") && device.startsWith("generic") ||
+            product.contains("sdk") ||
+            product.contains("emulator") ||
+            product.contains("simulator")
+    }
+
+    private fun emailAndroidSessionLog() {
+        val candidates =
+            buildList {
+                currentSessionLogAttachmentUriOrNull()?.let { add(createAndroidSessionLogAttachmentIntent(it)) }
+                add(createAndroidSessionLogFallbackIntent())
+            }
+
+        candidates.forEach { intent ->
+            try {
+                startActivity(Intent.createChooser(intent, "Email Android Session Log"))
+                return
+            } catch (_: ActivityNotFoundException) {
+                // Try the next export path before reporting failure.
+            } catch (_: Throwable) {
+                // Some vendor builds throw non-standard activity launch errors here.
+            }
+        }
+
+        AndroidSessionController.recordStatus(
+            "No app is available to send the Android session log.",
+            isError = true,
+        )
+        renderContent()
+    }
+
+    private fun androidSessionLogEmailBody(): String {
+        return "Log file attached. Problem description:"
+    }
+
+    private fun currentSessionLogAttachmentUriOrNull(): Uri? {
+        val logFile = AndroidSessionController.currentSessionLogFile() ?: return null
+        return runCatching {
+            FileProvider.getUriForFile(
+                this,
+                "${BuildConfig.APPLICATION_ID}.fileprovider",
+                logFile,
+            )
+        }.getOrNull()
+    }
+
+    private fun createAndroidSessionLogAttachmentIntent(attachmentUri: Uri): Intent {
+        return Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_EMAIL, arrayOf("openardf@gmail.com"))
+            putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Android Session Log")
+            putExtra(Intent.EXTRA_TEXT, androidSessionLogEmailBody())
+            putExtra(Intent.EXTRA_STREAM, attachmentUri)
+            clipData = ClipData.newRawUri("SerialSlinger Android Session Log", attachmentUri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
+
+    private fun createAndroidSessionLogFallbackIntent(): Intent {
+        return Intent(Intent.ACTION_SENDTO).apply {
+            data = Uri.parse("mailto:openardf@gmail.com")
+            putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Android Session Log")
+            putExtra(Intent.EXTRA_TEXT, androidSessionLogEmailBody())
+        }
     }
 
     private fun showSendCommandDialog(uiState: AndroidUiState) {
@@ -3618,6 +3913,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             setBackgroundColor(Color.WHITE)
             val resolvedValue = selectedValue.coerceIn(values.first, values.last)
             setSelection(options.indexOf(resolvedValue).coerceAtLeast(0))
+            installTapOnlyClick()
         }
     }
 
@@ -3640,9 +3936,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
                     val bottomMargin = (12 * resources.displayMetrics.density).toInt()
                     this.bottomMargin = bottomMargin
-                }
+            }
             setBackgroundColor(Color.WHITE)
             setSelection(options.indexOf(selectedValue).coerceAtLeast(0))
+            installTapOnlyClick()
         }
     }
 
@@ -4120,6 +4417,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 enabledForInteraction = isEnabledForInteraction,
             )
             setOnClickListener { onPick() }
+            installTapOnlyClick()
             layoutParams =
                 LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
                     val bottomMargin = (8 * resources.displayMetrics.density).toInt()
@@ -4155,11 +4453,21 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
     }
 
-    private fun deviceTimeRowLabel(): String {
-        return if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) {
-            "Device Time (Tap to Sync)"
+    private fun deviceTimeRowLabel(
+        systemNow: LocalDateTime,
+        syncInProgress: Boolean,
+    ): String {
+        val skewText = deviceTimeClockSkewMillisForUi(systemNow)?.let(JvmTimeSupport::formatSignedDurationMillis)
+        val actionText =
+            when {
+                syncInProgress -> "Sync in Progress..."
+                deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC -> "Tap to Sync"
+                else -> "Manual"
+            }
+        return if (skewText == null) {
+            "Device Time - $actionText"
         } else {
-            "Device Time (Manual)"
+            "Device Time ($skewText) - $actionText"
         }
     }
 
@@ -4765,6 +5073,26 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
     }
 
+    private fun timedEventCardLayout(): LinearLayout =
+        outlinedCardLayout(
+            backgroundColor = 0xFFEFF6FF.toInt(),
+            strokeColor = CLONE_THEME_BLUE,
+        )
+
+    private fun outlinedCardLayout(
+        backgroundColor: Int = 0xFFF6F3EA.toInt(),
+        strokeColor: Int = Color.BLACK,
+    ): LinearLayout =
+        cardLayout().apply {
+            val strokePx = (2 * resources.displayMetrics.density).toInt().coerceAtLeast(1)
+            background =
+                GradientDrawable().apply {
+                    setColor(backgroundColor)
+                    setStroke(strokePx, strokeColor)
+                    cornerRadius = 8 * resources.displayMetrics.density
+                }
+        }
+
     private fun fieldLabel(text: String): TextView =
         TextView(this).apply {
             this.text = text
@@ -4793,6 +5121,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     this.bottomMargin = bottomMargin
             }
             setOnClickListener { onClick() }
+            installTapOnlyClick()
         }
 
     private fun weightedButton(
@@ -4811,7 +5140,47 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     this.marginEnd = horizontalMargin
                 }
             setOnClickListener { onClick() }
+            installTapOnlyClick()
         }
+
+    private fun View.installTapOnlyClick() {
+        val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+        var downX = 0f
+        var downY = 0f
+        var movedBeyondTap = false
+        setOnTouchListener { touchedView, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                    movedBeyondTap = false
+                    touchedView.isPressed = true
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (abs(event.x - downX) > touchSlop || abs(event.y - downY) > touchSlop) {
+                        movedBeyondTap = true
+                        touchedView.isPressed = false
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val shouldClick = !movedBeyondTap && touchedView.isEnabled && touchedView.isClickable
+                    touchedView.isPressed = false
+                    if (shouldClick) {
+                        touchedView.playSoundEffect(SoundEffectConstants.CLICK)
+                        touchedView.performClick()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    touchedView.isPressed = false
+                    true
+                }
+                else -> false
+            }
+        }
+    }
 
     private fun headerCloneButton(uiState: AndroidUiState): Button =
         Button(this).apply {
@@ -4964,11 +5333,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         dialog.showLogged("Device Time Warning")
     }
 
-    private fun sectionTitle(text: String): TextView =
+    private fun sectionTitle(
+        text: String,
+        textColor: Int = Color.BLACK,
+    ): TextView =
         TextView(this).apply {
             this.text = text
             setTypeface(Typeface.DEFAULT_BOLD)
             textSize = 18f
+            setTextColor(textColor)
             val bottomPadding = (6 * resources.displayMetrics.density).toInt()
             setPadding(0, bottomPadding, 0, bottomPadding)
         }
@@ -4983,16 +5356,19 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun statusView(
         text: String,
-        isError: Boolean,
+        textColor: Int,
+        underlined: Boolean,
         onClick: (() -> Unit)? = null,
     ): TextView =
         TextView(this).apply {
             this.text = text
             contentDescription = text
-            textSize = 15f
-            setTextColor(if (isError) Color.parseColor("#9E1C1C") else Color.parseColor("#1F5F2C"))
-            if (onClick != null) {
+            textSize = 17f
+            setTextColor(textColor)
+            if (underlined) {
                 paintFlags = paintFlags or Paint.UNDERLINE_TEXT_FLAG
+            }
+            if (onClick != null) {
                 isClickable = true
                 isFocusable = true
                 setOnClickListener { onClick() }
@@ -5074,6 +5450,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val PREF_FREQUENCY_DISPLAY_UNIT = "frequency_display_unit"
         private const val PREF_TEMPERATURE_DISPLAY_UNIT = "temperature_display_unit"
         private const val PREF_DEVICE_TIME_SET_MODE = "device_time_set_mode"
+        private const val CLONE_THEME_BLUE = -14_794_577
+        private const val STATUS_POPUP_DURATION_MS = 3_000L
         private const val AUTO_DETECT_ATTACH_DELAY_MS = 180L
         private const val AUTO_DETECT_RETRY_DELAY_MS = 350L
         private const val AUTO_DETECT_MAX_RETRIES = 4
