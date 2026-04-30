@@ -37,7 +37,7 @@ android {
         applicationId = "com.SerialSlinger.openardf"
         minSdk = 24
         targetSdk = 37
-        versionCode = 2
+        versionCode = 3
         versionName = rootProject.extra["serialSlingerDisplayVersion"].toString()
         buildConfigField("String", "PROJECT_URL", "\"${rootProject.extra["serialSlingerProjectUrl"]}\"")
         buildConfigField("String", "LICENSE_LABEL", "\"${rootProject.extra["serialSlingerLicenseLabel"]}\"")
