@@ -161,6 +161,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var autoDetectSearchingForHeader: Boolean = false
     private var pendingAutoPermissionDeviceName: String? = null
     private var autoProbeInFlightDeviceName: String? = null
+    private var newlyDiscoveredAutoDetectDeviceName: String? = null
     private val autoPermissionDeniedDeviceNames = mutableSetOf<String>()
     private var currentTimeDisplayField: EditText? = null
     private var currentTimeLabelView: TextView? = null
@@ -168,6 +169,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var eventStatusDisplayField: TextView? = null
     private var daysRemainingSummaryView: TextView? = null
     private var displayedScheduleSnapshot: com.openardf.serialslinger.model.DeviceSnapshot? = null
+    private var displayedTimedEventSettings: DeviceSettings? = null
+    private var displayedTimedEventDaysRemaining: Int? = null
+    private var displayedTimedEventUsesCloneTemplate: Boolean = false
     private var scheduleDerivedDataPending: Boolean = false
     private var headerStatusMessageView: TextView? = null
     private var statusPopupWindow: PopupWindow? = null
@@ -181,13 +185,27 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var lastsDurationDialogOpen: Boolean = false
     private var multiDayDurationGuardDialogOpen: Boolean = false
     private var cloneTemplateLocked: Boolean = false
+    private var timelyReplyWarningDialogOpen: Boolean = false
+    private var eventPauseDialogOpen: Boolean = false
+    private var startupDeviceStatusDialogOpen: Boolean = false
+    private var startupDeviceStatusDialog: Dialog? = null
+    private var startupSearchDialogShown: Boolean = false
+    private var startupReadDialogShown: Boolean = false
     private var previewModeEnabled: Boolean = false
     private var previewSessionViewState: AndroidSessionViewState? = null
     private var previewUnlockStep: Int = 0
     private var previewUnlockStartedAtMillis: Long = 0L
     private val loggedWindows = WeakHashMap<Window, Boolean>()
 
-    private val refreshListener: () -> Unit = { runOnUiThread { renderContent() } }
+    private val refreshListener: () -> Unit = {
+        runOnUiThread {
+            renderContent()
+            dismissStaleStartupDeviceStatusDialog()
+            showPendingEventPauseNotice()
+            showStartupDeviceStatusModalIfNeeded()
+            showPendingTimelyReplyWarning()
+        }
+    }
     private val clockTickRunnable =
         object : Runnable {
             override fun run() {
@@ -214,8 +232,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         device?.deviceName?.let { deviceName ->
                             pendingAutoPermissionDeviceName = null
                             if (granted) {
+                                newlyDiscoveredAutoDetectDeviceName = deviceName
                                 autoPermissionDeniedDeviceNames -= deviceName
                             } else {
+                                if (newlyDiscoveredAutoDetectDeviceName == deviceName) {
+                                    newlyDiscoveredAutoDetectDeviceName = null
+                                }
                                 autoPermissionDeniedDeviceNames += deviceName
                                 if (autoProbeInFlightDeviceName == deviceName) {
                                     autoProbeInFlightDeviceName = null
@@ -240,6 +262,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     }
                     UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                         val device = intent.getParcelableExtraCompat<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                        device?.deviceName?.let { deviceName ->
+                            newlyDiscoveredAutoDetectDeviceName = deviceName
+                        }
                         AndroidSessionController.logAppEvent(
                             title = "usb",
                             lines = listOf(
@@ -262,6 +287,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         device?.deviceName?.let { deviceName ->
                             if (pendingAutoPermissionDeviceName == deviceName) {
                                 pendingAutoPermissionDeviceName = null
+                            }
+                            if (newlyDiscoveredAutoDetectDeviceName == deviceName) {
+                                newlyDiscoveredAutoDetectDeviceName = null
                             }
                             if (autoProbeInFlightDeviceName == deviceName) {
                                 autoProbeInFlightDeviceName = null
@@ -337,6 +365,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             scheduleAutoDetect(delayMs = 0L)
         }
         renderContent()
+        showStartupDeviceStatusModalIfNeeded()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -352,6 +381,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.addListener(refreshListener)
         scheduleAutoDetect(delayMs = 0L)
         renderContent()
+        showStartupDeviceStatusModalIfNeeded()
         scheduleClockDisplayTick()
     }
 
@@ -445,9 +475,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 preferredAutoDetectDevice(
                     candidates = permittedSupportedDevices,
                     latestLoadedDeviceName = loadedDeviceName,
+                    newlyDiscoveredDeviceName = newlyDiscoveredAutoDetectDeviceName,
                 )
             if (targetDevice != null) {
                 if (!forceReload && uiState.sessionViewState != null && uiState.latestLoadedDeviceName == targetDevice.deviceName) {
+                    if (newlyDiscoveredAutoDetectDeviceName == targetDevice.deviceName) {
+                        newlyDiscoveredAutoDetectDeviceName = null
+                    }
                     autoDetectSearchingForHeader = false
                     return
                 }
@@ -469,6 +503,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     source = "auto",
                 ) { result ->
                     autoProbeInFlightDeviceName = null
+                    if (result.isSuccess || attempt >= AUTO_DETECT_MAX_RETRIES) {
+                        if (newlyDiscoveredAutoDetectDeviceName == targetDevice.deviceName) {
+                            newlyDiscoveredAutoDetectDeviceName = null
+                        }
+                    }
                     if (result.isSuccess) {
                         autoDetectSearchingForHeader = false
                     } else if (attempt >= AUTO_DETECT_MAX_RETRIES) {
@@ -499,7 +538,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
 
         val permissionCandidate =
-            supportedDevices.firstOrNull { descriptor ->
+            preferredPermissionCandidate(
+                candidates = supportedDevices,
+                newlyDiscoveredDeviceName = newlyDiscoveredAutoDetectDeviceName,
+            ) { descriptor ->
                 !descriptor.hasPermission &&
                     descriptor.deviceName != pendingAutoPermissionDeviceName &&
                     descriptor.deviceName !in autoPermissionDeniedDeviceNames
@@ -550,6 +592,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun requestSignalSlingerReload() {
         cloneTemplateLocked = false
+        AndroidSessionController.allowCloneTemplateTimedEventEdits()
         autoDetectSearchingForHeader = true
         AndroidSessionController.recordStatus("Searching for SignalSlinger...", isError = true)
         scheduleAutoDetect(
@@ -561,9 +604,20 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun preferredAutoDetectDevice(
         candidates: List<AndroidUsbDeviceDescriptor>,
         latestLoadedDeviceName: String?,
+        newlyDiscoveredDeviceName: String?,
     ): AndroidUsbDeviceDescriptor? {
-        return candidates.firstOrNull { it.deviceName == latestLoadedDeviceName }
+        return candidates.firstOrNull { it.deviceName == newlyDiscoveredDeviceName }
+            ?: candidates.firstOrNull { it.deviceName == latestLoadedDeviceName }
             ?: candidates.firstOrNull()
+    }
+
+    private fun preferredPermissionCandidate(
+        candidates: List<AndroidUsbDeviceDescriptor>,
+        newlyDiscoveredDeviceName: String?,
+        predicate: (AndroidUsbDeviceDescriptor) -> Boolean,
+    ): AndroidUsbDeviceDescriptor? {
+        return candidates.firstOrNull { it.deviceName == newlyDiscoveredDeviceName && predicate(it) }
+            ?: candidates.firstOrNull(predicate)
     }
 
     private fun renderContent() {
@@ -590,6 +644,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         eventStatusDisplayField = null
         daysRemainingSummaryView = null
         displayedScheduleSnapshot = null
+        displayedTimedEventSettings = null
+        displayedTimedEventDaysRemaining = null
+        displayedTimedEventUsesCloneTemplate = false
         scheduleDerivedDataPending = uiState.scheduleDerivedDataPending
 
         content.removeAllViews()
@@ -601,6 +658,23 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val loadedSettings = snapshot?.settings ?: DeviceSettings.empty()
         val loadedStatus = snapshot?.status
         val loadedInfo = snapshot?.info
+        val cloneTemplateSettings =
+            if (previewModeActive) {
+                null
+            } else {
+                uiState.cloneTemplateSettings
+            }
+        val timedEventSettings = cloneTemplateSettings ?: loadedSettings
+        val timedEventDaysRemaining =
+            if (cloneTemplateSettings != null) {
+                uiState.cloneTemplateDaysRemaining
+            } else {
+                loadedStatus?.daysRemaining
+            }
+        val timedEventUnavailable = disconnectedLocked && cloneTemplateSettings == null
+        displayedTimedEventSettings = if (timedEventUnavailable) null else timedEventSettings
+        displayedTimedEventDaysRemaining = timedEventDaysRemaining
+        displayedTimedEventUsesCloneTemplate = cloneTemplateSettings != null
         val mainRow = tabletRow()
         val deviceSettingsCard = outlinedCardLayout()
         val timedEventCard = timedEventCardLayout()
@@ -608,33 +682,27 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val deviceDataInOwnColumn = deviceDataVisible && isExpandedScreen
 
         val eventTypeOptions = EventProfileSupport.selectableEventTypes()
-        val selectedEventType =
-            EventProfileSupport.parseEventTypeOrNull(uiState.draftEventType.orEmpty())
-                ?: loadedSettings.eventType
         val selectedFoxRole =
-            EventProfileSupport.parseFoxRoleOrNull(uiState.draftFoxRole.orEmpty(), selectedEventType)
+            EventProfileSupport.parseFoxRoleOrNull(uiState.draftFoxRole.orEmpty(), loadedSettings.eventType)
                 ?: loadedSettings.foxRole
-                ?: EventProfileSupport.foxRoleOptions(selectedEventType).firstOrNull()
+                ?: EventProfileSupport.foxRoleOptions(loadedSettings.eventType).firstOrNull()
         val loadedEventType = loadedSettings.eventType
         val loadedFoxRole = loadedSettings.foxRole
-        var currentEventType = selectedEventType
+        var currentTimedEventType = timedEventSettings.eventType
         var currentFoxRole = loadedFoxRole ?: selectedFoxRole
         lateinit var eventTypeChooserButton: Button
         lateinit var foxRoleChooserButton: Button
 
-        fun refreshProfileSelection(eventType: EventType, requestedFoxRole: FoxRole?) {
-            val workflow =
-                EventProfileSupport.resolveWorkflowState(
-                    loadedEventType = loadedEventType,
-                    loadedFoxRole = loadedFoxRole,
-                    selectedEventType = eventType,
-                    requestedFoxRole = requestedFoxRole,
-                )
-            currentEventType = workflow.selectedEventType
-            currentFoxRole = workflow.selectedFoxRole
-            eventTypeChooserButton.text = formatEventTypeLabel(workflow.selectedEventType)
-            foxRoleChooserButton.text = workflow.selectedFoxRole?.uiLabel ?: "<none>"
-            foxRoleChooserButton.isEnabled = workflow.roleSelectionEnabled
+        fun refreshTimedEventTypeSelection(eventType: EventType) {
+            currentTimedEventType = eventType
+            eventTypeChooserButton.text = formatEventTypeLabel(eventType)
+        }
+
+        fun refreshDeviceFoxRoleSelection(requestedFoxRole: FoxRole?) {
+            val foxRoleOptions = EventProfileSupport.foxRoleOptions(loadedEventType)
+            currentFoxRole = requestedFoxRole ?: loadedFoxRole ?: foxRoleOptions.firstOrNull()
+            foxRoleChooserButton.text = currentFoxRole?.uiLabel ?: "<none>"
+            foxRoleChooserButton.isEnabled = foxRoleOptions.isNotEmpty()
         }
 
         eventTypeChooserButton =
@@ -642,19 +710,21 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 if (handlePreviewUnlockTap("event")) {
                     return@rowButton
                 }
-                val labels = eventTypeOptions.map(::formatEventTypeLabel).toTypedArray()
-                AlertDialog.Builder(this)
-                    .setTitle("Choose Event Type")
-                    .setSingleChoiceItems(labels, eventTypeOptions.indexOf(currentEventType).coerceAtLeast(0)) { dialog, which ->
-                        val chosenEventType = eventTypeOptions[which]
-                        refreshProfileSelection(chosenEventType, currentFoxRole)
-                        if (chosenEventType != loadedEventType) {
-                            runEventTypeSubmitOrPreview(chosenEventType, currentFoxRole)
+                runTimedEventSettingsChangeWithCloneTemplateGuard {
+                    val labels = eventTypeOptions.map(::formatEventTypeLabel).toTypedArray()
+                    AlertDialog.Builder(this)
+                        .setTitle("Choose Event Type")
+                        .setSingleChoiceItems(labels, eventTypeOptions.indexOf(currentTimedEventType).coerceAtLeast(0)) { dialog, which ->
+                            val chosenEventType = eventTypeOptions[which]
+                            refreshTimedEventTypeSelection(chosenEventType)
+                            if (chosenEventType != timedEventSettings.eventType) {
+                                runEventTypeSubmitOrPreview(chosenEventType, currentFoxRole)
+                            }
+                            dialog.dismiss()
                         }
-                        dialog.dismiss()
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .showLogged("Choose Event Type")
+                        .setNegativeButton("Cancel", null)
+                        .showLogged("Choose Event Type")
+                }
             }
         foxRoleChooserButton =
             rowButton("Choose Fox Role") {
@@ -667,44 +737,53 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     .setTitle("Choose Fox Role")
                     .setSingleChoiceItems(labels, foxRoleOptions.indexOf(currentFoxRole).coerceAtLeast(0)) { dialog, which ->
                         val chosenFoxRole = foxRoleOptions[which]
-                        refreshProfileSelection(currentEventType, chosenFoxRole)
-                        if (chosenFoxRole != loadedFoxRole) {
-                            runFoxRoleSubmitOrPreview(chosenFoxRole)
+                        (dialog as? AlertDialog)?.listView?.setItemChecked(which, true)
+                        refreshDeviceFoxRoleSelection(chosenFoxRole)
+                        val dismissAndSubmit = {
+                            dialog.dismiss()
+                            if (chosenFoxRole != loadedFoxRole) {
+                                runFoxRoleSubmitOrPreview(chosenFoxRole)
+                            }
                         }
-                        dialog.dismiss()
+                        (dialog as? AlertDialog)?.listView?.postDelayed(dismissAndSubmit, FOX_ROLE_PICKER_FEEDBACK_DELAY_MS)
+                            ?: foxRoleChooserButton.post(dismissAndSubmit)
                     }
                     .setNegativeButton("Cancel", null)
                     .showLogged("Choose Fox Role")
             }
-        refreshProfileSelection(selectedEventType, selectedFoxRole)
-        if (disconnectedLocked) {
+        refreshTimedEventTypeSelection(currentTimedEventType)
+        refreshDeviceFoxRoleSelection(selectedFoxRole)
+        if (timedEventUnavailable) {
             eventTypeChooserButton.text = ""
+        }
+        if (disconnectedLocked) {
             foxRoleChooserButton.text = ""
         }
 
         val frequencyPresentation = FrequencySupport.describeFrequencies(loadedSettings)
-        val frequencyVisibility = EventProfileSupport.timedEventFrequencyVisibility(loadedSettings.eventType)
-        val patternSpeedInTimedEvent = EventProfileSupport.patternSpeedBelongsToTimedEventSettings(loadedSettings.eventType)
+        val frequencyVisibility = EventProfileSupport.timedEventFrequencyVisibility(timedEventSettings.eventType)
+        val devicePatternSpeedInTimedEvent = EventProfileSupport.patternSpeedBelongsToTimedEventSettings(loadedSettings.eventType)
+        val timedPatternSpeedInTimedEvent = EventProfileSupport.patternSpeedBelongsToTimedEventSettings(timedEventSettings.eventType)
         val derivedEventStatus =
             JvmTimeSupport.describeEventStatus(
-                deviceReportedEventEnabled = loadedStatus?.eventEnabled,
-                eventStateSummary = loadedStatus?.eventStateSummary,
-                currentTimeCompact = loadedSettings.currentTimeCompact,
-                startTimeCompact = loadedSettings.startTimeCompact,
-                finishTimeCompact = loadedSettings.finishTimeCompact,
-                startsInFallback = loadedStatus?.eventStartsInSummary,
-                daysToRun = loadedSettings.daysToRun,
+                deviceReportedEventEnabled = if (cloneTemplateSettings == null) loadedStatus?.eventEnabled else null,
+                eventStateSummary = if (cloneTemplateSettings == null) loadedStatus?.eventStateSummary else null,
+                currentTimeCompact = timedEventStatusCurrentTimeCompact(timedEventSettings),
+                startTimeCompact = timedEventSettings.startTimeCompact,
+                finishTimeCompact = timedEventSettings.finishTimeCompact,
+                startsInFallback = if (cloneTemplateSettings == null) loadedStatus?.eventStartsInSummary else null,
+                daysToRun = timedEventSettings.daysToRun,
             )
         val durationSummary =
             JvmTimeSupport.describeEventDurationHoursMinutes(
-                loadedSettings.startTimeCompact,
-                loadedSettings.finishTimeCompact,
-                loadedStatus?.eventDurationSummary,
+                timedEventSettings.startTimeCompact,
+                timedEventSettings.finishTimeCompact,
+                if (cloneTemplateSettings == null) loadedStatus?.eventDurationSummary else null,
             )
         val durationDiffersFromDefault =
             JvmTimeSupport.eventDurationDiffersFromDefault(
-                startTimeCompact = loadedSettings.startTimeCompact,
-                finishTimeCompact = loadedSettings.finishTimeCompact,
+                startTimeCompact = timedEventSettings.startTimeCompact,
+                finishTimeCompact = timedEventSettings.finishTimeCompact,
                 defaultEventLengthMinutes = defaultEventLengthMinutes,
             )
         val warningColor = Color.parseColor("#9E1C1C")
@@ -747,7 +826,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             )
         }
 
-        if (!patternSpeedInTimedEvent) {
+        if (!devicePatternSpeedInTimedEvent) {
             if (disconnectedLocked) {
                 deviceSettingsCard.addView(compactLabeledRow("Pattern Speed", readOnlyField("")))
             } else {
@@ -924,7 +1003,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 hint = "Station ID"
                 inputType = InputType.TYPE_CLASS_TEXT
                 setSingleLine()
-                setText(uiState.draftStationId ?: loadedSettings.stationId)
+                setText(timedEventSettings.stationId)
                 layoutParams =
                     LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
                         val bottomMargin = (12 * resources.displayMetrics.density).toInt()
@@ -934,40 +1013,43 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         configureCommitTextEditor(stationIdEditor) {
             runStationIdSubmitOrPreview(stationIdEditor.text.toString())
         }
+        installTimedEventSettingsTextEditGuard(stationIdEditor)
         timedEventCard.addView(compactLabeledRow("Station ID", stationIdEditor))
-        if (disconnectedLocked) {
+        if (timedEventUnavailable) {
             timedEventCard.addView(compactLabeledRow("ID Speed", readOnlyField("")))
         } else {
             val idSpeedSpinner =
                 integerSpinner(
                     values = 5..20,
-                    selectedValue = uiState.draftIdSpeedWpm?.toIntOrNull() ?: loadedSettings.idCodeSpeedWpm,
+                    selectedValue = timedEventSettings.idCodeSpeedWpm,
                 )
+            installTimedEventSettingsPickerOpenGuard(idSpeedSpinner)
             timedEventCard.addView(compactLabeledRow("ID Speed", idSpeedSpinner))
-            wireImmediateIntSpinner(idSpeedSpinner, selectedValue = uiState.draftIdSpeedWpm?.toIntOrNull() ?: loadedSettings.idCodeSpeedWpm) { selectedValue ->
+            wireImmediateIntSpinner(idSpeedSpinner, selectedValue = timedEventSettings.idCodeSpeedWpm) { selectedValue ->
                 runIdSpeedSubmitOrPreview(selectedValue)
             }
         }
-        if (patternSpeedInTimedEvent) {
-            if (disconnectedLocked) {
+        if (timedPatternSpeedInTimedEvent) {
+            if (timedEventUnavailable) {
                 timedEventCard.addView(compactLabeledRow("Pattern Speed", readOnlyField("")))
             } else {
                 val timedPatternSpeedSpinner =
                     integerSpinner(
                         values = 5..20,
-                        selectedValue = uiState.draftPatternSpeedWpm?.toIntOrNull() ?: loadedSettings.patternCodeSpeedWpm,
+                        selectedValue = timedEventSettings.patternCodeSpeedWpm,
                     )
+                installTimedEventSettingsPickerOpenGuard(timedPatternSpeedSpinner)
                 timedEventCard.addView(compactLabeledRow("Pattern Speed", timedPatternSpeedSpinner))
                 wireImmediateIntSpinner(
                     timedPatternSpeedSpinner,
-                    selectedValue = uiState.draftPatternSpeedWpm?.toIntOrNull() ?: loadedSettings.patternCodeSpeedWpm,
+                    selectedValue = timedEventSettings.patternCodeSpeedWpm,
                 ) { selectedValue ->
                     runPatternSpeedSubmitOrPreview(selectedValue, guardCloneTemplate = true)
                 }
             }
         }
 
-        val schedulingFieldsEditable = JvmTimeSupport.areSchedulingFieldsEditable(loadedSettings.currentTimeCompact)
+        val schedulingFieldsEditable = JvmTimeSupport.areSchedulingFieldsEditable(timedEventSettings.currentTimeCompact)
 
         lateinit var startTimeField: EditText
         lateinit var finishTimeField: EditText
@@ -976,7 +1058,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 val initialSelection =
                     relativeEditorSelectionForStart(
                         baseCompact = displayedDeviceTimeCompactForUi(),
-                        targetCompact = loadedSettings.startTimeCompact,
+                        targetCompact = timedEventSettings.startTimeCompact,
                     )
                 pickerField(
                     text = formatRelativeTimeSelection(initialSelection),
@@ -984,6 +1066,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     textSizeSp = timestampFieldTextSizeSp(),
                     actionLabel = "Start Time",
                     isEnabledForInteraction = schedulingFieldsEditable,
+                    guardCloneTemplate = true,
                 ) {
                     showRelativeTimePickerDialog(
                         title = "Relative Start Time",
@@ -996,8 +1079,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             useTopOfHour = selection.useTopOfHour,
                         )
                         chooseStartTimeFinishAdjustmentDuration(
-                            currentStartTimeCompact = loadedSettings.startTimeCompact,
-                            currentFinishTimeCompact = loadedSettings.finishTimeCompact,
+                            currentStartTimeCompact = timedEventSettings.startTimeCompact,
+                            currentFinishTimeCompact = timedEventSettings.finishTimeCompact,
                             proposedStartTimeCompact = proposedStartTimeCompact,
                             onCancel = {
                                 relativeStartDisplaySelectionOverride = null
@@ -1011,7 +1094,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             }
                             val chosenDuration = choice.duration ?: return@chooseStartTimeFinishAdjustmentDuration
                             chooseScheduleChangeDurationResolution(
-                                currentDaysToRun = loadedSettings.daysToRun,
+                                currentDaysToRun = timedEventSettings.daysToRun,
                                 proposedDuration = chosenDuration,
                                 onCancel = {
                                     relativeStartDisplaySelectionOverride = null
@@ -1049,7 +1132,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                             context = applicationContext,
                                             offsetCommand = formatRelativeTimeCommand(selection),
                                             finishOffsetCommand = JvmTimeSupport.formatRelativeDurationCommand(resolvedDuration),
-                                            preservedDaysToRun = if (preserveDaysToRun) loadedSettings.daysToRun else null,
+                                            preservedDaysToRun = if (preserveDaysToRun) timedEventSettings.daysToRun else null,
                                         )
                                     }
                                 }
@@ -1059,14 +1142,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 }
             } else {
                 pickerField(
-                    text = uiState.draftStartTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.startTimeCompact),
+                    text = JvmTimeSupport.formatCompactTimestamp(timedEventSettings.startTimeCompact),
                     hint = "Start Time",
                     textSizeSp = timestampFieldTextSizeSp(),
                     actionLabel = "Start Time",
                     isEnabledForInteraction = schedulingFieldsEditable,
+                    guardCloneTemplate = true,
                 ) {
                     val originalStartTimeText =
-                        uiState.draftStartTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.startTimeCompact)
+                        JvmTimeSupport.formatCompactTimestamp(timedEventSettings.startTimeCompact)
                     pickValidatedStartTime(
                         initialValue = startTimeField.text.toString(),
                         currentTimeCompact = displayedDeviceTimeCompactForUi(),
@@ -1081,10 +1165,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         val currentDurationFinishTime =
                             currentFinishTimeCompactForStartAdjustment(
                                 editorText = finishTimeField.text.toString(),
-                                originalFinishTimeCompact = loadedSettings.finishTimeCompact,
+                                originalFinishTimeCompact = timedEventSettings.finishTimeCompact,
                             )
                         chooseStartTimeFinishAdjustmentDuration(
-                            currentStartTimeCompact = loadedSettings.startTimeCompact,
+                            currentStartTimeCompact = timedEventSettings.startTimeCompact,
                             currentFinishTimeCompact = currentDurationFinishTime,
                             proposedStartTimeCompact = normalizedStartTime,
                             onCancel = {
@@ -1098,7 +1182,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             }
                             val chosenDuration = choice.duration ?: return@chooseStartTimeFinishAdjustmentDuration
                             chooseScheduleChangeDurationResolution(
-                                currentDaysToRun = loadedSettings.daysToRun,
+                                currentDaysToRun = timedEventSettings.daysToRun,
                                 proposedDuration = chosenDuration,
                                 onCancel = {
                                     startTimeField.setText(formattedTimestamp)
@@ -1140,7 +1224,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
             absoluteStartField =
                 readOnlyField(
-                    JvmTimeSupport.formatCompactTimestamp(loadedSettings.startTimeCompact),
+                    JvmTimeSupport.formatCompactTimestamp(timedEventSettings.startTimeCompact),
                     textSizeSp = 13f,
                     singleLine = true,
                 )
@@ -1154,37 +1238,41 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val finishTimeEditable =
             schedulingFieldsEditable &&
                 JvmTimeSupport.isFinishTimeEditable(
-                startTimeCompact = loadedSettings.startTimeCompact,
-                currentTimeCompact = loadedSettings.currentTimeCompact,
+                    startTimeCompact = timedEventSettings.startTimeCompact,
+                    currentTimeCompact = timedEventSettings.currentTimeCompact,
                 )
 
         finishTimeField =
             if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
                 val initialSelection =
-                    relativeEditorSelectionForFinish()
+                    relativeEditorSelectionForFinish(
+                        startTimeCompact = timedEventSettings.startTimeCompact,
+                        finishTimeCompact = timedEventSettings.finishTimeCompact,
+                    )
                 pickerField(
                     text = formatRelativeTimeSelection(initialSelection),
                     hint = "Finish Time",
                     textSizeSp = timestampFieldTextSizeSp(),
                     actionLabel = "Finish Time",
                     isEnabledForInteraction = finishTimeEditable,
+                    guardCloneTemplate = true,
                 ) {
                     showRelativeTimePickerDialog(
                         title = "Relative Finish Time",
                         initialSelection = initialSelection,
                     ) { selection ->
                         val proposedFinishTimeCompact = JvmTimeSupport.relativeTargetTimeCompact(
-                            baseCompact = loadedSettings.startTimeCompact,
+                            baseCompact = timedEventSettings.startTimeCompact,
                             hours = selection.hours,
                             minutes = selection.minutes,
                             useTopOfHour = selection.useTopOfHour,
                         )
                         val proposedDuration = JvmTimeSupport.validEventDuration(
-                            loadedSettings.startTimeCompact,
+                            timedEventSettings.startTimeCompact,
                             proposedFinishTimeCompact,
                         )
                         chooseScheduleChangeDurationResolution(
-                            currentDaysToRun = loadedSettings.daysToRun,
+                            currentDaysToRun = timedEventSettings.daysToRun,
                             proposedDuration = proposedDuration,
                             onCancel = {
                                 relativeFinishDisplaySelectionOverride = null
@@ -1203,7 +1291,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 if (isPreviewModeActive()) {
                                     val previewFinishCompact =
                                         JvmTimeSupport.relativeTargetTimeCompact(
-                                            baseCompact = loadedSettings.startTimeCompact,
+                                            baseCompact = timedEventSettings.startTimeCompact,
                                             hours = effectiveSelection.hours,
                                             minutes = effectiveSelection.minutes,
                                             useTopOfHour = effectiveSelection.useTopOfHour,
@@ -1218,7 +1306,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                     AndroidSessionController.runRelativeFinishTimeSubmit(
                                         context = applicationContext,
                                         offsetCommand = formatRelativeTimeCommand(effectiveSelection),
-                                        preservedDaysToRun = if (preserveDaysToRun) loadedSettings.daysToRun else null,
+                                        preservedDaysToRun = if (preserveDaysToRun) timedEventSettings.daysToRun else null,
                                     )
                                 }
                             }
@@ -1227,30 +1315,31 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 }
             } else {
                 pickerField(
-                    text = uiState.draftFinishTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.finishTimeCompact),
+                    text = JvmTimeSupport.formatCompactTimestamp(timedEventSettings.finishTimeCompact),
                     hint = "Finish Time",
                     textSizeSp = timestampFieldTextSizeSp(),
                     actionLabel = "Finish Time",
                     isEnabledForInteraction = finishTimeEditable,
+                    guardCloneTemplate = true,
                 ) {
                     pickDateTime(initialValue = finishTimeField.text.toString()) { selected ->
                         val formattedTimestamp = formatDisplayTimestamp(selected)
                         val proposedDuration = JvmTimeSupport.validEventDuration(
-                            loadedSettings.startTimeCompact,
+                            timedEventSettings.startTimeCompact,
                             JvmTimeSupport.parseOptionalCompactTimestamp(formattedTimestamp),
                         )
                         chooseScheduleChangeDurationResolution(
-                            currentDaysToRun = loadedSettings.daysToRun,
+                            currentDaysToRun = timedEventSettings.daysToRun,
                             proposedDuration = proposedDuration,
                             onCancel = {
                                 finishTimeField.setText(
-                                    uiState.draftFinishTime ?: JvmTimeSupport.formatCompactTimestamp(loadedSettings.finishTimeCompact),
+                                    JvmTimeSupport.formatCompactTimestamp(timedEventSettings.finishTimeCompact),
                                 )
                             },
                         ) { preserveDaysToRun, effectiveDuration ->
                             clearRelativeScheduleDisplayOverrides()
                             val finalFinishTimeInput = if (effectiveDuration?.takeIf { it != proposedDuration } != null) {
-                                val startTimeCompact = loadedSettings.startTimeCompact ?: return@chooseScheduleChangeDurationResolution
+                                val startTimeCompact = timedEventSettings.startTimeCompact ?: return@chooseScheduleChangeDurationResolution
                                 JvmTimeSupport.finishTimeCompactFromStart(startTimeCompact, effectiveDuration)
                             } else {
                                 formattedTimestamp
@@ -1287,7 +1376,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
             absoluteFinishField =
                 readOnlyField(
-                    JvmTimeSupport.formatCompactTimestamp(loadedSettings.finishTimeCompact),
+                    JvmTimeSupport.formatCompactTimestamp(timedEventSettings.finishTimeCompact),
                     textSizeSp = 13f,
                     singleLine = true,
                 )
@@ -1326,16 +1415,17 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 textSizeSp = timestampFieldTextSizeSp(),
                 actionLabel = "Lasts",
                 isEnabledForInteraction = finishTimeEditable,
+                guardCloneTemplate = true,
             ) {
                 showLastsDurationDialog(
                     initialDuration =
                         JvmTimeSupport.validEventDuration(
-                            loadedSettings.startTimeCompact,
-                            loadedSettings.finishTimeCompact,
+                            timedEventSettings.startTimeCompact,
+                            timedEventSettings.finishTimeCompact,
                         ) ?: Duration.ofMinutes(defaultEventLengthMinutes.toLong()),
                 ) { selectedDuration ->
                     chooseScheduleChangeDurationResolution(
-                        currentDaysToRun = loadedSettings.daysToRun,
+                        currentDaysToRun = timedEventSettings.daysToRun,
                         proposedDuration = selectedDuration,
                         onCancel = {},
                     ) { preserveDaysToRun, effectiveDuration ->
@@ -1375,12 +1465,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val daysToRunSpinner =
             integerSpinner(
                 values = 1..255,
-                selectedValue = uiState.draftDaysToRun?.toIntOrNull() ?: loadedSettings.daysToRun,
+                selectedValue = timedEventSettings.daysToRun,
             ).apply {
                 isEnabled = schedulingFieldsEditable
                 isClickable = schedulingFieldsEditable
                 alpha = if (schedulingFieldsEditable) 1f else 0.55f
             }
+        installTimedEventSettingsPickerOpenGuard(daysToRunSpinner)
         var daysToRunLabelView: TextView? = null
         val daysRowField =
             LinearLayout(this).apply {
@@ -1422,10 +1513,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             ),
         )
         daysToRunLabelView?.alpha = if (schedulingFieldsEditable) 1f else 0.55f
-        wireImmediateIntSpinner(daysToRunSpinner, selectedValue = uiState.draftDaysToRun?.toIntOrNull() ?: loadedSettings.daysToRun) { selectedValue ->
+        wireImmediateIntSpinner(daysToRunSpinner, selectedValue = timedEventSettings.daysToRun) { selectedValue ->
             val currentDuration = JvmTimeSupport.validEventDuration(
-                loadedSettings.startTimeCompact,
-                loadedSettings.finishTimeCompact,
+                timedEventSettings.startTimeCompact,
+                timedEventSettings.finishTimeCompact,
             )
             chooseMultiDayDurationGuardHandling(
                 options = ScheduleDurationGuardSupport.planForDirectDaysToRunChange(
@@ -1433,7 +1524,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     currentDuration = currentDuration,
                 ),
                 onCancel = {
-                    daysToRunSpinner.setSelection((loadedSettings.daysToRun - 1).coerceAtLeast(0))
+                    daysToRunSpinner.setSelection((timedEventSettings.daysToRun - 1).coerceAtLeast(0))
                 },
             ) { option ->
                 val resolution = ScheduleDurationGuardSupport.resolveDirectDaysToRunChange(
@@ -1444,7 +1535,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 when (option?.choice) {
                     MultiDayDurationGuardChoice.SHORTEN_DURATION -> {
                         clearRelativeScheduleDisplayOverrides()
-                        val startTimeCompact = loadedSettings.startTimeCompact ?: return@chooseMultiDayDurationGuardHandling
+                        val startTimeCompact = timedEventSettings.startTimeCompact ?: return@chooseMultiDayDurationGuardHandling
                         runDaysToRunSubmitOrPreview(
                             daysToRun = resolution.resultingDaysToRun,
                             requestedFinishTimeInput = JvmTimeSupport.finishTimeCompactFromStart(
@@ -1463,51 +1554,55 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         }
 
-        if (disconnectedLocked) {
+        if (timedEventUnavailable) {
             timedEventCard.addView(compactLabeledRow("Frequency 1", readOnlyField("")))
         } else {
             addFrequencyControl(
                 card = timedEventCard,
                 label = "Frequency 1",
-                selectedFrequencyHz = loadedSettings.lowFrequencyHz,
+                selectedFrequencyHz = timedEventSettings.lowFrequencyHz,
+                guardCloneTemplate = true,
             ) { selectedFrequencyHz ->
                 runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.ONE, frequencyHz = selectedFrequencyHz)
             }
         }
         if (frequencyVisibility.showFrequency2) {
-            if (disconnectedLocked) {
+            if (timedEventUnavailable) {
                 timedEventCard.addView(compactLabeledRow("Frequency 2", readOnlyField("")))
             } else {
                 addFrequencyControl(
                     card = timedEventCard,
                     label = "Frequency 2",
-                    selectedFrequencyHz = loadedSettings.mediumFrequencyHz,
+                    selectedFrequencyHz = timedEventSettings.mediumFrequencyHz,
+                    guardCloneTemplate = true,
                 ) { selectedFrequencyHz ->
                     runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.TWO, frequencyHz = selectedFrequencyHz)
                 }
             }
         }
         if (frequencyVisibility.showFrequency3) {
-            if (disconnectedLocked) {
+            if (timedEventUnavailable) {
                 timedEventCard.addView(compactLabeledRow("Frequency 3", readOnlyField("")))
             } else {
                 addFrequencyControl(
                     card = timedEventCard,
                     label = "Frequency 3",
-                    selectedFrequencyHz = loadedSettings.highFrequencyHz,
+                    selectedFrequencyHz = timedEventSettings.highFrequencyHz,
+                    guardCloneTemplate = true,
                 ) { selectedFrequencyHz ->
                     runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.THREE, frequencyHz = selectedFrequencyHz)
                 }
             }
         }
         if (frequencyVisibility.showFrequencyB) {
-            if (disconnectedLocked) {
+            if (timedEventUnavailable) {
                 timedEventCard.addView(compactLabeledRow("Frequency B", readOnlyField("")))
             } else {
                 addFrequencyControl(
                     card = timedEventCard,
                     label = "Frequency B",
-                    selectedFrequencyHz = loadedSettings.beaconFrequencyHz,
+                    selectedFrequencyHz = timedEventSettings.beaconFrequencyHz,
+                    guardCloneTemplate = true,
                 ) { selectedFrequencyHz ->
                     runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.BEACON, frequencyHz = selectedFrequencyHz)
                 }
@@ -1851,7 +1946,21 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 finishTimeCompact = snapshot.settings.finishTimeCompact,
             )
         }
-        return AndroidSessionController.displayedDaysToRunRemainingSummary(systemNow)
+        val settings = displayedTimedEventSettings ?: return ""
+        return JvmTimeSupport.formatDaysToRunRemainingSummary(
+            totalDaysToRun = settings.daysToRun,
+            daysToRunRemaining = displayedTimedEventDaysRemaining,
+            currentTimeCompact = timedEventStatusCurrentTimeCompact(settings, systemNow),
+            startTimeCompact = settings.startTimeCompact,
+            finishTimeCompact = settings.finishTimeCompact,
+        )
+    }
+
+    private fun timedEventStatusCurrentTimeCompact(
+        settings: DeviceSettings,
+        systemNow: LocalDateTime = LocalDateTime.now(),
+    ): String? {
+        return displayedDeviceTimeCompactForUi(systemNow) ?: settings.currentTimeCompact
     }
 
     private fun runTimedEventSettingsChangeWithCloneTemplateGuard(action: () -> Unit) {
@@ -1869,6 +1978,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
                 .setPositiveButton("Change Event Settings") { _, _ ->
                     cloneTemplateLocked = false
+                    AndroidSessionController.allowCloneTemplateTimedEventEdits()
                     action()
                 }
                 .setNegativeButton("Cancel") { _, _ ->
@@ -1879,6 +1989,137 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             renderContent()
         }
         dialog.showLogged("Clone Template Set")
+    }
+
+    private fun showPendingEventPauseNotice() {
+        if (eventPauseDialogOpen || isFinishing || isDestroyed) {
+            return
+        }
+        val notice = AndroidSessionController.pendingEventPauseNotice() ?: return
+        dismissStartupDeviceStatusDialog()
+        startupSearchDialogShown = true
+        startupReadDialogShown = true
+        eventPauseDialogOpen = true
+        AlertDialog.Builder(this)
+            .setTitle("SignalSlinger Event In Progress")
+            .setMessage(notice.message)
+            .setPositiveButton("OK", null)
+            .create()
+            .apply {
+                setOnDismissListener {
+                    eventPauseDialogOpen = false
+                    AndroidSessionController.confirmEventPauseNotice(notice.id)
+                }
+                showLogged("SignalSlinger Event In Progress")
+            }
+    }
+
+    private fun dismissStartupDeviceStatusDialog() {
+        startupDeviceStatusDialog?.dismiss()
+        startupDeviceStatusDialog = null
+        startupDeviceStatusDialogOpen = false
+    }
+
+    private fun dismissStaleStartupDeviceStatusDialog() {
+        val uiState = AndroidSessionController.snapshotUiState()
+        if (uiState.sessionViewState != null) {
+            startupSearchDialogShown = true
+            startupReadDialogShown = true
+            dismissStartupDeviceStatusDialog()
+            return
+        }
+        if (uiState.signalSlingerReadInFlight && startupSearchDialogShown) {
+            dismissStartupDeviceStatusDialog()
+        }
+    }
+
+    private fun showStartupDeviceStatusModalIfNeeded() {
+        if (
+            startupDeviceStatusDialogOpen ||
+            eventPauseDialogOpen ||
+            timelyReplyWarningDialogOpen ||
+            isFinishing ||
+            isDestroyed
+        ) {
+            return
+        }
+        val uiState = AndroidSessionController.snapshotUiState()
+        val dialogContent =
+            when {
+                uiState.signalSlingerReadInFlight && !startupReadDialogShown -> {
+                    startupReadDialogShown = true
+                    "Reading SignalSlinger Data" to
+                        "SerialSlinger is reading data from the attached SignalSlinger. This may take a few seconds."
+                }
+                autoDetectSearchingForHeader && uiState.sessionViewState == null && !startupSearchDialogShown -> {
+                    startupSearchDialogShown = true
+                    "Looking for SignalSlinger" to
+                        "SerialSlinger is looking for an attached SignalSlinger. Connect SignalSlinger to the USB port if it is not already connected."
+                }
+                else -> return
+            }
+        startupDeviceStatusDialogOpen = true
+        AlertDialog.Builder(this)
+            .setTitle(dialogContent.first)
+            .setMessage(dialogContent.second)
+            .setPositiveButton("OK", null)
+            .create()
+            .apply {
+                startupDeviceStatusDialog = this
+                setOnDismissListener {
+                    if (startupDeviceStatusDialog === this) {
+                        startupDeviceStatusDialog = null
+                    }
+                    startupDeviceStatusDialogOpen = false
+                }
+                showLogged(dialogContent.first)
+            }
+    }
+
+    private fun showPendingTimelyReplyWarning() {
+        if (timelyReplyWarningDialogOpen || isFinishing || isDestroyed) {
+            return
+        }
+        val warning = AndroidSessionController.consumeTimelyReplyWarning() ?: return
+        timelyReplyWarningDialogOpen = true
+        AlertDialog.Builder(this)
+            .setTitle("SignalSlinger Reply Warning")
+            .setMessage(warning)
+            .setPositiveButton("OK", null)
+            .create()
+            .apply {
+                setOnDismissListener { timelyReplyWarningDialogOpen = false }
+                showLogged("SignalSlinger Reply Warning")
+            }
+    }
+
+    private fun installTimedEventSettingsPickerOpenGuard(view: View) {
+        view.setOnTouchListener { touchedView, event ->
+            if (event.actionMasked == MotionEvent.ACTION_DOWN && cloneTemplateLocked) {
+                runTimedEventSettingsChangeWithCloneTemplateGuard {
+                    touchedView.post { touchedView.performClick() }
+                }
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private fun installTimedEventSettingsTextEditGuard(editor: EditText) {
+        editor.setOnTouchListener { _, event ->
+            if (event.actionMasked == MotionEvent.ACTION_DOWN && cloneTemplateLocked) {
+                runTimedEventSettingsChangeWithCloneTemplateGuard {
+                    editor.requestFocus()
+                    editor.setSelection(editor.text?.length ?: 0)
+                    val inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    inputMethodManager?.showSoftInput(editor, 0)
+                }
+                true
+            } else {
+                false
+            }
+        }
     }
 
     private fun runEventTypeSubmitOrPreview(
@@ -1911,10 +2152,56 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             updatePreviewSettings { settings -> settings.copy(foxRole = foxRole) }
             return
         }
+        runFoxRoleSubmitWithStatusModal(foxRole)
+    }
+
+    private fun runFoxRoleSubmitWithStatusModal(foxRole: FoxRole) {
+        val padding = (20 * resources.displayMetrics.density).toInt()
+        val spacing = (12 * resources.displayMetrics.density).toInt()
+        var userDismissed = false
+        val container =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(padding, padding / 2, padding, 0)
+                addView(
+                    ProgressBar(this@MainActivity).apply {
+                        isIndeterminate = true
+                    },
+                    LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                        marginEnd = spacing
+                    },
+                )
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text = "Submitting Fox Role: ${foxRole.uiLabel}"
+                        textSize = 15f
+                        setTextColor(Color.parseColor("#1F2937"))
+                    },
+                    LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f),
+                )
+            }
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Submitting Fox Role")
+                .setView(container)
+                .setNegativeButton("Dismiss") { activeDialog, _ ->
+                    userDismissed = true
+                    activeDialog.dismiss()
+                }
+                .create()
+        dialog.setOnCancelListener { userDismissed = true }
+        dialog.setOnDismissListener { userDismissed = true }
+        dialog.showLogged("Submitting Fox Role")
+
         AndroidSessionController.runFoxRoleSubmit(
             context = applicationContext,
             foxRoleInput = foxRole.uiLabel,
-        )
+        ) {
+            if (!userDismissed && dialog.isShowing) {
+                dialog.dismiss()
+            }
+        }
     }
 
     private fun runPatternTextSubmitOrPreview(patternText: String) {
@@ -1934,14 +2221,17 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     ) {
         if (guardCloneTemplate) {
             runTimedEventSettingsChangeWithCloneTemplateGuard {
-                runPatternSpeedSubmitOrPreviewAllowed(patternSpeedWpm)
+                runPatternSpeedSubmitOrPreviewAllowed(patternSpeedWpm, updateCloneTemplate = true)
             }
         } else {
-            runPatternSpeedSubmitOrPreviewAllowed(patternSpeedWpm)
+            runPatternSpeedSubmitOrPreviewAllowed(patternSpeedWpm, updateCloneTemplate = false)
         }
     }
 
-    private fun runPatternSpeedSubmitOrPreviewAllowed(patternSpeedWpm: Int) {
+    private fun runPatternSpeedSubmitOrPreviewAllowed(
+        patternSpeedWpm: Int,
+        updateCloneTemplate: Boolean,
+    ) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings -> settings.copy(patternCodeSpeedWpm = patternSpeedWpm) }
             return
@@ -1949,6 +2239,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.runPatternSpeedSubmit(
             context = applicationContext,
             patternSpeedWpmText = patternSpeedWpm.toString(),
+            updateCloneTemplate = updateCloneTemplate,
         )
     }
 
@@ -2262,19 +2553,21 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         systemTimeDisplayField?.text = formatDisplayTimestamp(systemNow.withNano(0))
         val currentSchedulePending = AndroidSessionController.isScheduleDerivedDataPending()
         scheduleDerivedDataPending = currentSchedulePending
+        val timedEventSettings = displayedTimedEventSettings
         eventStatusDisplayField?.text =
             if (currentSchedulePending) {
                 "Updating..."
             } else {
-                displayedScheduleSnapshot?.let { snapshot ->
+                timedEventSettings?.let { settings ->
+                    val status = displayedScheduleSnapshot?.status
                     JvmTimeSupport.describeEventStatus(
-                        deviceReportedEventEnabled = snapshot.status.eventEnabled,
-                        eventStateSummary = snapshot.status.eventStateSummary,
-                        currentTimeCompact = displayedDeviceTimeCompactForUi(systemNow),
-                        startTimeCompact = snapshot.settings.startTimeCompact,
-                        finishTimeCompact = snapshot.settings.finishTimeCompact,
-                        startsInFallback = snapshot.status.eventStartsInSummary,
-                        daysToRun = snapshot.settings.daysToRun,
+                        deviceReportedEventEnabled = if (displayedTimedEventUsesCloneTemplate) null else status?.eventEnabled,
+                        eventStateSummary = if (displayedTimedEventUsesCloneTemplate) null else status?.eventStateSummary,
+                        currentTimeCompact = timedEventStatusCurrentTimeCompact(settings, systemNow),
+                        startTimeCompact = settings.startTimeCompact,
+                        finishTimeCompact = settings.finishTimeCompact,
+                        startsInFallback = if (displayedTimedEventUsesCloneTemplate) null else status?.eventStartsInSummary,
+                        daysToRun = settings.daysToRun,
                     )
                 }.orEmpty()
             }
@@ -4183,6 +4476,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         card: LinearLayout,
         label: String,
         selectedFrequencyHz: Long?,
+        guardCloneTemplate: Boolean = false,
         onSubmit: (Long) -> Unit,
     ) {
         var currentFrequencyHz = selectedFrequencyHz?.coerceIn(3_501_000L, 3_700_000L) ?: 3_520_000L
@@ -4192,6 +4486,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 text = formatFrequencyForUnit(currentFrequencyHz),
                 hint = label,
                 actionLabel = label,
+                guardCloneTemplate = guardCloneTemplate,
             ) {
                 showFrequencyPickerDialog(
                     title = label,
@@ -4531,6 +4826,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         emphasizedInputStyle: Boolean = true,
         actionLabel: String = hint.ifBlank { text },
         isEnabledForInteraction: Boolean = true,
+        guardCloneTemplate: Boolean = false,
         onPick: () -> Unit,
     ): EditText =
         EditText(this).apply {
@@ -4547,7 +4843,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 emphasizedInputStyle = emphasizedInputStyle,
                 enabledForInteraction = isEnabledForInteraction,
             )
-            setOnClickListener { onPick() }
+            setOnClickListener {
+                if (guardCloneTemplate) {
+                    runTimedEventSettingsChangeWithCloneTemplateGuard(onPick)
+                } else {
+                    onPick()
+                }
+            }
             installTapOnlyClick()
             layoutParams =
                 LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
@@ -4829,8 +5131,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         return relativeStartDisplaySelectionOverride ?: deriveRelativeTimeSelection(baseCompact, targetCompact)
     }
 
-    private fun relativeEditorSelectionForFinish(): RelativeTimeSelection {
-        return relativeFinishDisplaySelectionOverride ?: defaultEventLengthRelativeSelection()
+    private fun relativeEditorSelectionForFinish(
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+    ): RelativeTimeSelection {
+        return relativeFinishDisplaySelectionOverride
+            ?: JvmTimeSupport.validEventDuration(startTimeCompact, finishTimeCompact)?.let(::relativeTimeSelectionForDuration)
+            ?: defaultEventLengthRelativeSelection()
     }
 
     private fun defaultEventLengthRelativeSelection(): RelativeTimeSelection {
@@ -5377,6 +5684,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         requestedDeviceName: String?,
     ) {
         cloneTemplateLocked = true
+        AndroidSessionController.lockCloneTemplateTimedEventEdits()
         if (!uiState.hasClockPhaseWarning) {
             runCloneWithStatusModal(requestedDeviceName)
             return
@@ -5632,6 +5940,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val PREF_DEVICE_TIME_SET_MODE = "device_time_set_mode"
         private const val CLONE_THEME_BLUE = -14_794_577
         private const val STATUS_POPUP_DURATION_MS = 3_000L
+        private const val FOX_ROLE_PICKER_FEEDBACK_DELAY_MS = 180L
         private const val AUTO_DETECT_ATTACH_DELAY_MS = 180L
         private const val AUTO_DETECT_RETRY_DELAY_MS = 350L
         private const val AUTO_DETECT_MAX_RETRIES = 4

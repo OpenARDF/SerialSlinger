@@ -25,6 +25,7 @@ import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.model.hasWallClockTimeSet
+import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
@@ -39,6 +40,7 @@ import com.openardf.serialslinger.transport.DeviceTransport
 import java.io.File
 import java.time.Duration
 import java.time.LocalDateTime
+import java.util.concurrent.CountDownLatch
 import kotlin.concurrent.thread
 import kotlin.math.abs
 
@@ -55,6 +57,8 @@ data class AndroidUiState(
     val latestLoadedTarget: AndroidConnectionTarget?,
     val latestLoadedTargetLabel: String?,
     val latestLoadedDeviceName: String?,
+    val cloneTemplateSettings: DeviceSettings?,
+    val cloneTemplateDaysRemaining: Int?,
     val draftStationId: String?,
     val draftEventType: String?,
     val draftFoxRole: String?,
@@ -138,7 +142,14 @@ data class CloneSubmitResult(
     val syncAttemptCount: Int,
     val syncSucceeded: Boolean,
     val traceEntries: List<SerialTraceEntry>,
+    val clockPhaseErrorMillis: Long? = null,
+    val clockReferenceTime: LocalDateTime? = null,
     val possibleNewDeviceReasons: List<String> = emptyList(),
+)
+
+data class EventPauseNotice(
+    val id: Long,
+    val message: String,
 )
 
 private data class ClonePreflight(
@@ -158,6 +169,12 @@ private data class ClockDisplayAnchor(
     val currentTimeCompact: String?,
     val referenceTime: LocalDateTime?,
     val phaseErrorMillis: Long?,
+)
+
+private data class EventPauseRequest(
+    val id: Long,
+    val message: String,
+    val latch: CountDownLatch,
 )
 
 private data class ResolvedTransport(
@@ -206,6 +223,10 @@ object AndroidSessionController {
     private var cachedManualWriteDelayMillis: Long? = null
     private var cloneTemplateSettings: DeviceSettings? = null
     private var cloneTemplateDaysRemaining: Int? = null
+    private var cloneTemplateTimedEventEditsLocked: Boolean = false
+    private var pendingTimelyReplyWarning: String? = null
+    private var pendingEventPauseRequest: EventPauseRequest? = null
+    private var nextEventPauseRequestId: Long = 1L
 
     fun initialize(context: Context) {
         synchronized(this) {
@@ -245,6 +266,8 @@ object AndroidSessionController {
                 latestLoadedTarget = latestLoadedTarget,
                 latestLoadedTargetLabel = latestLoadedTarget?.label,
                 latestLoadedDeviceName = latestLoadedDeviceName,
+                cloneTemplateSettings = cloneTemplateSettings,
+                cloneTemplateDaysRemaining = cloneTemplateDaysRemaining,
                 draftStationId = draftStationId,
                 draftEventType = draftEventType,
                 draftFoxRole = draftFoxRole,
@@ -275,6 +298,49 @@ object AndroidSessionController {
             statusIsError = isError
         }
         notifyListeners()
+    }
+
+    fun lockCloneTemplateTimedEventEdits() {
+        synchronized(this) {
+            cloneTemplateTimedEventEditsLocked = true
+        }
+    }
+
+    fun allowCloneTemplateTimedEventEdits() {
+        synchronized(this) {
+            cloneTemplateTimedEventEditsLocked = false
+        }
+    }
+
+    fun consumeTimelyReplyWarning(): String? {
+        synchronized(this) {
+            val warning = pendingTimelyReplyWarning
+            pendingTimelyReplyWarning = null
+            return warning
+        }
+    }
+
+    fun pendingEventPauseNotice(): EventPauseNotice? {
+        synchronized(this) {
+            val request = pendingEventPauseRequest ?: return null
+            return EventPauseNotice(
+                id = request.id,
+                message = request.message,
+            )
+        }
+    }
+
+    fun confirmEventPauseNotice(id: Long) {
+        val request =
+            synchronized(this) {
+                pendingEventPauseRequest
+                    ?.takeIf { it.id == id }
+                    ?.also { pendingEventPauseRequest = null }
+            }
+        request?.latch?.countDown()
+        if (request != null) {
+            notifyListeners()
+        }
     }
 
     fun displayedDeviceTimeText(systemNow: LocalDateTime = LocalDateTime.now()): String {
@@ -438,6 +504,8 @@ object AndroidSessionController {
                             addAll(refreshed.traceEntries)
                             syncOperation?.let { addAll(buildSyncTraceEntries(it)) }
                         },
+                    clockPhaseErrorMillis = syncOperation?.finalAttempt?.phaseErrorMillis,
+                    clockReferenceTime = syncOperation?.finalAttempt?.verificationSamples?.lastOrNull()?.midpointAt,
                     possibleNewDeviceReasons = possibleNewDeviceReasons,
                 )
             }
@@ -451,6 +519,13 @@ object AndroidSessionController {
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
                     applySnapshotDrafts(cloneResult.state.snapshot, refreshClockDisplayAnchor = cloneResult.syncAttemptCount == 0)
+                    if (cloneResult.syncAttemptCount > 0) {
+                        applyClockDisplayAnchor(
+                            currentTimeCompact = cloneResult.state.snapshot?.settings?.currentTimeCompact,
+                            phaseErrorMillis = cloneResult.clockPhaseErrorMillis,
+                            referenceTime = cloneResult.clockReferenceTime ?: LocalDateTime.now(),
+                        )
+                    }
                     timeWorkflowNotice = null
                     clearScheduleDerivedDataPendingLocked()
                     latestSubmitSummary = renderCloneSubmitSummary(cloneResult)
@@ -643,6 +718,85 @@ object AndroidSessionController {
         return lines.any { line -> SignalSlingerProtocolCodec.parseReportLine(line) != null }
     }
 
+    private fun pauseRunningEventAfterEvtIfNeeded(
+        command: String,
+        state: DeviceSessionState,
+        transport: DeviceTransport,
+    ): DeviceLoadInterventionResult? {
+        if (!command.equals("EVT", ignoreCase = true)) {
+            return null
+        }
+        val eventSummary = activeEventSummary(state) ?: return null
+        val message =
+            "The attached SignalSlinger reports that an event is in progress:\n\n" +
+                "$eventSummary\n\n" +
+                "A running event may let the SignalSlinger sleep between transmissions and miss commands. " +
+                "When you tap OK, SerialSlinger will send GO 0 to pause the event, then continue loading data."
+        waitForEventPauseDismissal(message)
+        val sentAtMs = System.currentTimeMillis()
+        transport.sendCommands(listOf("GO 0"))
+        val responseLines = transport.readAvailableLines()
+        val receivedAtMs = System.currentTimeMillis()
+        logAppEvent(
+            title = "event-state",
+            lines = listOf(
+                "SignalSlinger reported an event in progress: $eventSummary",
+                "User dismissed warning; sent GO 0 before continuing.",
+            ),
+        )
+        return DeviceLoadInterventionResult(
+            state = DeviceSessionWorkflow.ingestReportLines(state, responseLines),
+            commandsSent = listOf("GO 0"),
+            linesReceived = responseLines,
+            traceEntries =
+                listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, "GO 0")) +
+                    responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) },
+        )
+    }
+
+    private fun activeEventSummary(state: DeviceSessionState): String? {
+        val status = state.snapshot?.status ?: return null
+        if (status.eventEnabled != true) {
+            return null
+        }
+        val statusText = listOfNotNull(
+            status.eventStateSummary?.trim()?.takeIf { it.isNotEmpty() },
+            status.eventStartsInSummary?.trim()?.takeIf { it.isNotEmpty() },
+        )
+        val joinedStatus = statusText.joinToString(" ")
+        val lowerStatus = joinedStatus.lowercase()
+        val activeEventMarkers =
+            listOf(
+                "in progress",
+                "time remaining",
+                "on the air",
+                "running forever",
+                "user launched",
+            )
+        if (activeEventMarkers.none { marker -> lowerStatus.contains(marker) }) {
+            return null
+        }
+        return status.eventStateSummary?.trim()?.takeIf { it.isNotEmpty() }
+            ?: status.eventStartsInSummary?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun waitForEventPauseDismissal(message: String) {
+        val request =
+            synchronized(this) {
+                val request = EventPauseRequest(
+                    id = nextEventPauseRequestId++,
+                    message = message,
+                    latch = CountDownLatch(1),
+                )
+                pendingEventPauseRequest = request
+                statusText = "SignalSlinger event in progress."
+                statusIsError = false
+                request
+            }
+        notifyListeners()
+        request.latch.await()
+    }
+
     fun clearLoadedSessionIfMatches(
         deviceName: String?,
         reasonText: String,
@@ -728,6 +882,7 @@ object AndroidSessionController {
                     val initialLoad = DeviceSessionController.connectAndLoad(
                         transport = transport,
                         onReportReceived = ::markSignalSlingerReadInFlight,
+                        afterCommand = ::pauseRunningEventAfterEvtIfNeeded,
                     )
                     require(hasSignalSlingerReportLine(initialLoad.linesReceived)) {
                         "No SignalSlinger response was received."
@@ -912,6 +1067,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1029,6 +1185,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1326,6 +1483,7 @@ object AndroidSessionController {
     fun runPatternSpeedSubmit(
         context: Context,
         patternSpeedWpmText: String,
+        updateCloneTemplate: Boolean = false,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -1412,6 +1570,9 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    if (updateCloneTemplate) {
+                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
+                    }
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1796,6 +1957,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1888,14 +2050,16 @@ object AndroidSessionController {
 
         synchronized(this) {
             draftFoxRole = parsedFoxRole.uiLabel
-            latestSubmitSummary = "Submitting Fox Role update..."
-            statusText = "Submitting Fox Role update..."
+            latestSubmitSummary = "Submitting Fox Role update: ${parsedFoxRole.uiLabel}"
+            statusText = "Submitting Fox Role: ${parsedFoxRole.uiLabel}"
             statusIsError = false
         }
         notifyListeners()
 
         thread(name = "serialslinger-android-fox-role-submit") {
             var resolvedTarget: AndroidConnectionTarget? = null
+            var callbackResult: Result<DeviceSubmitResult>
+            var commandSucceeded: Boolean
             val result = runWithResolvedTransport(
                 context = context,
                 requestedDeviceName = requestedDeviceName,
@@ -1914,32 +2078,44 @@ object AndroidSessionController {
                 if (result.isSuccess) {
                     val submitResult = result.getOrThrow()
                     val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Fox Role already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Fox Role submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Fox Role already matched the requested value."
-                        } else {
-                            "Fox Role updated and verified."
-                        }
-                    statusIsError = false
+                    val verificationFailure = submitResult.submitVerificationFailure()
+                    if (verificationFailure) {
+                        latestSubmitSummary = renderSubmitFailureSummary(submitResult)
+                        latestProbeSummary = "Latest load remains available above. Fox Role submission failed verification."
+                        statusText = "Fox Role update failed verification."
+                        statusIsError = true
+                        callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
+                        commandSucceeded = false
+                    } else {
+                        latestSessionViewState = AndroidSessionViewState(
+                            state = submitResult.state,
+                            traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
+                        )
+                        resolvedTarget?.let(::rememberLoadedTargetLocked)
+                        draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
+                        draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
+                        draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                        draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
+                        draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
+                        draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
+                        draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
+                        latestSubmitSummary = renderSubmitSummary(submitResult)
+                        latestProbeSummary =
+                            if (wasNoOp) {
+                                "Latest load remains available above. Fox Role already matched the requested value."
+                            } else {
+                                "Latest load remains available above. Fox Role submission completed."
+                            }
+                        statusText =
+                            if (wasNoOp) {
+                                "Fox Role already matched the requested value."
+                            } else {
+                                "Fox Role updated and verified."
+                            }
+                        statusIsError = false
+                        callbackResult = Result.success(submitResult)
+                        commandSucceeded = true
+                    }
                 } else {
                     latestSubmitSummary = buildString {
                         appendLine("Submit failed.")
@@ -1947,18 +2123,20 @@ object AndroidSessionController {
                     }.trim()
                     statusText = "Fox Role update failed."
                     statusIsError = true
+                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Fox Role update failed."))
+                    commandSucceeded = false
                 }
             }
 
             emitCommandLog(
                 command = "set-fox-role",
                 source = source,
-                success = result.isSuccess,
+                success = commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(callbackResult) }
             }
         }
     }
@@ -2037,6 +2215,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -2175,6 +2354,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     latestSubmitSummary = renderSubmitSummary(submitResult)
                     latestProbeSummary =
@@ -2352,6 +2532,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     timeWorkflowNotice = null
                     clearScheduleDerivedDataPendingLocked()
@@ -2761,6 +2942,7 @@ object AndroidSessionController {
                             traceEntries = commandTraceEntries,
                         )
                         resolvedTarget?.let(::rememberLoadedTargetLocked)
+                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                         applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                         timeWorkflowNotice = scheduleImpact.noticeText
                         clearScheduleDerivedDataPendingLocked()
@@ -3019,6 +3201,7 @@ object AndroidSessionController {
                             traceEntries = commandTraceEntries,
                         )
                         resolvedTarget?.let(::rememberLoadedTargetLocked)
+                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                         applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                         timeWorkflowNotice = scheduleImpact.noticeText
                         clearScheduleDerivedDataPendingLocked()
@@ -3200,6 +3383,7 @@ object AndroidSessionController {
                             traceEntries = commandTraceEntries,
                         )
                         resolvedTarget?.let(::rememberLoadedTargetLocked)
+                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                         applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                         timeWorkflowNotice = scheduleImpact.noticeText
                         clearScheduleDerivedDataPendingLocked()
@@ -4055,6 +4239,7 @@ object AndroidSessionController {
     private fun rememberCloneTemplateFrom(sourceSnapshot: DeviceSnapshot) {
         rememberCloneTemplateFrom(sourceSnapshot.settings)
         cloneTemplateDaysRemaining = sourceSnapshot.status.daysRemaining
+        cloneTemplateTimedEventEditsLocked = false
     }
 
     private fun possibleNewDeviceReasons(
@@ -4138,6 +4323,30 @@ object AndroidSessionController {
                     beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
                 )
             }
+    }
+
+    private fun rememberCloneTemplateTimedEventFieldsFrom(sourceSnapshot: DeviceSnapshot?) {
+        if (sourceSnapshot == null || cloneTemplateTimedEventEditsLocked) {
+            return
+        }
+        val existingTemplate = cloneTemplateSettings ?: return
+        val sourceSettings = sourceSnapshot.settings
+        cloneTemplateSettings =
+            existingTemplate.copy(
+                stationId = sourceSettings.stationId,
+                eventType = sourceSettings.eventType,
+                idCodeSpeedWpm = sourceSettings.idCodeSpeedWpm,
+                patternCodeSpeedWpm = sourceSettings.patternCodeSpeedWpm,
+                currentTimeCompact = sourceSettings.currentTimeCompact,
+                startTimeCompact = sourceSettings.startTimeCompact,
+                finishTimeCompact = sourceSettings.finishTimeCompact,
+                daysToRun = sourceSettings.daysToRun,
+                lowFrequencyHz = sourceSettings.lowFrequencyHz,
+                mediumFrequencyHz = sourceSettings.mediumFrequencyHz,
+                highFrequencyHz = sourceSettings.highFrequencyHz,
+                beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
+            )
+        cloneTemplateDaysRemaining = sourceSnapshot.status.daysRemaining
     }
 
     private fun buildCloneEditableSettings(
@@ -4288,6 +4497,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.traceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     timeWorkflowNotice = scheduleImpact.noticeText
                     clearScheduleDerivedDataPendingLocked()
@@ -4414,6 +4624,7 @@ object AndroidSessionController {
                         )
                     latestSessionViewState = AndroidSessionViewState(state = normalizedState, traceEntries = commandResult.traceEntries)
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(normalizedState.snapshot)
                     applySnapshotDrafts(normalizedState.snapshot, refreshClockDisplayAnchor = false)
                     latestSubmitSummary =
                         buildString {
@@ -4488,6 +4699,7 @@ object AndroidSessionController {
                 success -> snapshotUiState().sessionViewState?.traceEntries.orEmpty()
                 else -> emptyList()
             }
+        recordTimelyReplyWarningIfNeeded(persistedTraceEntries)
         synchronized(this) {
             sessionLog
         }?.appendCommandSection(
@@ -4497,6 +4709,55 @@ object AndroidSessionController {
             summary = summary,
             traceEntries = persistedTraceEntries,
         )
+    }
+
+    private fun recordTimelyReplyWarningIfNeeded(traceEntries: List<SerialTraceEntry>) {
+        val missedCommands = commandsWithoutTimelyReplies(traceEntries)
+        if (missedCommands.isEmpty()) {
+            return
+        }
+        val commandSummary = missedCommands.take(6).joinToString(", ")
+        val suffix =
+            if (missedCommands.size > 6) {
+                ", and ${missedCommands.size - 6} more"
+            } else {
+                ""
+            }
+        synchronized(this) {
+            pendingTimelyReplyWarning =
+                "The attached SignalSlinger did not provide timely replies to: $commandSummary$suffix.\n\n" +
+                    "Check that the SignalSlinger is awake, powered, and firmly connected. If this repeats, reload the device data before making changes."
+        }
+    }
+
+    private fun commandsWithoutTimelyReplies(traceEntries: List<SerialTraceEntry>): List<String> {
+        val missedCommands = linkedSetOf<String>()
+        var activeCommand: String? = null
+        var activeCommandHasReply = false
+
+        fun closeActiveCommand() {
+            val command = activeCommand
+            if (command != null && !activeCommandHasReply) {
+                missedCommands += command
+            }
+        }
+
+        traceEntries.forEach { entry ->
+            when (entry.direction) {
+                SerialTraceDirection.TX -> {
+                    closeActiveCommand()
+                    activeCommand = entry.payload
+                    activeCommandHasReply = false
+                }
+                SerialTraceDirection.RX -> {
+                    if (activeCommand != null && entry.payload.isNotBlank()) {
+                        activeCommandHasReply = true
+                    }
+                }
+            }
+        }
+        closeActiveCommand()
+        return missedCommands.toList()
     }
 
     private fun notifyListeners() {

@@ -81,6 +81,46 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun connectAndLoadRunsInterventionBeforeNextLoadCommand() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "VER" to listOf("* SW Ver: 1.2.3 HW Build: 3.5"),
+                "EVT" to listOf("* Event:Classic", "* In progress"),
+                "GO 0" to listOf("* Not scheduled"),
+            ),
+        )
+
+        val result = DeviceSessionController.connectAndLoad(
+            transport = transport,
+            afterCommand = { command, state, activeTransport ->
+                if (command != "EVT" || state.snapshot?.status?.eventStartsInSummary != "In Progress") {
+                    return@connectAndLoad null
+                }
+                activeTransport.sendCommands(listOf("GO 0"))
+                val responseLines = activeTransport.readAvailableLines()
+                DeviceLoadInterventionResult(
+                    state = DeviceSessionWorkflow.ingestReportLines(state, responseLines),
+                    commandsSent = listOf("GO 0"),
+                    linesReceived = responseLines,
+                    traceEntries = listOf(
+                        SerialTraceEntry(1L, SerialTraceDirection.TX, "GO 0"),
+                        SerialTraceEntry(2L, SerialTraceDirection.RX, "* Not scheduled"),
+                    ),
+                )
+            },
+        )
+
+        val evtIndex = transport.sentCommands.indexOf("EVT")
+        val goStopIndex = transport.sentCommands.indexOf("GO 0")
+        val foxIndex = transport.sentCommands.indexOf("FOX")
+        assertTrue(evtIndex >= 0)
+        assertTrue(goStopIndex > evtIndex)
+        assertTrue(foxIndex > goStopIndex)
+        assertEquals(transport.sentCommands, result.commandsSent)
+        assertEquals(false, result.state.snapshot?.status?.eventEnabled)
+    }
+
+    @Test
     fun submitEditsSendsMinimalCommandsAndRefreshesState() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(

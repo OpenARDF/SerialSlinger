@@ -19,6 +19,13 @@ data class DeviceLoadResult(
     val traceEntries: List<SerialTraceEntry>,
 )
 
+data class DeviceLoadInterventionResult(
+    val state: DeviceSessionState,
+    val commandsSent: List<String>,
+    val linesReceived: List<String>,
+    val traceEntries: List<SerialTraceEntry>,
+)
+
 enum class SerialTraceDirection {
     TX,
     RX;
@@ -58,6 +65,11 @@ object DeviceSessionController {
         baseSettings: DeviceSettings = DeviceSettings.empty(),
         progress: ((completed: Int, total: Int) -> Unit)? = null,
         onReportReceived: (() -> Unit)? = null,
+        afterCommand: ((
+            command: String,
+            state: DeviceSessionState,
+            transport: DeviceTransport,
+        ) -> DeviceLoadInterventionResult?)? = null,
     ): DeviceLoadResult {
         transport.connect()
         val connectedState = DeviceSessionWorkflow.connected(baseSettings)
@@ -67,6 +79,7 @@ object DeviceSessionController {
             startEditing = true,
             progress = progress,
             onReportReceived = onReportReceived,
+            afterCommand = afterCommand,
         )
     }
 
@@ -76,6 +89,11 @@ object DeviceSessionController {
         startEditing: Boolean = false,
         progress: ((completed: Int, total: Int) -> Unit)? = null,
         onReportReceived: (() -> Unit)? = null,
+        afterCommand: ((
+            command: String,
+            state: DeviceSessionState,
+            transport: DeviceTransport,
+        ) -> DeviceLoadInterventionResult?)? = null,
     ): DeviceLoadResult {
         val commands = mutableListOf<String>()
         val lines = mutableListOf<String>()
@@ -104,6 +122,13 @@ object DeviceSessionController {
             }
             notifyReportReceived(responseLines)
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
+            afterCommand?.invoke(command, updatedState, transport)?.let { intervention ->
+                commands += intervention.commandsSent
+                lines += intervention.linesReceived
+                traceEntries += intervention.traceEntries
+                notifyReportReceived(intervention.linesReceived)
+                updatedState = intervention.state
+            }
             progress?.invoke(commands.size, bootstrapCommands.size.coerceAtLeast(1))
         }
 
@@ -132,6 +157,13 @@ object DeviceSessionController {
             }
             notifyReportReceived(responseLines)
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
+            afterCommand?.invoke(resolvedCommand, updatedState, transport)?.let { intervention ->
+                commands += intervention.commandsSent
+                lines += intervention.linesReceived
+                traceEntries += intervention.traceEntries
+                notifyReportReceived(intervention.linesReceived)
+                updatedState = intervention.state
+            }
             progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
         }
 
