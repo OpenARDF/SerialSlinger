@@ -152,6 +152,7 @@ object DeviceSessionController {
         editedSettings: EditableDeviceSettings,
         transport: DeviceTransport,
         forceWriteKeys: Set<SettingKey> = emptySet(),
+        allowFullReloadVerification: Boolean = true,
         progress: ((completed: Int, total: Int) -> Unit)? = null,
     ): DeviceSubmitResult {
         val submission = DeviceSessionWorkflow.submitChanges(state, editedSettings, forceWriteKeys = forceWriteKeys)
@@ -164,7 +165,9 @@ object DeviceSessionController {
         val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
             submissionSnapshot.info.softwareVersion,
         )
-        val requiresFullReloadVerification = requiresFullReloadVerification(submission.writePlan)
+        val requiresFullReloadVerification =
+            allowFullReloadVerification &&
+                requiresFullReloadVerification(submission.writePlan)
         val readbackCommands = buildVerificationReadbackCommands(
             writePlan = submission.writePlan,
             expectedSettings = validatedSettings,

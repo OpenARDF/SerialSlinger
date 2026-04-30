@@ -22,3 +22,9 @@
 - How should invalid values be shown before submit?
 - Should submit send all values or only changed values?
 - Should the UI refresh from device after submit automatically?
+
+## Future Device Controls
+
+- evaluate an advanced thermal shutdown threshold control; keep the cutoff
+  read-only until firmware command semantics, safety limits, validation, and
+  tester guidance are defined

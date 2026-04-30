@@ -24,6 +24,7 @@ import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
 import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.WritePlanner
+import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceSessionController
@@ -5861,6 +5862,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (!loadedSnapshot.capabilities.supportsScheduling) {
             return null
         }
+        if (!loadedSnapshot.hasWallClockTimeSet()) {
+            return null
+        }
 
         Thread.sleep(80L)
         val samples = observeClockPhaseSamples(transport, maxSamples = 4)
@@ -7615,6 +7619,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             samples += sample
             onProgress?.invoke(samples.size, maxSamples)
             val previousReported = samples.getOrNull(samples.lastIndex - 1)?.reportedTimeCompact
+            if (sample.reportedTimeObserved && sample.reportedTimeCompact == null) {
+                return samples
+            }
             if (previousReported != null && sample.reportedTimeCompact != null && previousReported != sample.reportedTimeCompact) {
                 return samples
             }
@@ -7633,15 +7640,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         transport.sendCommands(listOf(command))
         val responseLines = transport.readAvailableLines()
         val receivedAt = java.time.LocalDateTime.now()
+        val reportedTimeCompact = responseLines
+            .mapNotNull { line -> SignalSlingerProtocolCodec.parseReportLine(line)?.settingsPatch?.currentTimeCompact }
+            .firstOrNull()
         return ClockReadSample(
             sentAt = sentAt,
             receivedAt = receivedAt,
             responseLines = responseLines,
-            reportedTimeCompact = responseLines
-                .mapNotNull { line -> SignalSlingerProtocolCodec.parseReportLine(line)?.settingsPatch?.currentTimeCompact }
-                .firstOrNull(),
+            reportedTimeCompact = reportedTimeCompact,
+            reportedTimeObserved = responseLines.any(::isClockTimeResponseLine),
             command = command,
         )
+    }
+
+    private fun isClockTimeResponseLine(line: String): Boolean {
+        return line.trim().startsWith("* Time:", ignoreCase = true)
     }
 
     private fun estimatedSyncProgressUnits(): Int {
@@ -7775,6 +7788,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val receivedAt: java.time.LocalDateTime,
         val responseLines: List<String>,
         val reportedTimeCompact: String?,
+        val reportedTimeObserved: Boolean,
         val command: String,
     ) {
         val sentAtMs: Long

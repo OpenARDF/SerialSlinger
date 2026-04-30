@@ -49,6 +49,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
@@ -179,6 +180,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var startTimeFinishAdjustmentDialogOpen: Boolean = false
     private var lastsDurationDialogOpen: Boolean = false
     private var multiDayDurationGuardDialogOpen: Boolean = false
+    private var cloneTemplateLocked: Boolean = false
     private var previewModeEnabled: Boolean = false
     private var previewSessionViewState: AndroidSessionViewState? = null
     private var previewUnlockStep: Int = 0
@@ -215,6 +217,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 autoPermissionDeniedDeviceNames -= deviceName
                             } else {
                                 autoPermissionDeniedDeviceNames += deviceName
+                                if (autoProbeInFlightDeviceName == deviceName) {
+                                    autoProbeInFlightDeviceName = null
+                                }
+                                AndroidSessionController.clearLoadedSessionIfMatches(
+                                    deviceName = deviceName,
+                                    reasonText = "SignalSlinger permission denied.",
+                                )
                             }
                         }
                         AndroidSessionController.recordStatus(
@@ -540,6 +549,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun requestSignalSlingerReload() {
+        cloneTemplateLocked = false
         autoDetectSearchingForHeader = true
         AndroidSessionController.recordStatus("Searching for SignalSlinger...", isError = true)
         scheduleAutoDetect(
@@ -751,7 +761,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     devicePatternSpeedSpinner,
                     selectedValue = uiState.draftPatternSpeedWpm?.toIntOrNull() ?: loadedSettings.patternCodeSpeedWpm,
                 ) { selectedValue ->
-                    runPatternSpeedSubmitOrPreview(selectedValue)
+                    runPatternSpeedSubmitOrPreview(selectedValue, guardCloneTemplate = false)
                 }
             }
         }
@@ -952,7 +962,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     timedPatternSpeedSpinner,
                     selectedValue = uiState.draftPatternSpeedWpm?.toIntOrNull() ?: loadedSettings.patternCodeSpeedWpm,
                 ) { selectedValue ->
-                    runPatternSpeedSubmitOrPreview(selectedValue)
+                    runPatternSpeedSubmitOrPreview(selectedValue, guardCloneTemplate = true)
                 }
             }
         }
@@ -1014,32 +1024,34 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 relativeFinishDisplaySelectionOverride = finishSelection
                                 val formattedSelection = formatRelativeTimeSelection(selection)
                                 startTimeField.setText(formattedSelection)
-                                if (isPreviewModeActive()) {
-                                    val baseCompact = displayedDeviceTimeCompactForUi()
-                                    val previewStartCompact =
-                                        JvmTimeSupport.relativeTargetTimeCompact(
-                                            baseCompact = baseCompact,
-                                            hours = selection.hours,
-                                            minutes = selection.minutes,
-                                            useTopOfHour = selection.useTopOfHour,
-                                        )
-                                    updatePreviewSettings { settings ->
-                                        settings.copy(
-                                            startTimeCompact = previewStartCompact,
-                                            finishTimeCompact =
-                                                previewStartCompact?.let {
-                                                    JvmTimeSupport.finishTimeCompactFromStart(it, resolvedDuration)
-                                                },
-                                            daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
+                                runTimedEventSettingsChangeWithCloneTemplateGuard {
+                                    if (isPreviewModeActive()) {
+                                        val baseCompact = displayedDeviceTimeCompactForUi()
+                                        val previewStartCompact =
+                                            JvmTimeSupport.relativeTargetTimeCompact(
+                                                baseCompact = baseCompact,
+                                                hours = selection.hours,
+                                                minutes = selection.minutes,
+                                                useTopOfHour = selection.useTopOfHour,
+                                            )
+                                        updatePreviewSettings { settings ->
+                                            settings.copy(
+                                                startTimeCompact = previewStartCompact,
+                                                finishTimeCompact =
+                                                    previewStartCompact?.let {
+                                                        JvmTimeSupport.finishTimeCompactFromStart(it, resolvedDuration)
+                                                    },
+                                                daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
+                                            )
+                                        }
+                                    } else {
+                                        AndroidSessionController.runRelativeStartTimeSubmit(
+                                            context = applicationContext,
+                                            offsetCommand = formatRelativeTimeCommand(selection),
+                                            finishOffsetCommand = JvmTimeSupport.formatRelativeDurationCommand(resolvedDuration),
+                                            preservedDaysToRun = if (preserveDaysToRun) loadedSettings.daysToRun else null,
                                         )
                                     }
-                                } else {
-                                    AndroidSessionController.runRelativeStartTimeSubmit(
-                                        context = applicationContext,
-                                        offsetCommand = formatRelativeTimeCommand(selection),
-                                        finishOffsetCommand = JvmTimeSupport.formatRelativeDurationCommand(resolvedDuration),
-                                        preservedDaysToRun = if (preserveDaysToRun) loadedSettings.daysToRun else null,
-                                    )
                                 }
                             }
                         }
@@ -1187,26 +1199,28 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             relativeFinishDisplaySelectionOverride = effectiveSelection
                             val formattedSelection = formatRelativeTimeSelection(effectiveSelection)
                             finishTimeField.setText(formattedSelection)
-                            if (isPreviewModeActive()) {
-                                val previewFinishCompact =
-                                    JvmTimeSupport.relativeTargetTimeCompact(
-                                        baseCompact = loadedSettings.startTimeCompact,
-                                        hours = effectiveSelection.hours,
-                                        minutes = effectiveSelection.minutes,
-                                        useTopOfHour = effectiveSelection.useTopOfHour,
-                                    )
-                                updatePreviewSettings { settings ->
-                                    settings.copy(
-                                        finishTimeCompact = previewFinishCompact,
-                                        daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
+                            runTimedEventSettingsChangeWithCloneTemplateGuard {
+                                if (isPreviewModeActive()) {
+                                    val previewFinishCompact =
+                                        JvmTimeSupport.relativeTargetTimeCompact(
+                                            baseCompact = loadedSettings.startTimeCompact,
+                                            hours = effectiveSelection.hours,
+                                            minutes = effectiveSelection.minutes,
+                                            useTopOfHour = effectiveSelection.useTopOfHour,
+                                        )
+                                    updatePreviewSettings { settings ->
+                                        settings.copy(
+                                            finishTimeCompact = previewFinishCompact,
+                                            daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
+                                        )
+                                    }
+                                } else {
+                                    AndroidSessionController.runRelativeFinishTimeSubmit(
+                                        context = applicationContext,
+                                        offsetCommand = formatRelativeTimeCommand(effectiveSelection),
+                                        preservedDaysToRun = if (preserveDaysToRun) loadedSettings.daysToRun else null,
                                     )
                                 }
-                            } else {
-                                AndroidSessionController.runRelativeFinishTimeSubmit(
-                                    context = applicationContext,
-                                    offsetCommand = formatRelativeTimeCommand(effectiveSelection),
-                                    preservedDaysToRun = if (preserveDaysToRun) loadedSettings.daysToRun else null,
-                                )
                             }
                         }
                     }
@@ -1840,7 +1854,43 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         return AndroidSessionController.displayedDaysToRunRemainingSummary(systemNow)
     }
 
+    private fun runTimedEventSettingsChangeWithCloneTemplateGuard(action: () -> Unit) {
+        if (!cloneTemplateLocked) {
+            action()
+            return
+        }
+
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Clone Template Set")
+                .setMessage(
+                    "The cloning template has already been set by pressing Clone.\n\n" +
+                        "Changing Timed Event Settings now will update the template used for the next clone.",
+                )
+                .setPositiveButton("Change Event Settings") { _, _ ->
+                    cloneTemplateLocked = false
+                    action()
+                }
+                .setNegativeButton("Cancel") { _, _ ->
+                    renderContent()
+                }
+                .create()
+        dialog.setOnCancelListener {
+            renderContent()
+        }
+        dialog.showLogged("Clone Template Set")
+    }
+
     private fun runEventTypeSubmitOrPreview(
+        eventType: EventType,
+        foxRole: FoxRole?,
+    ) {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runEventTypeSubmitOrPreviewAllowed(eventType, foxRole)
+        }
+    }
+
+    private fun runEventTypeSubmitOrPreviewAllowed(
         eventType: EventType,
         foxRole: FoxRole?,
     ) {
@@ -1878,7 +1928,20 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         )
     }
 
-    private fun runPatternSpeedSubmitOrPreview(patternSpeedWpm: Int) {
+    private fun runPatternSpeedSubmitOrPreview(
+        patternSpeedWpm: Int,
+        guardCloneTemplate: Boolean,
+    ) {
+        if (guardCloneTemplate) {
+            runTimedEventSettingsChangeWithCloneTemplateGuard {
+                runPatternSpeedSubmitOrPreviewAllowed(patternSpeedWpm)
+            }
+        } else {
+            runPatternSpeedSubmitOrPreviewAllowed(patternSpeedWpm)
+        }
+    }
+
+    private fun runPatternSpeedSubmitOrPreviewAllowed(patternSpeedWpm: Int) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings -> settings.copy(patternCodeSpeedWpm = patternSpeedWpm) }
             return
@@ -1939,6 +2002,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun runStationIdSubmitOrPreview(stationId: String) {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runStationIdSubmitOrPreviewAllowed(stationId)
+        }
+    }
+
+    private fun runStationIdSubmitOrPreviewAllowed(stationId: String) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings -> settings.copy(stationId = stationId) }
             return
@@ -1950,6 +2019,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun runIdSpeedSubmitOrPreview(idSpeedWpm: Int) {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runIdSpeedSubmitOrPreviewAllowed(idSpeedWpm)
+        }
+    }
+
+    private fun runIdSpeedSubmitOrPreviewAllowed(idSpeedWpm: Int) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings -> settings.copy(idCodeSpeedWpm = idSpeedWpm) }
             return
@@ -1961,6 +2036,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun runDisableEventViaStartTimeCommandOrPreview() {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runDisableEventViaStartTimeCommandOrPreviewAllowed()
+        }
+    }
+
+    private fun runDisableEventViaStartTimeCommandOrPreviewAllowed() {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings ->
                 settings.copy(startTimeCompact = null, finishTimeCompact = null)
@@ -1976,6 +2057,16 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun runStartTimeSubmitOrPreview(
+        startTimeInput: String,
+        requestedFinishTimeInput: String?,
+        preserveDaysToRun: Boolean,
+    ) {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runStartTimeSubmitOrPreviewAllowed(startTimeInput, requestedFinishTimeInput, preserveDaysToRun)
+        }
+    }
+
+    private fun runStartTimeSubmitOrPreviewAllowed(
         startTimeInput: String,
         requestedFinishTimeInput: String?,
         preserveDaysToRun: Boolean,
@@ -2003,6 +2094,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         finishTimeInput: String,
         preserveDaysToRun: Boolean,
     ) {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runFinishTimeSubmitOrPreviewAllowed(finishTimeInput, preserveDaysToRun)
+        }
+    }
+
+    private fun runFinishTimeSubmitOrPreviewAllowed(
+        finishTimeInput: String,
+        preserveDaysToRun: Boolean,
+    ) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings ->
                 settings.copy(
@@ -2020,6 +2120,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun runEventDurationSubmitOrPreview(
+        requestedDuration: Duration,
+        preserveDaysToRun: Boolean,
+    ) {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runEventDurationSubmitOrPreviewAllowed(requestedDuration, preserveDaysToRun)
+        }
+    }
+
+    private fun runEventDurationSubmitOrPreviewAllowed(
         requestedDuration: Duration,
         preserveDaysToRun: Boolean,
     ) {
@@ -2046,6 +2155,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         daysToRun: Int,
         requestedFinishTimeInput: String? = null,
     ) {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runDaysToRunSubmitOrPreviewAllowed(daysToRun, requestedFinishTimeInput)
+        }
+    }
+
+    private fun runDaysToRunSubmitOrPreviewAllowed(
+        daysToRun: Int,
+        requestedFinishTimeInput: String? = null,
+    ) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings ->
                 settings.copy(
@@ -2063,6 +2181,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun runFrequencyBankSubmitOrPreview(
+        bankId: FrequencyBankId,
+        frequencyHz: Long,
+    ) {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runFrequencyBankSubmitOrPreviewAllowed(bankId, frequencyHz)
+        }
+    }
+
+    private fun runFrequencyBankSubmitOrPreviewAllowed(
         bankId: FrequencyBankId,
         frequencyHz: Long,
     ) {
@@ -2093,9 +2220,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             !uiState.currentTimeSyncInFlight &&
                 uiState.statusIsError &&
                 uiState.statusText.startsWith("Device Time sync failed")
+        val deviceTimeNotSet =
+            !uiState.currentTimeSyncInFlight &&
+                uiState.sessionViewState?.state?.snapshot?.settings?.currentTimeCompact == null
         val deviceTimeColor =
             when {
                 uiState.currentTimeSyncInFlight -> Color.parseColor("#B45309")
+                deviceTimeNotSet -> Color.parseColor("#9E1C1C")
                 deviceTimeSyncFailed -> Color.parseColor("#9E1C1C")
                 deviceTimeSkewMillis == null -> null
                 abs(deviceTimeSkewMillis) > AndroidSessionController.CLOCK_PHASE_WARNING_THRESHOLD_MILLIS -> Color.parseColor("#9E1C1C")
@@ -5201,7 +5332,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     requestedDeviceName = uiState.latestLoadedDeviceName,
                 )
             }
-            contentDescription = "Clone timed event settings"
+            contentDescription = "Clone timed event settings to attached SignalSlinger"
             installLongPressGesture(this, allowShortTap = true) {
                 if (!isEnabled) {
                     return@installLongPressGesture
@@ -5226,7 +5357,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 requestedDeviceName = latestLoadedDeviceName,
             )
         }.apply {
-            contentDescription = "Clone timed event settings"
+            contentDescription = "Clone timed event settings to attached SignalSlinger"
             installLongPressGesture(this, allowShortTap = true) {
                 animateFeedback(this, null, playSound = true)
                 clockDisplayHandler.postDelayed(
@@ -5245,11 +5376,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         uiState: AndroidUiState,
         requestedDeviceName: String?,
     ) {
+        cloneTemplateLocked = true
         if (!uiState.hasClockPhaseWarning) {
-            AndroidSessionController.runCloneTimedEventSettings(
-                context = applicationContext,
-                requestedDeviceName = requestedDeviceName,
-            )
+            runCloneWithStatusModal(requestedDeviceName)
             return
         }
 
@@ -5266,10 +5395,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         text =
                             "Device Time differs noticeably from Android system time.\n\n" +
                                 "Measured phase error: $phaseSummary\n\n" +
-                                "Syncing the clock before cloning is strongly recommended."
+                                "Clone copies the stored timed-event template to the attached SignalSlinger. " +
+                                "Syncing the attached device clock first is strongly recommended."
                         textSize = 15f
                         setTextColor(Color.parseColor("#1F2937"))
                     },
+                    LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT),
                 )
                 addView(
                     LinearLayout(this@MainActivity).apply {
@@ -5280,10 +5411,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 text = "Continue Clone"
                                 setOnClickListener {
                                     dialog.dismiss()
-                                    AndroidSessionController.runCloneTimedEventSettings(
-                                        context = applicationContext,
-                                        requestedDeviceName = requestedDeviceName,
-                                    )
+                                    runCloneWithStatusModal(requestedDeviceName)
                                 }
                             },
                             LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
@@ -5300,10 +5428,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                         requestedDeviceName = requestedDeviceName,
                                     ) { result ->
                                         if (result.isSuccess) {
-                                            AndroidSessionController.runCloneTimedEventSettings(
-                                                context = applicationContext,
-                                                requestedDeviceName = requestedDeviceName,
-                                            )
+                                            runCloneWithStatusModal(requestedDeviceName)
                                         }
                                     }
                                 }
@@ -5322,15 +5447,70 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT),
                         )
                     },
+                    LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT),
                 )
+            }
+        val scrollView =
+            ScrollView(this).apply {
+                isFillViewport = false
+                addView(container, ViewGroup.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             }
 
         dialog =
             AlertDialog.Builder(this)
                 .setTitle("Device Time Warning")
-                .setView(container)
+                .setView(scrollView)
                 .create()
         dialog.showLogged("Device Time Warning")
+    }
+
+    private fun runCloneWithStatusModal(requestedDeviceName: String?) {
+        val padding = (20 * resources.displayMetrics.density).toInt()
+        val spacing = (12 * resources.displayMetrics.density).toInt()
+        var userDismissed = false
+        val container =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(padding, padding / 2, padding, 0)
+                addView(
+                    ProgressBar(this@MainActivity).apply {
+                        isIndeterminate = true
+                    },
+                    LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                        marginEnd = spacing
+                    },
+                )
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text = "Cloning timed event settings to the attached SignalSlinger..."
+                        textSize = 15f
+                        setTextColor(Color.parseColor("#1F2937"))
+                    },
+                    LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f),
+                )
+            }
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Clone In Progress")
+                .setView(container)
+                .setNegativeButton("Dismiss") { activeDialog, _ ->
+                    userDismissed = true
+                    activeDialog.dismiss()
+                }
+                .create()
+        dialog.setOnCancelListener { userDismissed = true }
+        dialog.setOnDismissListener { userDismissed = true }
+        dialog.showLogged("Clone In Progress")
+
+        AndroidSessionController.runCloneTimedEventSettings(
+            context = applicationContext,
+            requestedDeviceName = requestedDeviceName,
+        ) {
+            if (!userDismissed && dialog.isShowing) {
+                dialog.dismiss()
+            }
+        }
     }
 
     private fun sectionTitle(

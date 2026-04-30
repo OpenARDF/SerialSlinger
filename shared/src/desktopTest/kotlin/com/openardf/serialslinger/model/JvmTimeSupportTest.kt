@@ -55,6 +55,45 @@ class JvmTimeSupportTest {
     }
 
     @Test
+    fun `clone schedule is eligible when start and finish are equal`() {
+        assertTrue(
+            JvmTimeSupport.isCloneScheduleEligible(
+                startTimeCompact = "000101000000",
+                finishTimeCompact = "000101000000",
+                currentTimeCompact = "260430071211",
+                daysToRun = 1,
+                daysRemaining = null,
+            ),
+        )
+    }
+
+    @Test
+    fun `clone schedule is eligible for past multi day window with days remaining`() {
+        assertTrue(
+            JvmTimeSupport.isCloneScheduleEligible(
+                startTimeCompact = "260428233000",
+                finishTimeCompact = "260428234500",
+                currentTimeCompact = "260430071211",
+                daysToRun = 7,
+                daysRemaining = 5,
+            ),
+        )
+    }
+
+    @Test
+    fun `clone schedule is not eligible for completed single day window`() {
+        assertFalse(
+            JvmTimeSupport.isCloneScheduleEligible(
+                startTimeCompact = "260428233000",
+                finishTimeCompact = "260428234500",
+                currentTimeCompact = "260430071211",
+                daysToRun = 1,
+                daysRemaining = null,
+            ),
+        )
+    }
+
+    @Test
     fun `normalize start time for change snaps past selection to minimum boundary`() {
         val normalized =
             JvmTimeSupport.normalizeStartTimeForChange(

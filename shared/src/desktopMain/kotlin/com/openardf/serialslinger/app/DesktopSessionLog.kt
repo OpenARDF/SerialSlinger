@@ -27,6 +27,8 @@ data class DesktopLogEntry(
 class DesktopSessionLog(
     private val rootDirectory: Path = defaultLogDirectory(),
     private val clock: Clock = Clock.systemDefaultZone(),
+    private val appVersion: String = SerialSlingerVersion.displayVersion,
+    private val platformLabel: String = defaultPlatformLabel(),
 ) {
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
@@ -51,14 +53,17 @@ class DesktopSessionLog(
     }
 
     fun appendSection(title: String, entries: List<DesktopLogEntry>): String {
+        val file = currentLogFile()
+        val header = headerTextIfNeeded(file)
         val rendered = renderSection(title, entries)
+        val written = header + rendered
         Files.writeString(
-            currentLogFile(),
-            rendered,
+            file,
+            written,
             StandardOpenOption.CREATE,
             StandardOpenOption.APPEND,
         )
-        return rendered
+        return written
     }
 
     fun appendPlainSection(title: String, lines: List<String>): String {
@@ -121,6 +126,33 @@ class DesktopSessionLog(
         }
     }
 
+    private fun headerTextIfNeeded(file: Path): String {
+        if (!Files.exists(file) || Files.size(file) == 0L) {
+            return renderHeader()
+        }
+        ensureHeaderAtTop(file)
+        return ""
+    }
+
+    private fun ensureHeaderAtTop(file: Path) {
+        if (!Files.exists(file) || Files.size(file) == 0L) {
+            return
+        }
+        val text = Files.readString(file)
+        if (text.startsWith("SerialSlinger ")) {
+            return
+        }
+        Files.writeString(file, renderHeader() + text)
+    }
+
+    private fun renderHeader(): String {
+        return buildString {
+            appendLine("SerialSlinger $appVersion")
+            appendLine("Platform: $platformLabel")
+            appendLine()
+        }
+    }
+
     private fun formatTime(timestampMs: Long): String {
         return Instant.ofEpochMilli(timestampMs)
             .atZone(clock.zone)
@@ -145,6 +177,15 @@ class DesktopSessionLog(
         fun defaultLogDirectory(): Path {
             val userHome = Path.of(System.getProperty("user.home"))
             return userHome.resolve("Documents").resolve("SerialSlinger").resolve("logs")
+        }
+
+        private fun defaultPlatformLabel(): String {
+            val name = System.getProperty("os.name").orEmpty().ifBlank { "Unknown OS" }
+            val version = System.getProperty("os.version").orEmpty()
+            val arch = System.getProperty("os.arch").orEmpty()
+            return listOf(name, version, arch)
+                .filter(String::isNotBlank)
+                .joinToString(" ")
         }
     }
 }

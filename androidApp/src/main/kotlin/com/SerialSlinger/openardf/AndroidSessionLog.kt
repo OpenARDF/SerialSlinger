@@ -23,6 +23,8 @@ data class AndroidLogEntry(
 
 class AndroidSessionLog(
     private val rootDirectory: File,
+    private val appVersion: String,
+    private val platformLabel: String,
 ) {
     private val dateFormatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
@@ -42,19 +44,25 @@ class AndroidSessionLog(
         if (!file.exists()) {
             file.parentFile?.mkdirs()
             file.writeText(
+                renderHeader() +
                 renderSection(
                     title = "Android Session Log",
                     entries = listOf(AndroidLogEntry(message = "<no log entries captured yet>")),
                 ),
             )
+        } else {
+            ensureHeaderAtTop(file)
         }
         return file
     }
 
     fun appendSection(title: String, entries: List<AndroidLogEntry>): String {
+        val file = currentLogFile()
+        val header = headerTextIfNeeded(file)
         val rendered = renderSection(title, entries)
-        currentLogFile().appendText(rendered)
-        return rendered
+        val written = header + rendered
+        file.appendText(written)
+        return written
     }
 
     fun appendCommandSection(
@@ -145,5 +153,32 @@ class AndroidSessionLog(
 
     private fun formatTime(timestampMs: Long): String {
         return timeFormatter.format(Date(timestampMs))
+    }
+
+    private fun headerTextIfNeeded(file: File): String {
+        if (!file.exists() || file.length() == 0L) {
+            return renderHeader()
+        }
+        ensureHeaderAtTop(file)
+        return ""
+    }
+
+    private fun ensureHeaderAtTop(file: File) {
+        if (!file.exists() || file.length() == 0L) {
+            return
+        }
+        val text = file.readText()
+        if (text.startsWith("SerialSlinger ")) {
+            return
+        }
+        file.writeText(renderHeader() + text)
+    }
+
+    private fun renderHeader(): String {
+        return buildString {
+            appendLine("SerialSlinger $appVersion")
+            appendLine("Platform: $platformLabel")
+            appendLine()
+        }
     }
 }

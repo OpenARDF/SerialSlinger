@@ -17,6 +17,8 @@ class DesktopSessionLogTest {
         val log = DesktopSessionLog(
             rootDirectory = tempDirectory,
             clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+            appVersion = "1.2.3-test",
+            platformLabel = "TestOS 1.0",
         )
 
         val rendered = log.appendSection(
@@ -33,9 +35,50 @@ class DesktopSessionLogTest {
         val file = log.currentLogFile()
         assertEquals("serialslinger-2026-04-10.log", file.fileName.toString())
         assertTrue(Files.exists(file))
+        assertTrue(rendered.startsWith("SerialSlinger 1.2.3-test\nPlatform: TestOS 1.0\n\n"))
         assertTrue(rendered.contains("[14:22:33] == Auto Detect =="))
         assertTrue(rendered.contains("[14:22:33] [DEVICE] Detected /dev/tty.usbserial-1234"))
         assertEquals(rendered, Files.readString(file))
+    }
+
+    @Test
+    fun keepsLogHeaderAtTopForCurrentDay() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val log = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+            appVersion = "1.2.3-test",
+            platformLabel = "TestOS 1.0",
+        )
+
+        log.appendPlainSection("First", listOf("one"))
+        log.appendPlainSection("Second", listOf("two"))
+
+        val text = Files.readString(log.currentLogFile())
+        assertTrue(text.startsWith("SerialSlinger 1.2.3-test\nPlatform: TestOS 1.0\n\n"))
+        assertTrue(text.contains("[14:22:33] == First =="))
+        assertTrue(text.contains("[14:22:33] == Second =="))
+    }
+
+    @Test
+    fun backfillsMissingLogHeaderAtTopOfExistingCurrentDayLog() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val log = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+            appVersion = "1.2.3-test",
+            platformLabel = "TestOS 1.0",
+        )
+        val file = log.currentLogFile()
+        Files.writeString(file, "[14:00:00] == Existing ==\n[14:00:00] [APP] old\n\n")
+
+        val rendered = log.appendPlainSection("New", listOf("new"))
+
+        val text = Files.readString(file)
+        assertEquals("[14:22:33] == New ==\n[14:22:33] [APP] new\n\n", rendered)
+        assertTrue(text.startsWith("SerialSlinger 1.2.3-test\nPlatform: TestOS 1.0\n\n"))
+        assertTrue(text.contains("[14:00:00] == Existing =="))
+        assertTrue(text.contains("[14:22:33] == New =="))
     }
 
     @Test

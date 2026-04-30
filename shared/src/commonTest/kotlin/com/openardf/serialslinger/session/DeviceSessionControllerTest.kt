@@ -491,6 +491,92 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun submitEditsCanSkipFullReloadVerificationForCurrentTime() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "CLK T 260410142233" to listOf("* Time:Fri 10-apr-2026 14:22:33"),
+                "CLK" to listOf(
+                    "* Time:Fri 10-apr-2026 14:22:34",
+                    "* Start:Fri 10-apr-2026 15:00:00",
+                    "* Finish:Fri 10-apr-2026 17:15:00",
+                    "* Days to run: 3",
+                ),
+                "EVT" to listOf(
+                    "* Event:Classic",
+                    "* Not scheduled",
+                ),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                currentTimeCompact = "260410142230",
+                startTimeCompact = "260410150000",
+                finishTimeCompact = "260410171500",
+                daysToRun = 3,
+            ),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            currentTimeCompact = SettingsField("currentTimeCompact", "Current Time", "260410142230", "260410142233"),
+        )
+
+        val result = DeviceSessionController.submitEdits(
+            connected.state,
+            editable,
+            transport,
+            allowFullReloadVerification = false,
+        )
+
+        assertEquals(listOf("CLK T 260410142233"), result.commandsSent)
+        assertEquals(listOf("CLK", "EVT"), result.readbackCommandsSent)
+        assertFalse("VER" in transport.sentCommands)
+        assertEquals("260410142234", result.state.snapshot?.settings?.currentTimeCompact)
+    }
+
+    @Test
+    fun submitEditsReportsUnobservedVerificationWhenDeviceDoesNotAnswer() {
+        val transport = FakeDeviceTransport()
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                startTimeCompact = "260427073000",
+                finishTimeCompact = "260427080000",
+                daysToRun = 1,
+            ),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            startTimeCompact = SettingsField("startTimeCompact", "Start Time", "260427073000", "260429180000"),
+            finishTimeCompact = SettingsField("finishTimeCompact", "Finish Time", "260427080000", "260429183000"),
+        )
+
+        val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
+
+        assertEquals(listOf("CLK S 260429180000", "CLK F 260429183000"), result.commandsSent)
+        assertEquals(0, result.linesReceived.size)
+        assertEquals(0, result.readbackLinesReceived.size)
+        assertEquals(
+            listOf(
+                SettingVerification(
+                    fieldKey = SettingKey.START_TIME,
+                    expectedValue = "260429180000",
+                    actualValue = null,
+                    observedInReadback = false,
+                    verified = false,
+                ),
+                SettingVerification(
+                    fieldKey = SettingKey.FINISH_TIME,
+                    expectedValue = "260429183000",
+                    actualValue = null,
+                    observedInReadback = false,
+                    verified = false,
+                ),
+            ),
+            result.verifications,
+        )
+    }
+
+    @Test
     fun disconnectMarksStateAsDisconnected() {
         val transport = FakeDeviceTransport()
         val loaded = DeviceSessionController.connectAndLoad(transport, sampleSettings())
