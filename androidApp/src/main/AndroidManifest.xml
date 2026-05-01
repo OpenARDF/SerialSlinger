@@ -49,6 +49,7 @@
                 <action android:name="com.SerialSlinger.openardf.DEBUG_SET_START_TIME" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_SET_FINISH_TIME" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_SET_DAYS_TO_RUN" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_CLONE" />
             </intent-filter>
         </receiver>
         <activity

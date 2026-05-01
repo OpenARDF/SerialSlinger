@@ -6,6 +6,7 @@ import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
+import android.util.Log
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
@@ -115,7 +116,8 @@ class AndroidUsbTransport(
             val bytesRead =
                 try {
                     port.read(buffer, pollIntervalMs.toInt())
-                } catch (_: Throwable) {
+                } catch (error: Throwable) {
+                    Log.w(logTag, "USB serial read failed for ${usbDevice.deviceName}.", error)
                     0
                 }
 
@@ -133,6 +135,8 @@ class AndroidUsbTransport(
     }
 
     companion object {
+        private const val logTag = "SerialSlingerUsb"
+
         fun requestPermission(
             context: Context,
             usbManager: UsbManager,

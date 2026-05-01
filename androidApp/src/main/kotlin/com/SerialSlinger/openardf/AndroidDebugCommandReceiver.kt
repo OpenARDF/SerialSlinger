@@ -392,6 +392,15 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                     pendingResult.finish()
                 }
             }
+            ACTION_CLONE -> {
+                AndroidSessionController.runCloneTimedEventSettings(
+                    context = context,
+                    requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
+                    source = "adb",
+                )
+                resultCode = resultOk
+                resultData = "Clone started. Poll DEBUG_GET_LOG for completion."
+            }
             else -> {
                 resultCode = resultCanceled
                 resultData = "Unsupported action: ${intent.action}"
@@ -426,6 +435,7 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val ACTION_SET_START_TIME = "com.SerialSlinger.openardf.DEBUG_SET_START_TIME"
         const val ACTION_SET_FINISH_TIME = "com.SerialSlinger.openardf.DEBUG_SET_FINISH_TIME"
         const val ACTION_SET_DAYS_TO_RUN = "com.SerialSlinger.openardf.DEBUG_SET_DAYS_TO_RUN"
+        const val ACTION_CLONE = "com.SerialSlinger.openardf.DEBUG_CLONE"
 
         const val EXTRA_DEVICE_NAME = "device_name"
         const val EXTRA_EVENT_TYPE = "event_type"
