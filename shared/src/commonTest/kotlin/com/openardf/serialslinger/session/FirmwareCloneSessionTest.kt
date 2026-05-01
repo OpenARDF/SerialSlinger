@@ -130,7 +130,7 @@ class FirmwareCloneSessionTest {
                             put(
                                 step.command,
                                 if (step.command == delayedStep) {
-                                    List(9) { emptyList<String>() } + listOf(listOf(response))
+                                    List(2) { emptyList<String>() } + listOf(listOf(response))
                                 } else {
                                     listOf(listOf(response))
                                 },
@@ -321,6 +321,7 @@ class FirmwareCloneSessionTest {
         val settings = sampleSettings()
         val plan = FirmwareCloneProtocol.buildPlan(settings, currentTimeCompact = "260430171643")
         val missedCommand = "SPD P 8"
+        var commandsWhenRecoveryDrainStarted: List<String> = emptyList()
         val transport =
             PerSendReadTransport(
                 buildMap {
@@ -344,6 +345,10 @@ class FirmwareCloneSessionTest {
             templateSettings = settings,
             targetSoftwareVersion = "1.2.2",
             currentTimeCompact = { "260430171643" },
+            afterCloneDiagnosticRecovered = {
+                commandsWhenRecoveryDrainStarted = transport.sentCommands.toList()
+                listOf("late fragment")
+            },
         )
 
         assertTrue(result.succeeded)
@@ -352,7 +357,9 @@ class FirmwareCloneSessionTest {
         assertEquals(1, transport.sentCommands.count { it == "CLN" })
         assertEquals(0, transport.sentCommands.count { it == "TMP" })
         assertEquals(1, transport.sentCommands.count { it == "MAS Q ${plan.checksum}" })
+        assertEquals(listOf("RST", "MAS P") + plan.steps.take(8).map { it.command } + "CLN", commandsWhenRecoveryDrainStarted)
         assertTrue(result.linesReceived.contains("CLN last=SPD P reply=SPD P tries=1 ok=9 fail=0"))
+        assertTrue(result.linesReceived.contains("late fragment"))
     }
 
     @Test

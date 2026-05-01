@@ -107,31 +107,68 @@ class AndroidUsbTransport(
     }
 
     override fun readAvailableLines(): List<String> {
+        return readAvailableLines(
+            readWindowMs = readTimeoutMs.toLong(),
+            readPollTimeoutMs = pollIntervalMs.toInt(),
+            quietMs = quietPeriodMs,
+        )
+    }
+
+    fun readAvailableLinesBriefly(maxDurationMs: Long = 120): List<String> {
+        return readAvailableLines(
+            readWindowMs = maxDurationMs,
+            readPollTimeoutMs = 5,
+            quietMs = 20,
+        )
+    }
+
+    private fun readAvailableLines(
+        readWindowMs: Long,
+        readPollTimeoutMs: Int,
+        quietMs: Long,
+    ): List<String> {
         val port = serialPort ?: return emptyList()
-        val deadline = System.currentTimeMillis() + readTimeoutMs
+        val readStartedAt = System.currentTimeMillis()
+        val deadline = System.currentTimeMillis() + readWindowMs
         var lastDataAt: Long? = null
+        var chunkCount = 0
+        var byteCount = 0
         val buffer = ByteArray(256)
 
         while (System.currentTimeMillis() <= deadline) {
             val bytesRead =
                 try {
-                    port.read(buffer, pollIntervalMs.toInt())
+                    port.read(buffer, readPollTimeoutMs)
                 } catch (error: Throwable) {
                     Log.w(logTag, "USB serial read failed for ${usbDevice.deviceName}.", error)
                     0
                 }
 
             if (bytesRead > 0) {
+                chunkCount++
+                byteCount += bytesRead
+                Log.i(
+                    logTag,
+                    "USB serial RX chunk device=${usbDevice.deviceName} bytes=$bytesRead hex=${buffer.toHex(bytesRead)} text=${buffer.toPrintableAscii(bytesRead)}",
+                )
                 lineBuffer.appendAscii(buffer, bytesRead)
                 lastDataAt = System.currentTimeMillis()
-            } else if (lastDataAt != null && (System.currentTimeMillis() - lastDataAt) >= quietPeriodMs) {
+            } else if (lastDataAt != null && (System.currentTimeMillis() - lastDataAt) >= quietMs) {
                 break
             } else {
-                Thread.sleep(pollIntervalMs)
+                Thread.sleep(pollIntervalMs.coerceAtMost(quietMs))
             }
         }
 
-        return lineBuffer.drainCompletedLines()
+        val lines = lineBuffer.drainCompletedLines()
+        val pendingFragment = lineBuffer.pendingFragment()
+        if (chunkCount > 0 || pendingFragment.isNotEmpty()) {
+            Log.i(
+                logTag,
+                "USB serial read summary device=${usbDevice.deviceName} durationMs=${System.currentTimeMillis() - readStartedAt} chunks=$chunkCount bytes=$byteCount lines=${lines.size} pending=${pendingFragment.toLogFragment()}",
+            )
+        }
+        return lines
     }
 
     companion object {
@@ -198,6 +235,50 @@ class AndroidUsbTransport(
         private fun writePayload(port: UsbSerialPort, payload: String) {
             val bytes = payload.encodeToByteArray()
             port.write(bytes, 1_000)
+        }
+
+        private fun ByteArray.toHex(length: Int): String {
+            return (0 until length).joinToString(" ") { index ->
+                this[index].toUByte().toString(16).uppercase().padStart(2, '0')
+            }
+        }
+
+        private fun ByteArray.toPrintableAscii(length: Int): String {
+            return buildString {
+                append('"')
+                for (index in 0 until length) {
+                    when (val ch = this@toPrintableAscii[index].toInt().toChar()) {
+                        '\r' -> append("\\r")
+                        '\n' -> append("\\n")
+                        '\t' -> append("\\t")
+                        in ' '..'~' -> append(ch)
+                        else -> append("\\x").append(this@toPrintableAscii[index].toUByte().toString(16).uppercase().padStart(2, '0'))
+                    }
+                }
+                append('"')
+            }
+        }
+
+        private fun String.toLogFragment(): String {
+            if (isEmpty()) {
+                return "\"\""
+            }
+            return buildString {
+                append('"')
+                this@toLogFragment.take(120).forEach { ch ->
+                    when (ch) {
+                        '\r' -> append("\\r")
+                        '\n' -> append("\\n")
+                        '\t' -> append("\\t")
+                        in ' '..'~' -> append(ch)
+                        else -> append("\\u").append(ch.code.toString(16).uppercase().padStart(4, '0'))
+                    }
+                }
+                if (this@toLogFragment.length > 120) {
+                    append("...")
+                }
+                append('"')
+            }
         }
 
         private fun looksLikeSerialDevice(device: UsbDevice): Boolean {

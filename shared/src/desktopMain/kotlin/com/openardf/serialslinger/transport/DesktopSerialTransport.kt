@@ -74,8 +74,16 @@ class DesktopSerialTransport(
     }
 
     override fun readAvailableLines(): List<String> {
+        return readAvailableLinesFor(readTimeoutMs)
+    }
+
+    fun readAvailableLinesBriefly(maxDurationMs: Long = 120): List<String> {
+        return readAvailableLinesFor(maxDurationMs)
+    }
+
+    private fun readAvailableLinesFor(maxDurationMs: Long): List<String> {
         val port = serialPort ?: return emptyList()
-        val deadline = System.currentTimeMillis() + readTimeoutMs
+        val deadline = System.currentTimeMillis() + maxDurationMs
         var lastDataAt: Long? = null
 
         while (System.currentTimeMillis() <= deadline) {

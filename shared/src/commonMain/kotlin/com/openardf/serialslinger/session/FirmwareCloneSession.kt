@@ -27,7 +27,7 @@ object FirmwareCloneSession {
     private const val CloneDiagnosticCommand = "CLN"
     private const val DiagnosticProbeCommand = "TMP"
     private const val StartAttempts = 4
-    private const val CloneReplyReadAttempts = 10
+    private const val CloneReplyReadAttempts = 3
     private const val CloneSessionAttempts = 3
     private val CloneDiagnosticRecoveryMinimumVersion = SignalSlingerFirmwareVersion(1, 2, 2)
 
@@ -39,6 +39,7 @@ object FirmwareCloneSession {
         afterReset: () -> List<String> = { emptyList() },
         afterStartAttempt: () -> Unit = {},
         afterCommandAcknowledged: (String) -> Unit = {},
+        afterCloneDiagnosticRecovered: (String) -> List<String> = { emptyList() },
     ): FirmwareCloneSessionResult {
         val cloneDiagnosticRecoveryAllowed =
             SignalSlingerFirmwareVersion.parse(targetSoftwareVersion)?.let { version ->
@@ -55,6 +56,7 @@ object FirmwareCloneSession {
                     afterReset = afterReset,
                     afterStartAttempt = afterStartAttempt,
                     afterCommandAcknowledged = afterCommandAcknowledged,
+                    afterCloneDiagnosticRecovered = afterCloneDiagnosticRecovered,
                 )
             attempts += result
             if (result.succeeded || !result.enteredCloneMode || attemptIndex == CloneSessionAttempts - 1) {
@@ -72,6 +74,7 @@ object FirmwareCloneSession {
         afterReset: () -> List<String>,
         afterStartAttempt: () -> Unit,
         afterCommandAcknowledged: (String) -> Unit,
+        afterCloneDiagnosticRecovered: (String) -> List<String>,
     ): FirmwareCloneSessionResult {
         val commands = mutableListOf<String>()
         val lines = mutableListOf<String>()
@@ -127,12 +130,21 @@ object FirmwareCloneSession {
             if (cloneDiagnosticLines.isEmpty()) {
                 sendAndRead(DiagnosticProbeCommand)
             }
-            return cloneDiagnosticRecoveryAllowed &&
+            val confirmed = cloneDiagnosticRecoveryAllowed &&
                 cloneDiagnosticConfirmsAcknowledgement(
                     lines = cloneDiagnosticLines,
                     expectedCommand = expectedCommand,
                     expectedReply = expectedReply,
                 )
+            if (confirmed) {
+                val recoveredAtMs = System.currentTimeMillis()
+                val drainLines = afterCloneDiagnosticRecovered(expectedCommand)
+                lines += drainLines
+                traceEntries += drainLines.map { line ->
+                    SerialTraceEntry(recoveredAtMs, SerialTraceDirection.RX, line)
+                }
+            }
+            return confirmed
         }
 
         sendAndRead(ResetCommand)

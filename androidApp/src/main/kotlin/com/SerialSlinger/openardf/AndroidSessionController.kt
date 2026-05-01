@@ -194,6 +194,7 @@ object AndroidSessionController {
     private const val syncMaxAttempts = 2
     private const val syncVerificationSampleMax = 8
     private const val firmwareCloneCommandSettleMs = 250L
+    private const val firmwareCloneResetMaxWaitMs = 8_000L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = linkedSetOf<() -> Unit>()
     private var applicationContext: Context? = null
@@ -485,6 +486,7 @@ object AndroidSessionController {
                         afterReset = { waitForFirmwareCloneReset(transport) },
                         afterStartAttempt = ::waitForFirmwareCloneStartRetry,
                         afterCommandAcknowledged = { waitForFirmwareCloneCommandSettle() },
+                        afterCloneDiagnosticRecovered = { waitForFirmwareCloneDiagnosticRecovery(transport) },
                     )
                 cloneFailureTraceEntries = targetRefresh.traceEntries + firmwareCloneResult.traceEntries
                 if (firmwareCloneResult.succeeded) {
@@ -3826,14 +3828,18 @@ object AndroidSessionController {
 
     private fun waitForFirmwareCloneReset(transport: DeviceTransport): List<String> {
         val lines = mutableListOf<String>()
-        Thread.sleep(1_500L)
-        repeat(8) {
+        val deadline = System.currentTimeMillis() + firmwareCloneResetMaxWaitMs
+        var sawResetOutput = false
+        while (System.currentTimeMillis() < deadline) {
             val responseLines = transport.readAvailableLines()
             if (responseLines.isNotEmpty()) {
                 lines += responseLines
+                sawResetOutput = true
                 Thread.sleep(250L)
-            } else {
+            } else if (sawResetOutput) {
                 return lines
+            } else {
+                Thread.sleep(250L)
             }
         }
         return lines
@@ -3845,6 +3851,15 @@ object AndroidSessionController {
 
     private fun waitForFirmwareCloneCommandSettle() {
         Thread.sleep(firmwareCloneCommandSettleMs)
+    }
+
+    private fun waitForFirmwareCloneDiagnosticRecovery(transport: DeviceTransport): List<String> {
+        Thread.sleep(80L)
+        return if (transport is AndroidUsbTransport) {
+            transport.readAvailableLinesBriefly()
+        } else {
+            emptyList()
+        }
     }
 
     private fun mergeLoadResults(

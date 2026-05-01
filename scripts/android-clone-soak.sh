@@ -83,6 +83,14 @@ run_debug_command() {
 	./scripts/android-debug-command.sh "${COMMON_ARGS[@]}" "$@"
 }
 
+count_matches() {
+	local pattern="$1"
+	local file="$2"
+	local count
+	count="$(rg -c "$pattern" "$file" || true)"
+	printf '%s\n' "${count:-0}"
+}
+
 wait_for_clone_completion() {
 	local log_file="$1"
 	local deadline=$((SECONDS + CLONE_TIMEOUT_SECONDS))
@@ -115,7 +123,7 @@ cleanup() {
 trap cleanup EXIT
 
 SUMMARY_FILE="$OUTPUT_DIR/summary.tsv"
-printf 'iteration\tstatus\tlog_file\tnotes\n' >"$SUMMARY_FILE"
+printf 'iteration\tstatus\tcategory\tlog_file\tnotes\n' >"$SUMMARY_FILE"
 
 ADB_ARGS=()
 if [ -n "$TARGET_SERIAL" ]; then
@@ -154,13 +162,25 @@ for iteration in $(seq 1 "$COUNT"); do
 		NOTES+=("failure or warning text found")
 	fi
 
-	if rg -q "Write commands sent: (1[89]|[2-9][0-9]|[1-9][0-9]{2,})" "${ITERATION_PREFIX}-log.txt"; then
-		NOTES+=("clone used retry")
+	RST_COUNT="$(count_matches "TX RST" "${ITERATION_PREFIX}-log.txt")"
+	CLN_COUNT="$(count_matches "TX CLN" "${ITERATION_PREFIX}-log.txt")"
+	CATEGORY="clean single-session clone"
+	if [ "$RST_COUNT" -gt 1 ]; then
+		CATEGORY="full-session retry"
+		NOTES+=("full-session retry")
+	elif [ "$CLN_COUNT" -gt 0 ]; then
+		CATEGORY="CLN-recovered command"
+		NOTES+=("CLN recovered command")
 	fi
 
-	printf '%d\t%s\t%s\t%s\n' \
+	if [ "$CLN_COUNT" -gt 0 ]; then
+		NOTES+=("CLN probes: $CLN_COUNT")
+	fi
+
+	printf '%d\t%s\t%s\t%s\t%s\n' \
 		"$iteration" \
 		"$STATUS" \
+		"$CATEGORY" \
 		"${ITERATION_PREFIX}-log.txt" \
 		"$(
 			IFS=', '
