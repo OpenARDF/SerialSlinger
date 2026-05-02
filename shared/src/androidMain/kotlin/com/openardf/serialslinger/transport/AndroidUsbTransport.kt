@@ -7,6 +7,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.util.Log
+import com.hoho.android.usbserial.driver.FtdiSerialDriver.FtdiSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
@@ -35,9 +36,11 @@ class AndroidUsbTransport(
     private val wakePreamble: String = "**\r",
     private val wakeSettleMs: Long = 80,
     private val wakeAfterIdleMs: Long = 1_500,
-    private val readTimeoutMs: Int = 1_000,
+    private val readTimeoutMs: Int = 1_500,
     private val quietPeriodMs: Long = 120,
-    private val pollIntervalMs: Long = 20,
+    private val pollIntervalMs: Long = 50,
+    private val postWriteReadDelayMs: Long = 25,
+    private val ftdiLatencyTimerMs: Int = 8,
 ) : DeviceTransport {
     private var connection: UsbDeviceConnection? = null
     private var serialPort: UsbSerialPort? = null
@@ -71,6 +74,7 @@ class AndroidUsbTransport(
                 UsbSerialPort.STOPBITS_1,
                 UsbSerialPort.PARITY_NONE,
             )
+            configureFtdiLatencyTimer(port)
             serialPort = port
             connection = usbConnection
             lastWriteAtMs = null
@@ -122,6 +126,10 @@ class AndroidUsbTransport(
         )
     }
 
+    fun clearBufferedInputFragments() {
+        lineBuffer.clear()
+    }
+
     private fun readAvailableLines(
         readWindowMs: Long,
         readPollTimeoutMs: Int,
@@ -129,6 +137,7 @@ class AndroidUsbTransport(
     ): List<String> {
         val port = serialPort ?: return emptyList()
         val readStartedAt = System.currentTimeMillis()
+        sleepAfterRecentWrite(readStartedAt)
         val deadline = System.currentTimeMillis() + readWindowMs
         var lastDataAt: Long? = null
         var chunkCount = 0
@@ -169,6 +178,31 @@ class AndroidUsbTransport(
             )
         }
         return lines
+    }
+
+    private fun configureFtdiLatencyTimer(port: UsbSerialPort) {
+        if (port !is FtdiSerialPort) {
+            return
+        }
+        runCatching {
+            val previous = port.latencyTimer
+            port.setLatencyTimer(ftdiLatencyTimerMs)
+            val updated = port.latencyTimer
+            Log.i(
+                logTag,
+                "Configured FTDI latency timer previous=${previous}ms requested=${ftdiLatencyTimerMs}ms actual=${updated}ms",
+            )
+        }.onFailure { error ->
+            Log.w(logTag, "Unable to configure FTDI latency timer.", error)
+        }
+    }
+
+    private fun sleepAfterRecentWrite(readStartedAt: Long) {
+        val lastWrite = lastWriteAtMs ?: return
+        val elapsed = readStartedAt - lastWrite
+        if (elapsed in 0 until postWriteReadDelayMs) {
+            Thread.sleep(postWriteReadDelayMs - elapsed)
+        }
     }
 
     companion object {

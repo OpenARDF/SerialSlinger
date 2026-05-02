@@ -14,7 +14,7 @@ Usage:
 
 Runs repeated desktop MAS Clone attempts against one USB serial SignalSlinger.
 Each iteration loads the target, runs the desktop smoke CLI clone command,
-saves output, and records failures, CLN recoveries, or full-session retries.
+saves output, and records failures or full-session retries.
 EOF
 }
 
@@ -97,18 +97,10 @@ for iteration in $(seq 1 "$COUNT"); do
 	fi
 
 	RST_COUNT="$(count_matches "TX RST" "$ITERATION_LOG")"
-	CLN_COUNT="$(count_matches "TX CLN" "$ITERATION_LOG")"
 	CATEGORY="clean single-session clone"
 	if [ "$RST_COUNT" -gt 1 ]; then
 		CATEGORY="full-session retry"
 		NOTES+=("full-session retry")
-	elif [ "$CLN_COUNT" -gt 0 ]; then
-		CATEGORY="CLN-recovered command"
-		NOTES+=("CLN recovered command")
-	fi
-
-	if [ "$CLN_COUNT" -gt 0 ]; then
-		NOTES+=("CLN probes: $CLN_COUNT")
 	fi
 
 	printf '%d\t%s\t%s\t%s\t%s\n' \

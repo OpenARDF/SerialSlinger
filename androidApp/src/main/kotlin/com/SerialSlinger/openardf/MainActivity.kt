@@ -5817,9 +5817,17 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.runCloneTimedEventSettings(
             context = applicationContext,
             requestedDeviceName = requestedDeviceName,
-        ) {
+        ) { result ->
             if (!userDismissed && dialog.isShowing) {
                 dialog.dismiss()
+            }
+            result.exceptionOrNull()?.message?.let { message ->
+                val title = if (message.startsWith("Clone cancelled")) "Clone Cancelled" else "Clone Failed"
+                AlertDialog.Builder(this)
+                    .setTitle(title)
+                    .setMessage(message)
+                    .setPositiveButton("OK", null)
+                    .showLogged(title)
             }
         }
     }

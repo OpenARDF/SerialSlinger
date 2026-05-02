@@ -6,19 +6,28 @@ TARGET_SERIAL="${ANDROID_SERIAL:-}"
 DEVICE_NAME=""
 COUNT=10
 DELAY_SECONDS=2
+DELAY_SPECIFIED=0
+FAST_MODE=0
 OUTPUT_DIR="$ROOT_DIR/build/android-clone-soak/$(date +%Y%m%d-%H%M%S)"
 LOGCAT_PID=""
-CLONE_TIMEOUT_SECONDS=120
-POLL_SECONDS=2
+LOAD_ATTEMPTS=5
+LOAD_RETRY_SECONDS=3
+LOAD_EACH_ITERATION=1
+LOG_EACH_ITERATION=1
+CLEAR_LOG_EACH_ITERATION=1
 
 usage() {
 	cat <<'EOF'
 Usage:
-  ./scripts/android-clone-soak.sh [--serial <adb-serial>] [--device-name <usb-device-name>] [--count <n>] [--delay <seconds>] [--output-dir <path>]
+  ./scripts/android-clone-soak.sh [--serial <adb-serial>] [--device-name <usb-device-name>] [--count <n>] [--delay <seconds>] [--fast] [--output-dir <path>]
 
 Runs repeated debug-only Clone attempts against one Android app/device target.
 Each iteration clears the app log, loads the attached SignalSlinger, runs Clone,
-saves the broadcast output and app log, and records failures or warning text.
+saves the completed broadcast output and app log, and records failures or warning text.
+
+Use --fast to load once, skip per-iteration app-log export unless a failure is
+detected, and remove the inter-iteration delay unless --delay is specified.
+Continuous logcat is still saved.
 EOF
 }
 
@@ -38,7 +47,31 @@ while [ "$#" -gt 0 ]; do
 		;;
 	--delay)
 		DELAY_SECONDS="${2:-}"
+		DELAY_SPECIFIED=1
 		shift 2
+		;;
+	--fast)
+		FAST_MODE=1
+		LOAD_EACH_ITERATION=0
+		LOG_EACH_ITERATION=0
+		CLEAR_LOG_EACH_ITERATION=0
+		shift
+		;;
+	--load-each)
+		LOAD_EACH_ITERATION=1
+		shift
+		;;
+	--no-load-each)
+		LOAD_EACH_ITERATION=0
+		shift
+		;;
+	--log-each)
+		LOG_EACH_ITERATION=1
+		shift
+		;;
+	--no-log-each)
+		LOG_EACH_ITERATION=0
+		shift
 		;;
 	--output-dir)
 		OUTPUT_DIR="${2:-}"
@@ -55,6 +88,10 @@ while [ "$#" -gt 0 ]; do
 		;;
 	esac
 done
+
+if [ "$FAST_MODE" -eq 1 ] && [ "$DELAY_SPECIFIED" -eq 0 ]; then
+	DELAY_SECONDS=0
+fi
 
 case "$COUNT" in
 '' | *[!0-9]*)
@@ -91,24 +128,28 @@ count_matches() {
 	printf '%s\n' "${count:-0}"
 }
 
-wait_for_clone_completion() {
-	local log_file="$1"
-	local deadline=$((SECONDS + CLONE_TIMEOUT_SECONDS))
+scan_for_clone_failure_text() {
+	local file="$1"
 
-	while [ "$SECONDS" -lt "$deadline" ]; do
-		run_debug_command get-log >"$log_file" 2>&1 || return 1
+	rg -q "Clone failed|did not provide timely replies|Firmware clone failed|success=false|statusIsError=true" "$file"
+}
 
-		if rg -q "== clone ==" "$log_file"; then
-			if rg -q "source=adb success=true|Clone succeeded|RX MAS ACK" "$log_file"; then
-				return 0
-			fi
+run_load_with_retry() {
+	local output_file="$1"
+	local attempt
 
-			if rg -q "source=adb success=false|Clone failed|did not provide timely replies|Firmware clone failed|success=false" "$log_file"; then
-				return 1
-			fi
+	for attempt in $(seq 1 "$LOAD_ATTEMPTS"); do
+		if run_debug_command load >"$output_file" 2>&1; then
+			return 0
 		fi
 
-		sleep "$POLL_SECONDS"
+		if ! rg -q "Probe already in progress" "$output_file"; then
+			return 1
+		fi
+
+		if [ "$attempt" -lt "$LOAD_ATTEMPTS" ]; then
+			sleep "$LOAD_RETRY_SECONDS"
+		fi
 	done
 
 	return 1
@@ -133,55 +174,70 @@ adb "${ADB_ARGS[@]}" logcat -c || true
 adb "${ADB_ARGS[@]}" logcat -v threadtime >"$OUTPUT_DIR/logcat.txt" 2>&1 &
 LOGCAT_PID="$!"
 
+if [ "$LOAD_EACH_ITERATION" -eq 0 ]; then
+	printf 'Initial load\n'
+	if ! run_load_with_retry "$OUTPUT_DIR/initial-load.txt"; then
+		printf '0\tfail\tinitial load\t%s\tload failed\n' "$OUTPUT_DIR/initial-load.txt" >>"$SUMMARY_FILE"
+		echo "Initial load failed."
+		echo "Summary: $SUMMARY_FILE"
+		exit 1
+	fi
+fi
+
 for iteration in $(seq 1 "$COUNT"); do
 	printf 'Clone soak %d/%d\n' "$iteration" "$COUNT"
 	ITERATION_PREFIX="$OUTPUT_DIR/$(printf '%03d' "$iteration")"
 	STATUS="pass"
 	NOTES=()
+	LOG_FILE="${ITERATION_PREFIX}-log.txt"
+	LOG_CAPTURED=0
 
-	run_debug_command clear-log >"${ITERATION_PREFIX}-clear.txt" 2>&1 || true
-
-	if ! run_debug_command load >"${ITERATION_PREFIX}-load.txt" 2>&1; then
-		STATUS="fail"
-		NOTES+=("load failed")
-	elif ! run_debug_command clone >"${ITERATION_PREFIX}-clone.txt" 2>&1; then
-		STATUS="fail"
-		NOTES+=("clone broadcast failed")
-	elif ! wait_for_clone_completion "${ITERATION_PREFIX}-log.txt"; then
-		STATUS="fail"
-		NOTES+=("clone completion not confirmed")
+	if [ "$CLEAR_LOG_EACH_ITERATION" -eq 1 ]; then
+		run_debug_command clear-log >"${ITERATION_PREFIX}-clear.txt" 2>&1 || true
 	fi
 
-	run_debug_command get-log >"${ITERATION_PREFIX}-log.txt" 2>&1 || {
+	if [ "$LOAD_EACH_ITERATION" -eq 1 ] && ! run_load_with_retry "${ITERATION_PREFIX}-load.txt"; then
 		STATUS="fail"
-		NOTES+=("log capture failed")
-	}
+		NOTES+=("load failed")
+	elif ! run_debug_command clone-wait >"${ITERATION_PREFIX}-clone.txt" 2>&1; then
+		STATUS="fail"
+		NOTES+=("clone failed")
+	fi
 
-	if rg -q "Clone failed|did not provide timely replies|Firmware clone failed|success=false" "${ITERATION_PREFIX}-log.txt"; then
+	if scan_for_clone_failure_text "${ITERATION_PREFIX}-clone.txt"; then
 		STATUS="fail"
 		NOTES+=("failure or warning text found")
 	fi
 
-	RST_COUNT="$(count_matches "TX RST" "${ITERATION_PREFIX}-log.txt")"
-	CLN_COUNT="$(count_matches "TX CLN" "${ITERATION_PREFIX}-log.txt")"
+	if [ "$LOG_EACH_ITERATION" -eq 1 ] || [ "$STATUS" = "fail" ]; then
+		if run_debug_command get-log >"$LOG_FILE" 2>&1; then
+			LOG_CAPTURED=1
+		else
+			STATUS="fail"
+			NOTES+=("log capture failed")
+		fi
+	fi
+
+	if [ "$LOG_CAPTURED" -eq 1 ] && scan_for_clone_failure_text "$LOG_FILE"; then
+		STATUS="fail"
+		NOTES+=("failure or warning text found")
+	fi
+
+	RST_COUNT=0
+	if [ "$LOG_CAPTURED" -eq 1 ]; then
+		RST_COUNT="$(count_matches "TX RST" "$LOG_FILE")"
+	fi
 	CATEGORY="clean single-session clone"
 	if [ "$RST_COUNT" -gt 1 ]; then
 		CATEGORY="full-session retry"
 		NOTES+=("full-session retry")
-	elif [ "$CLN_COUNT" -gt 0 ]; then
-		CATEGORY="CLN-recovered command"
-		NOTES+=("CLN recovered command")
-	fi
-
-	if [ "$CLN_COUNT" -gt 0 ]; then
-		NOTES+=("CLN probes: $CLN_COUNT")
 	fi
 
 	printf '%d\t%s\t%s\t%s\t%s\n' \
 		"$iteration" \
 		"$STATUS" \
 		"$CATEGORY" \
-		"${ITERATION_PREFIX}-log.txt" \
+		"$([ "$LOG_CAPTURED" -eq 1 ] && printf '%s' "$LOG_FILE" || printf '%s' "${ITERATION_PREFIX}-clone.txt")" \
 		"$(
 			IFS=', '
 			echo "${NOTES[*]:-ok}"
@@ -192,6 +248,10 @@ for iteration in $(seq 1 "$COUNT"); do
 		sleep "$DELAY_SECONDS"
 	fi
 done
+
+if [ "$LOG_EACH_ITERATION" -eq 0 ]; then
+	run_debug_command get-log >"$OUTPUT_DIR/final-log.txt" 2>&1 || true
+fi
 
 echo "Clone soak complete."
 echo "Summary: $SUMMARY_FILE"

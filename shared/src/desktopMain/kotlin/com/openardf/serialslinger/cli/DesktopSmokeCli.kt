@@ -132,19 +132,16 @@ private fun runClone(port: String) {
         val result = FirmwareCloneSession.cloneFromTemplate(
             transport = transport,
             templateSettings = templateSettings,
-            targetSoftwareVersion = snapshot.info.softwareVersion,
             currentTimeCompact = ::nextFirmwareCloneClockTimeCompact,
-            afterReset = { waitForFirmwareCloneReset(transport) },
+            afterPreCloneStop = { waitForFirmwareClonePreCloneStop(transport) },
             afterStartAttempt = ::waitForFirmwareCloneStartRetry,
             afterCommandAcknowledged = { waitForFirmwareCloneCommandSettle() },
-            afterCloneDiagnosticRecovered = { waitForFirmwareCloneDiagnosticRecovery(transport) },
         )
         val refreshResult = DeviceSessionController.refreshFromDevice(loadResult.state, transport, startEditing = true)
         println("Clone result:")
         println("  succeeded=${result.succeeded}")
         println("  enteredCloneMode=${result.enteredCloneMode}")
         println("  acknowledged=${result.acknowledged}")
-        println("  legacyFallbackAllowed=${result.legacyFallbackAllowed}")
         println("  checksum=${result.plan?.checksum ?: "<none>"}")
         println("  failureMessage=${result.failureMessage ?: "<none>"}")
         println()
@@ -223,17 +220,17 @@ private fun nextFirmwareCloneClockTimeCompact(): String {
     return DesktopInputSupport.currentSystemTimeCompact(target)
 }
 
-private fun waitForFirmwareCloneReset(transport: DesktopSerialTransport): List<String> {
+private fun waitForFirmwareClonePreCloneStop(transport: DesktopSerialTransport): List<String> {
     val lines = mutableListOf<String>()
-    val deadline = System.currentTimeMillis() + FirmwareCloneResetMaxWaitMs
-    var sawResetOutput = false
+    val deadline = System.currentTimeMillis() + FirmwareClonePreCloneStopMaxWaitMs
+    var sawStopOutput = false
     while (System.currentTimeMillis() < deadline) {
         val responseLines = transport.readAvailableLines()
         if (responseLines.isNotEmpty()) {
             lines += responseLines
-            sawResetOutput = true
+            sawStopOutput = true
             Thread.sleep(FirmwareCloneCommandSettleMs)
-        } else if (sawResetOutput) {
+        } else if (sawStopOutput) {
             return lines
         } else {
             Thread.sleep(FirmwareCloneCommandSettleMs)
@@ -248,11 +245,6 @@ private fun waitForFirmwareCloneStartRetry() {
 
 private fun waitForFirmwareCloneCommandSettle() {
     Thread.sleep(FirmwareCloneCommandSettleMs)
-}
-
-private fun waitForFirmwareCloneDiagnosticRecovery(transport: DesktopSerialTransport): List<String> {
-    Thread.sleep(80L)
-    return transport.readAvailableLinesBriefly()
 }
 
 internal fun applyAssignments(
@@ -457,5 +449,5 @@ private fun printUsage() {
     println("  submit /dev/tty.usbserial stationId=W1FOX daysToRun=3 beaconFrequencyHz=3580000")
 }
 
-private const val FirmwareCloneCommandSettleMs = 250L
-private const val FirmwareCloneResetMaxWaitMs = 8_000L
+private const val FirmwareCloneCommandSettleMs = 100L
+private const val FirmwareClonePreCloneStopMaxWaitMs = 1_500L

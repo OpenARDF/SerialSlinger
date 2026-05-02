@@ -3,63 +3,53 @@ package com.openardf.serialslinger.session
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.protocol.FirmwareClonePlan
 import com.openardf.serialslinger.protocol.FirmwareCloneProtocol
-import com.openardf.serialslinger.protocol.SignalSlingerFirmwareVersion
 import com.openardf.serialslinger.transport.DeviceTransport
 
 data class FirmwareCloneSessionResult(
     val enteredCloneMode: Boolean,
     val acknowledged: Boolean,
-    val legacyFallbackAllowed: Boolean,
     val plan: FirmwareClonePlan?,
     val commandsSent: List<String>,
     val linesReceived: List<String>,
     val traceEntries: List<SerialTraceEntry>,
     val failureMessage: String? = null,
+    val retryable: Boolean = true,
 ) {
     val succeeded: Boolean
         get() = enteredCloneMode && acknowledged && failureMessage == null
 }
 
 object FirmwareCloneSession {
-    private const val ResetCommand = "RST"
+    private const val PreCloneStopCommand = "GO 0"
+    private const val UiStatusCommand = "UI S"
+    private const val UiClearCommand = "UI C"
     private const val StartCommand = "MAS P"
     private const val StartReply = "MAS S"
-    private const val CloneDiagnosticCommand = "CLN"
-    private const val DiagnosticProbeCommand = "TMP"
     private const val StartAttempts = 4
     private const val CloneReplyReadAttempts = 3
     private const val CloneSessionAttempts = 3
-    private val CloneDiagnosticRecoveryMinimumVersion = SignalSlingerFirmwareVersion(1, 2, 2)
 
     fun cloneFromTemplate(
         transport: DeviceTransport,
         templateSettings: DeviceSettings,
-        targetSoftwareVersion: String? = null,
         currentTimeCompact: () -> String,
-        afterReset: () -> List<String> = { emptyList() },
+        afterPreCloneStop: () -> List<String> = { emptyList() },
         afterStartAttempt: () -> Unit = {},
         afterCommandAcknowledged: (String) -> Unit = {},
-        afterCloneDiagnosticRecovered: (String) -> List<String> = { emptyList() },
     ): FirmwareCloneSessionResult {
-        val cloneDiagnosticRecoveryAllowed =
-            SignalSlingerFirmwareVersion.parse(targetSoftwareVersion)?.let { version ->
-                version >= CloneDiagnosticRecoveryMinimumVersion
-            } == true
         val attempts = mutableListOf<FirmwareCloneSessionResult>()
         repeat(CloneSessionAttempts) { attemptIndex ->
             val result =
                 cloneFromTemplateOnce(
                     transport = transport,
                     templateSettings = templateSettings,
-                    cloneDiagnosticRecoveryAllowed = cloneDiagnosticRecoveryAllowed,
                     currentTimeCompact = currentTimeCompact,
-                    afterReset = afterReset,
+                    afterPreCloneStop = afterPreCloneStop,
                     afterStartAttempt = afterStartAttempt,
                     afterCommandAcknowledged = afterCommandAcknowledged,
-                    afterCloneDiagnosticRecovered = afterCloneDiagnosticRecovered,
                 )
             attempts += result
-            if (result.succeeded || !result.enteredCloneMode || attemptIndex == CloneSessionAttempts - 1) {
+            if (result.succeeded || !result.enteredCloneMode || !result.retryable || attemptIndex == CloneSessionAttempts - 1) {
                 return mergeAttempts(attempts)
             }
         }
@@ -69,12 +59,10 @@ object FirmwareCloneSession {
     private fun cloneFromTemplateOnce(
         transport: DeviceTransport,
         templateSettings: DeviceSettings,
-        cloneDiagnosticRecoveryAllowed: Boolean,
         currentTimeCompact: () -> String,
-        afterReset: () -> List<String>,
+        afterPreCloneStop: () -> List<String>,
         afterStartAttempt: () -> Unit,
         afterCommandAcknowledged: (String) -> Unit,
-        afterCloneDiagnosticRecovered: (String) -> List<String>,
     ): FirmwareCloneSessionResult {
         val commands = mutableListOf<String>()
         val lines = mutableListOf<String>()
@@ -122,39 +110,18 @@ object FirmwareCloneSession {
             return responseLines
         }
 
-        fun probeAfterMissingCloneReply(
-            expectedCommand: String,
-            expectedReply: String,
-        ): Boolean {
-            val cloneDiagnosticLines = sendAndRead(CloneDiagnosticCommand)
-            if (cloneDiagnosticLines.isEmpty()) {
-                sendAndRead(DiagnosticProbeCommand)
-            }
-            val confirmed = cloneDiagnosticRecoveryAllowed &&
-                cloneDiagnosticConfirmsAcknowledgement(
-                    lines = cloneDiagnosticLines,
-                    expectedCommand = expectedCommand,
-                    expectedReply = expectedReply,
-                )
-            if (confirmed) {
-                val recoveredAtMs = System.currentTimeMillis()
-                val drainLines = afterCloneDiagnosticRecovered(expectedCommand)
-                lines += drainLines
-                traceEntries += drainLines.map { line ->
-                    SerialTraceEntry(recoveredAtMs, SerialTraceDirection.RX, line)
-                }
-            }
-            return confirmed
-        }
-
-        sendAndRead(ResetCommand)
-        val resetLines = afterReset()
-        if (resetLines.isNotEmpty()) {
+        sendAndRead(PreCloneStopCommand)
+        val preCloneStopLines = afterPreCloneStop()
+        if (preCloneStopLines.isNotEmpty()) {
             val receivedAtMs = System.currentTimeMillis()
-            lines += resetLines
-            traceEntries += resetLines.map { line ->
+            lines += preCloneStopLines
+            traceEntries += preCloneStopLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
             }
+        }
+        val uiStatusLines = sendAndRead(UiStatusCommand)
+        if (uiStatusLines.cloneSuccessCountdown() > 0) {
+            sendAndRead(UiClearCommand)
         }
         val startResponses = mutableListOf<String>()
         for (attemptIndex in 0 until StartAttempts) {
@@ -172,7 +139,6 @@ object FirmwareCloneSession {
             return FirmwareCloneSessionResult(
                 enteredCloneMode = false,
                 acknowledged = false,
-                legacyFallbackAllowed = startResponses.isEmpty(),
                 plan = null,
                 commandsSent = commands,
                 linesReceived = lines,
@@ -181,27 +147,22 @@ object FirmwareCloneSession {
                     if (startResponses.isEmpty()) {
                         "SignalSlinger did not enter firmware clone mode."
                     } else {
-                        "SignalSlinger did not acknowledge firmware clone mode after reset."
+                        "SignalSlinger did not acknowledge firmware clone mode after the pre-clone stop command."
                     },
             )
         }
 
         val functionResponse = sendAndReadForReply("FUN A", "FUN A")
         if (!FirmwareCloneProtocol.replyMatches("FUN A", functionResponse)) {
-            if (probeAfterMissingCloneReply(expectedCommand = "FUN A", expectedReply = "FUN A")) {
-                afterCommandAcknowledged("FUN A")
-            } else {
-                return FirmwareCloneSessionResult(
-                    enteredCloneMode = true,
-                    acknowledged = false,
-                    legacyFallbackAllowed = false,
-                    plan = null,
-                    commandsSent = commands,
-                    linesReceived = lines,
-                    traceEntries = traceEntries,
-                    failureMessage = "Firmware clone failed after `FUN A`; expected `FUN A`.",
-                )
-            }
+            return FirmwareCloneSessionResult(
+                enteredCloneMode = true,
+                acknowledged = false,
+                plan = null,
+                commandsSent = commands,
+                linesReceived = lines,
+                traceEntries = traceEntries,
+                failureMessage = "Firmware clone failed after `FUN A`; expected `FUN A`.",
+            )
         }
 
         val plan = FirmwareCloneProtocol.buildPlan(
@@ -211,27 +172,23 @@ object FirmwareCloneSession {
         for (step in plan.steps.drop(1)) {
             val responseLines = sendAndReadForReply(step.command, step.expectedReply)
             if (!FirmwareCloneProtocol.replyMatches(step.expectedReply, responseLines)) {
-                if (probeAfterMissingCloneReply(expectedCommand = step.command, expectedReply = step.expectedReply)) {
-                    afterCommandAcknowledged(step.command)
-                } else {
-                    return FirmwareCloneSessionResult(
-                        enteredCloneMode = true,
-                        acknowledged = false,
-                        legacyFallbackAllowed = false,
-                        plan = plan,
-                        commandsSent = commands,
-                        linesReceived = lines,
-                        traceEntries = traceEntries,
-                        failureMessage = "Firmware clone failed after `${step.command}`; expected `${step.expectedReply}`.",
-                    )
-                }
+                val isFinalChecksumStep = step == plan.steps.last()
+                return FirmwareCloneSessionResult(
+                    enteredCloneMode = true,
+                    acknowledged = false,
+                    plan = plan,
+                    commandsSent = commands,
+                    linesReceived = lines,
+                    traceEntries = traceEntries,
+                    failureMessage = "Firmware clone failed after `${step.command}`; expected `${step.expectedReply}`.",
+                    retryable = !isFinalChecksumStep,
+                )
             }
         }
 
         return FirmwareCloneSessionResult(
             enteredCloneMode = true,
             acknowledged = true,
-            legacyFallbackAllowed = false,
             plan = plan,
             commandsSent = commands,
             linesReceived = lines,
@@ -261,50 +218,18 @@ object FirmwareCloneSession {
         )
     }
 
-    private fun cloneDiagnosticConfirmsAcknowledgement(
-        lines: List<String>,
-        expectedCommand: String,
-        expectedReply: String,
-    ): Boolean {
-        val expectedCloneCommand = cloneDiagnosticCommandName(expectedCommand, expectedReply)
-        return lines.any { line ->
-            val diagnostic = CloneDiagnostic.fromLine(line) ?: return@any false
-            diagnostic.failures == 0 &&
-                diagnostic.lastCommand == expectedCloneCommand &&
-                diagnostic.replyMatches(expectedReply)
-        }
-    }
-
-    private fun cloneDiagnosticCommandName(
-        command: String,
-        expectedReply: String,
-    ): String {
-        return when {
-            command.startsWith("MAS Q") -> "MAS Q"
-            else -> expectedReply
-        }
-    }
-
-    private data class CloneDiagnostic(
-        val lastCommand: String,
-        val replyText: String,
-        val failures: Int,
-    ) {
-        fun replyMatches(expectedReply: String): Boolean {
-            return FirmwareCloneProtocol.replyMatches(expectedReply, listOf(replyText))
-        }
-
-        companion object {
-            private val Pattern = Regex("""CLN\s+last=(.+?)\s+reply=(.+?)\s+tries=\d+\s+ok=\d+\s+fail=(\d+)""")
-
-            fun fromLine(line: String): CloneDiagnostic? {
-                val match = Pattern.find(line.trim()) ?: return null
-                return CloneDiagnostic(
-                    lastCommand = match.groupValues[1].trim(),
-                    replyText = match.groupValues[2].trim(),
-                    failures = match.groupValues[3].toInt(),
-                )
+    private fun List<String>.cloneSuccessCountdown(): Int {
+        return firstNotNullOfOrNull { line ->
+            val tokens = line.trim().split(Regex("\\s+"))
+            tokens.firstNotNullOfOrNull { token ->
+                val parts = token.split("=", limit = 2)
+                if (parts.size == 2 && parts[0] == "cs") {
+                    parts[1].toIntOrNull()
+                } else {
+                    null
+                }
             }
-        }
+        } ?: 0
     }
+
 }

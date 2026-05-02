@@ -25,7 +25,6 @@ import com.openardf.serialslinger.model.TemperatureAlertSupport
 import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.model.hasWallClockTimeSet
-import com.openardf.serialslinger.protocol.SignalSlingerFirmwareVersion
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceSessionController
@@ -33,7 +32,6 @@ import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
 import com.openardf.serialslinger.session.DeviceSubmitResult
 import com.openardf.serialslinger.session.FirmwareCloneSession
-import com.openardf.serialslinger.session.FirmwareCloneSessionResult
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.session.SettingVerification
@@ -2448,6 +2446,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
             return
         }
+        if (cloneTemplateEventWouldAlreadyBeRunning(templateSettings)) {
+            JOptionPane.showMessageDialog(
+                this,
+                "Clone cancelled because the source event would already be in progress.\n\n" +
+                    "Change the Start Time to a future time before cloning.",
+                "Clone Cancelled",
+                JOptionPane.WARNING_MESSAGE,
+            )
+            setStatus("Clone cancelled because the source event would already be in progress.")
+            return
+        }
         if (!skipClockWarning) {
             when (
                 maybeShowCloneClockReminder(
@@ -2494,22 +2503,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
             val validated = editable.toValidatedDeviceSettings()
             val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
-            val firmwareCloneResult = if (shouldUseFirmwareCloneProtocol(targetSnapshot.info.softwareVersion)) {
-                setBusyProgress(20, 100, "Starting firmware clone")
-                FirmwareCloneSession.cloneFromTemplate(
-                    transport = transport,
-                    templateSettings = validated,
-                    targetSoftwareVersion = targetSnapshot.info.softwareVersion,
-                    currentTimeCompact = ::nextFirmwareCloneClockTimeCompact,
-                    afterReset = { waitForFirmwareCloneReset(transport) },
-                    afterStartAttempt = ::waitForFirmwareCloneStartRetry,
-                    afterCommandAcknowledged = { waitForFirmwareCloneCommandSettle() },
-                    afterCloneDiagnosticRecovered = { waitForFirmwareCloneDiagnosticRecovery(transport) },
-                )
-            } else {
-                null
-            }
-            if (firmwareCloneResult?.succeeded == true) {
+            setBusyProgress(20, 100, "Starting firmware clone")
+            val firmwareCloneResult = FirmwareCloneSession.cloneFromTemplate(
+                transport = transport,
+                templateSettings = validated,
+                currentTimeCompact = ::nextFirmwareCloneClockTimeCompact,
+                afterPreCloneStop = { waitForFirmwareClonePreCloneStop(transport) },
+                afterStartAttempt = ::waitForFirmwareCloneStartRetry,
+                afterCommandAcknowledged = { waitForFirmwareCloneCommandSettle() },
+            )
+            if (firmwareCloneResult.succeeded) {
                 setBusyProgress(70, 100, "Refreshing cloned settings")
                 val refreshed = DeviceSessionController.refreshFromDevice(
                     targetRefresh.state,
@@ -2560,104 +2563,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 return@runInBackground
             }
 
-            if (firmwareCloneResult != null) {
-                require(firmwareCloneResult.legacyFallbackAllowed) {
-                    firmwareCloneResult.failureMessage ?: "Firmware clone failed after clone mode started."
-                }
-            }
-            val result = DeviceSessionController.submitEdits(
-                targetRefresh.state,
-                editable,
-                transport,
-                progress = { completed, total ->
-                    setBusyProgressRange(20, 70, completed, total, commandProgressLabel(completed, total))
-                },
-            )
-            val verificationFailures = result.verifications.filter { !it.verified }
-            val refreshed = DeviceSessionController.refreshFromDevice(
-                result.state,
-                transport,
-                startEditing = true,
-                progress = { completed, total ->
-                    setBusyProgressRange(70, 90, completed, total, commandProgressLabel(completed, total))
-                },
-            )
-            var finalState = refreshed.state
-            var syncOperation: TimeSyncOperationResult? = null
-
-            if (verificationFailures.isEmpty() && refreshed.state.snapshot?.capabilities?.supportsScheduling == true) {
-                setBusyProgress(94, 100, "Syncing device time")
-                syncOperation = performAlignedTimeSync(
-                    transport = transport,
-                    state = refreshed.state,
-                    snapshot = requireNotNull(refreshed.state.snapshot),
-                )
-                finalState = syncOperation.finalAttempt.state
-            }
-            setBusyProgress(100, 100, "Done")
-
-            currentState = finalState
-            loadedSnapshot = finalState.snapshot
-            val cloneSucceeded =
-                verificationFailures.isEmpty() &&
-                    (syncOperation == null || syncOperation.succeeded)
-
-            SwingUtilities.invokeLater {
-                if (syncOperation != null) {
-                    deviceTimeOffset = Duration.ofMillis(-(syncOperation.finalAttempt.phaseErrorMillis ?: 0L))
-                    lastDeviceTimeCheckAtMs = System.currentTimeMillis()
-                    applySnapshotToForm(syncOperation.finalAttempt.state.snapshot, recalculateClockOffset = false)
-                } else {
-                    applySnapshotToForm(finalState.snapshot)
-                }
-                appendWriteLog(
-                    title = "Clone",
-                    writePlan = writePlan,
-                    result = result,
-                    leadEntries = firmwareCloneFallbackLogEntries(firmwareCloneResult),
-                    preRefreshResult = targetRefresh,
-                    refreshResult = refreshed,
-                    comparedFieldKeys = cloneComparedFieldKeys(),
-                )
-                syncOperation?.let {
-                    appendSyncLog(
-                        title = "Clone Time Sync",
-                        attempts = it.attempts,
-                        latencySamples = it.latencySamples,
-                    )
-                }
-                if (cloneSucceeded) {
-                    updateCloneTemplateLabel(
-                        cloneTemplateAttachedDeviceStateMessage(),
-                        Color(0x9A, 0x67, 0x11),
-                    )
-                    showConnectionIndicator(
-                        ConnectionIndicatorState.CONNECTED,
-                        if (writePlan.changes.isEmpty()) {
-                            "Clone succeeded. Timed Event Settings already matched ${currentConnectedPortPath.orEmpty()} and time was synchronized."
-                        } else {
-                            "Clone succeeded on ${currentConnectedPortPath.orEmpty()} and time was synchronized."
-                        },
-                    )
-                    setStatus("Clone succeeded.")
-                } else {
-                    updateCloneTemplateLabel(
-                        cloneTemplateAttachedDeviceStateMessage(),
-                        Color(0x9A, 0x67, 0x11),
-                    )
-                    showConnectionIndicator(
-                        ConnectionIndicatorState.DISCONNECTED,
-                        "Clone failed on ${currentConnectedPortPath.orEmpty()}. Check verification or sync results in the log.",
-                    )
-                    setStatus("Clone failed.")
-                    JOptionPane.showMessageDialog(
-                        this,
-                        "Clone failed. Review the log, then you can retry Clone.",
-                        "Clone Failed",
-                        JOptionPane.WARNING_MESSAGE,
-                    )
-                }
-            }
+            error(firmwareCloneResult.failureMessage ?: "Firmware clone failed.")
         }
     }
 
@@ -4746,22 +4652,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         appendLog(title, entries)
     }
 
-    private fun firmwareCloneFallbackLogEntries(
-        result: FirmwareCloneSessionResult?,
-    ): List<DesktopLogEntry> {
-        result ?: return emptyList()
-        return buildList {
-            add(
-                DesktopLogEntry(
-                    message = "Firmware MAS P clone did not start; using legacy writes.",
-                    category = DesktopLogCategory.APP,
-                    timestampMs = result.traceEntries.firstOrNull()?.timestampMs ?: System.currentTimeMillis(),
-                ),
-            )
-            addAll(traceEntriesToLogEntries(result.traceEntries, suffix = "(firmware clone)"))
-        }
-    }
-
     private fun appendWriteLog(
         title: String,
         writePlan: WritePlan,
@@ -6051,26 +5941,34 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (delayNanos > 0L) {
             Thread.sleep(delayNanos / 1_000_000L, (delayNanos % 1_000_000L).toInt())
         }
-        return DesktopInputSupport.currentSystemTimeCompact(target)
+        return cloneClockCompactForSystemTime(target)
     }
 
-    private fun shouldUseFirmwareCloneProtocol(softwareVersion: String?): Boolean {
-        return SignalSlingerFirmwareVersion.parse(softwareVersion)?.let { version ->
-            version >= SignalSlingerFirmwareVersion(1, 2, 2)
-        } == true
+    private fun cloneTemplateEventWouldAlreadyBeRunning(settings: DeviceSettings): Boolean {
+        val cloneClock = cloneClockCompactForSystemTime(LocalDateTime.now().withNano(0).plusSeconds(1))
+        return DesktopInputSupport.isCloneScheduleAlreadyRunning(
+            startTimeCompact = settings.startTimeCompact,
+            finishTimeCompact = settings.finishTimeCompact,
+            cloneClockCompact = cloneClock,
+            daysToRun = settings.daysToRun,
+        )
     }
 
-    private fun waitForFirmwareCloneReset(transport: DesktopSerialTransport): List<String> {
+    private fun cloneClockCompactForSystemTime(systemTime: LocalDateTime): String {
+        return DesktopInputSupport.currentSystemTimeCompact(systemTime.plus(deviceTimeOffset ?: Duration.ZERO))
+    }
+
+    private fun waitForFirmwareClonePreCloneStop(transport: DesktopSerialTransport): List<String> {
         val lines = mutableListOf<String>()
-        val deadline = System.currentTimeMillis() + FIRMWARE_CLONE_RESET_MAX_WAIT_MS
-        var sawResetOutput = false
+        val deadline = System.currentTimeMillis() + FIRMWARE_CLONE_PRE_CLONE_STOP_MAX_WAIT_MS
+        var sawStopOutput = false
         while (System.currentTimeMillis() < deadline) {
             val responseLines = transport.readAvailableLines()
             if (responseLines.isNotEmpty()) {
                 lines += responseLines
-                sawResetOutput = true
+                sawStopOutput = true
                 Thread.sleep(FIRMWARE_CLONE_COMMAND_SETTLE_MS)
-            } else if (sawResetOutput) {
+            } else if (sawStopOutput) {
                 return lines
             } else {
                 Thread.sleep(FIRMWARE_CLONE_COMMAND_SETTLE_MS)
@@ -6085,11 +5983,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun waitForFirmwareCloneCommandSettle() {
         Thread.sleep(FIRMWARE_CLONE_COMMAND_SETTLE_MS)
-    }
-
-    private fun waitForFirmwareCloneDiagnosticRecovery(transport: DesktopSerialTransport): List<String> {
-        Thread.sleep(80L)
-        return transport.readAvailableLinesBriefly()
     }
 
     private fun applyLoadedConnection(connection: LoadedConnection) {
@@ -8058,7 +7951,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         const val SETTING_TOGGLE_ANIMATION_MS = 260
         const val SCHEDULE_MODE_TOGGLE_SUPPRESSION_MS = 750L
         const val PERIODIC_DEVICE_TIME_CHECK_INTERVAL_MS = 1_800_000L
-        const val FIRMWARE_CLONE_COMMAND_SETTLE_MS = 250L
-        const val FIRMWARE_CLONE_RESET_MAX_WAIT_MS = 8_000L
+        const val FIRMWARE_CLONE_COMMAND_SETTLE_MS = 100L
+        const val FIRMWARE_CLONE_PRE_CLONE_STOP_MAX_WAIT_MS = 1_500L
     }
 }

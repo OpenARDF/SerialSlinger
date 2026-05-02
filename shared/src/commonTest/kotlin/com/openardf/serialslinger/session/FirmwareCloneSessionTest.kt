@@ -20,7 +20,7 @@ class FirmwareCloneSessionTest {
         val transport =
             FakeDeviceTransport(
                 mapOf(
-                    "RST" to emptyList<String>(),
+                    "GO 0" to emptyList<String>(),
                     "MAS P" to listOf("MAS S"),
                 ) +
                     plan.steps.associate { step ->
@@ -34,12 +34,12 @@ class FirmwareCloneSessionTest {
             )
 
         var commandsWhenClockValueWasChosen: List<String> = emptyList()
-        var commandsWhenResetWaitStarted: List<String> = emptyList()
+        var commandsWhenPreCloneStopWaitStarted: List<String> = emptyList()
         val result = FirmwareCloneSession.cloneFromTemplate(
             transport = transport,
             templateSettings = settings,
-            afterReset = {
-                commandsWhenResetWaitStarted = transport.sentCommands.toList()
+            afterPreCloneStop = {
+                commandsWhenPreCloneStopWaitStarted = transport.sentCommands.toList()
                 emptyList()
             },
             currentTimeCompact = {
@@ -49,17 +49,17 @@ class FirmwareCloneSessionTest {
         )
 
         assertTrue(result.succeeded)
-        assertEquals(listOf("RST"), commandsWhenResetWaitStarted)
-        assertEquals(listOf("RST", "MAS P", "FUN A"), commandsWhenClockValueWasChosen)
-        assertEquals(listOf("RST", "MAS P") + plan.steps.map { it.command }, transport.sentCommands)
-        assertEquals(listOf("RST", "MAS P") + plan.steps.map { it.command }, result.commandsSent)
+        assertEquals(listOf("GO 0"), commandsWhenPreCloneStopWaitStarted)
+        assertEquals(listOf("GO 0", "UI S", "MAS P", "FUN A"), commandsWhenClockValueWasChosen)
+        assertEquals(listOf("GO 0", "UI S", "MAS P") + plan.steps.map { it.command }, transport.sentCommands)
+        assertEquals(listOf("GO 0", "UI S", "MAS P") + plan.steps.map { it.command }, result.commandsSent)
     }
 
     @Test
-    fun recordsResetOutputBeforeStartingCloneProbes() {
+    fun recordsPreCloneStopOutputBeforeStartingCloneProbes() {
         val transport = FakeDeviceTransport(
             mapOf(
-                "RST" to emptyList<String>(),
+                "GO 0" to emptyList<String>(),
                 "MAS P" to listOf("MAS S"),
             ),
         )
@@ -67,15 +67,81 @@ class FirmwareCloneSessionTest {
         val result = FirmwareCloneSession.cloneFromTemplate(
             transport = transport,
             templateSettings = sampleSettings(),
-            afterReset = {
-                listOf("* Warning: CPU Reset! Need to set clock", "* Power off. Press and hold pushbutton for power on")
+            afterPreCloneStop = {
+                listOf("* GO 0:Classic; Stopped")
             },
             currentTimeCompact = { "260430171643" },
         )
 
         assertTrue(result.enteredCloneMode)
-        assertTrue(result.linesReceived.contains("* Warning: CPU Reset! Need to set clock"))
-        assertEquals(listOf("RST", "MAS P", "FUN A"), result.commandsSent.take(3))
+        assertTrue(result.linesReceived.contains("* GO 0:Classic; Stopped"))
+        assertEquals(listOf("GO 0", "UI S", "MAS P", "FUN A"), result.commandsSent.take(4))
+    }
+
+    @Test
+    fun clearsCloneSuccessLatchBeforeStartingCloneProbeWhenUiStatusReportsIt() {
+        val settings = sampleSettings()
+        val plan = FirmwareCloneProtocol.buildPlan(settings, currentTimeCompact = "260430171643")
+        val transport =
+            FakeDeviceTransport(
+                mapOf(
+                    "GO 0" to emptyList(),
+                    "UI S" to listOf("* UI cs=18000 cl=0 df=0 pc=0 pt=0", "* UI ms=0 mc=0 ee=0 ec=0 ru=0 fs=0"),
+                    "UI C" to listOf("* UI C"),
+                    "MAS P" to listOf("MAS S"),
+                ) +
+                    plan.steps.associate { step ->
+                        val response =
+                            when (step.expectedReply) {
+                                "CLK T" -> "CLK T 1777569403"
+                                else -> step.expectedReply
+                            }
+                        step.command to listOf(response)
+                    },
+            )
+
+        val result = FirmwareCloneSession.cloneFromTemplate(
+            transport = transport,
+            templateSettings = settings,
+            currentTimeCompact = { "260430171643" },
+        )
+
+        assertTrue(result.succeeded)
+        assertEquals(listOf("GO 0", "UI S", "UI C", "MAS P"), transport.sentCommands.take(4))
+        assertTrue(result.linesReceived.contains("* UI cs=18000 cl=0 df=0 pc=0 pt=0"))
+        assertTrue(result.linesReceived.contains("* UI C"))
+    }
+
+    @Test
+    fun recognizesPrefixedUiStatusWhenEchoAndReplyShareOneLine() {
+        val settings = sampleSettings()
+        val plan = FirmwareCloneProtocol.buildPlan(settings, currentTimeCompact = "260430171643")
+        val transport =
+            FakeDeviceTransport(
+                mapOf(
+                    "GO 0" to emptyList(),
+                    "UI S" to listOf("> UI S* UI cs=12750 cl=0 df=0 pc=0 pt=0"),
+                    "UI C" to listOf("> UI C* UI C"),
+                    "MAS P" to listOf("MAS S"),
+                ) +
+                    plan.steps.associate { step ->
+                        val response =
+                            when (step.expectedReply) {
+                                "CLK T" -> "CLK T 1777569403"
+                                else -> step.expectedReply
+                            }
+                        step.command to listOf(response)
+                    },
+            )
+
+        val result = FirmwareCloneSession.cloneFromTemplate(
+            transport = transport,
+            templateSettings = settings,
+            currentTimeCompact = { "260430171643" },
+        )
+
+        assertTrue(result.succeeded)
+        assertEquals(listOf("GO 0", "UI S", "UI C", "MAS P"), transport.sentCommands.take(4))
     }
 
     @Test
@@ -86,7 +152,7 @@ class FirmwareCloneSessionTest {
             DelayedReadTransport(
                 scriptedReads =
                     buildMap {
-                        put("RST", listOf(emptyList()))
+                        put("GO 0", listOf(emptyList()))
                         put("MAS P", listOf(listOf("MAS S")))
                         plan.steps.forEach { step ->
                             val response =
@@ -107,7 +173,7 @@ class FirmwareCloneSessionTest {
 
         assertTrue(result.succeeded)
         assertEquals(1, transport.sentCommands.count { it == "CLK D 4" })
-        assertEquals(listOf("RST", "MAS P") + plan.steps.map { it.command }, result.commandsSent)
+        assertEquals(listOf("GO 0", "UI S", "MAS P") + plan.steps.map { it.command }, result.commandsSent)
     }
 
     @Test
@@ -119,7 +185,7 @@ class FirmwareCloneSessionTest {
             DelayedReadTransport(
                 scriptedReads =
                     buildMap {
-                        put("RST", listOf(emptyList()))
+                        put("GO 0", listOf(emptyList()))
                         put("MAS P", listOf(listOf("MAS S")))
                         plan.steps.forEach { step ->
                             val response =
@@ -147,7 +213,7 @@ class FirmwareCloneSessionTest {
 
         assertTrue(result.succeeded)
         assertEquals(1, transport.sentCommands.count { it == delayedStep })
-        assertEquals(listOf("RST", "MAS P") + plan.steps.map { it.command }, result.commandsSent)
+        assertEquals(listOf("GO 0", "UI S", "MAS P") + plan.steps.map { it.command }, result.commandsSent)
     }
 
     @Test
@@ -157,7 +223,7 @@ class FirmwareCloneSessionTest {
         val transport =
             FakeDeviceTransport(
                 mapOf(
-                    "RST" to emptyList<String>(),
+                    "GO 0" to emptyList<String>(),
                     "MAS P" to listOf("MAS S"),
                 ) +
                     plan.steps.associate { step ->
@@ -194,15 +260,14 @@ class FirmwareCloneSessionTest {
 
         assertFalse(result.succeeded)
         assertFalse(result.enteredCloneMode)
-        assertTrue(result.legacyFallbackAllowed)
-        assertEquals(listOf("RST", "MAS P", "MAS P", "MAS P", "MAS P"), result.commandsSent)
+        assertEquals(listOf("GO 0", "UI S", "MAS P", "MAS P", "MAS P", "MAS P"), result.commandsSent)
     }
 
     @Test
-    fun doesNotAllowLegacyFallbackWhenMasStartOnlyEchoes() {
+    fun failsWhenMasStartOnlyEchoes() {
         val transport = FakeDeviceTransport(
             mapOf(
-                "RST" to emptyList<String>(),
+                "GO 0" to emptyList<String>(),
                 "MAS P" to listOf("> MAS P"),
             ),
         )
@@ -215,8 +280,7 @@ class FirmwareCloneSessionTest {
 
         assertFalse(result.succeeded)
         assertFalse(result.enteredCloneMode)
-        assertFalse(result.legacyFallbackAllowed)
-        assertEquals(listOf("RST", "MAS P", "MAS P", "MAS P", "MAS P"), result.commandsSent)
+        assertEquals(listOf("GO 0", "UI S", "MAS P", "MAS P", "MAS P", "MAS P"), result.commandsSent)
     }
 
     @Test
@@ -224,7 +288,7 @@ class FirmwareCloneSessionTest {
         val settings = sampleSettings()
         val plan = FirmwareCloneProtocol.buildPlan(settings, currentTimeCompact = "260430171643")
         val transport = FakeDeviceTransport(
-            mapOf("RST" to emptyList<String>()) +
+            mapOf("GO 0" to emptyList<String>()) +
                 mapOf("MAS P" to listOf("> MAS PMAS S")) +
                 plan.steps.associate { step ->
                     val response =
@@ -244,8 +308,7 @@ class FirmwareCloneSessionTest {
 
         assertTrue(result.succeeded)
         assertTrue(result.enteredCloneMode)
-        assertFalse(result.legacyFallbackAllowed)
-        assertEquals(listOf("RST", "MAS P") + plan.steps.map { it.command }, result.commandsSent)
+        assertEquals(listOf("GO 0", "UI S", "MAS P") + plan.steps.map { it.command }, result.commandsSent)
     }
 
     @Test
@@ -254,7 +317,7 @@ class FirmwareCloneSessionTest {
         val plan = FirmwareCloneProtocol.buildPlan(settings, currentTimeCompact = "260430171643")
         val responses =
             mutableMapOf(
-                "RST" to emptyList<String>(),
+                "GO 0" to emptyList<String>(),
                 "MAS P" to listOf("MAS S"),
             ).apply {
                 plan.steps.forEach { step ->
@@ -272,8 +335,7 @@ class FirmwareCloneSessionTest {
 
         assertFalse(result.succeeded)
         assertTrue(result.enteredCloneMode)
-        assertFalse(result.legacyFallbackAllowed)
-        assertEquals(3, result.commandsSent.count { it == "RST" })
+        assertEquals(3, result.commandsSent.count { it == "GO 0" })
         assertEquals(3, result.commandsSent.count { it == "CLK S 1777559400" })
         assertTrue(result.failureMessage.orEmpty().contains("Firmware clone attempts: 3."))
     }
@@ -285,7 +347,7 @@ class FirmwareCloneSessionTest {
         val transport =
             PerSendReadTransport(
                 buildMap {
-                    put("RST", mutableListOf(listOf(emptyList()), listOf(emptyList())))
+                    put("GO 0", mutableListOf(listOf(emptyList()), listOf(emptyList())))
                     put("MAS P", mutableListOf(listOf(listOf("MAS S")), listOf(listOf("MAS S"))))
                     plan.steps.forEach { step ->
                         val response =
@@ -296,80 +358,101 @@ class FirmwareCloneSessionTest {
                         put(step.command, mutableListOf(listOf(listOf(response)), listOf(listOf(response))))
                     }
                     put("FRE M 3540000", mutableListOf(listOf(emptyList()), listOf(listOf("FRE"))))
-                    put("CLN", mutableListOf(listOf(listOf("CLN last=FRE M reply=FRE ok=0 fail=0"))))
                 },
             )
 
         val result = FirmwareCloneSession.cloneFromTemplate(
             transport = transport,
             templateSettings = settings,
-            targetSoftwareVersion = "1.2.1",
             currentTimeCompact = { "260430171643" },
         )
 
         assertTrue(result.succeeded)
-        assertEquals(2, transport.sentCommands.count { it == "RST" })
+        assertEquals(2, transport.sentCommands.count { it == "GO 0" })
         assertEquals(2, transport.sentCommands.count { it == "FRE M 3540000" })
-        assertEquals(1, transport.sentCommands.count { it == "CLN" })
         assertEquals(0, transport.sentCommands.count { it == "TMP" })
-        assertTrue(result.linesReceived.contains("CLN last=FRE M reply=FRE ok=0 fail=0"))
         assertEquals(1, transport.sentCommands.count { it == "MAS Q ${plan.checksum}" })
     }
 
     @Test
-    fun continuesFirmwareCloneWhenSupportedCloneDiagnosticConfirmsMissingAcknowledgement() {
+    fun failsWhenEveryAttemptMissesAcknowledgement() {
         val settings = sampleSettings()
         val plan = FirmwareCloneProtocol.buildPlan(settings, currentTimeCompact = "260430171643")
         val missedCommand = "SPD P 8"
-        var commandsWhenRecoveryDrainStarted: List<String> = emptyList()
         val transport =
             PerSendReadTransport(
                 buildMap {
-                    put("RST", mutableListOf(listOf(emptyList())))
-                    put("MAS P", mutableListOf(listOf(listOf("MAS S"))))
+                    put("GO 0", mutableListOf(listOf(emptyList()), listOf(emptyList()), listOf(emptyList())))
+                    put("MAS P", mutableListOf(listOf(listOf("MAS S")), listOf(listOf("MAS S")), listOf(listOf("MAS S"))))
                     plan.steps.forEach { step ->
                         val response =
                             when (step.expectedReply) {
                                 "CLK T" -> "CLK T 1777569403"
                                 else -> step.expectedReply
                             }
-                        put(step.command, mutableListOf(listOf(listOf(response))))
+                        put(step.command, mutableListOf(listOf(listOf(response)), listOf(listOf(response)), listOf(listOf(response))))
                     }
-                    put(missedCommand, mutableListOf(listOf(emptyList())))
-                    put("CLN", mutableListOf(listOf(listOf("CLN last=SPD P reply=SPD P tries=1 ok=9 fail=0"))))
+                    put(missedCommand, mutableListOf(listOf(emptyList()), listOf(emptyList()), listOf(emptyList())))
                 },
             )
 
         val result = FirmwareCloneSession.cloneFromTemplate(
             transport = transport,
             templateSettings = settings,
-            targetSoftwareVersion = "1.2.2",
             currentTimeCompact = { "260430171643" },
-            afterCloneDiagnosticRecovered = {
-                commandsWhenRecoveryDrainStarted = transport.sentCommands.toList()
-                listOf("late fragment")
-            },
         )
 
-        assertTrue(result.succeeded)
-        assertEquals(1, transport.sentCommands.count { it == "RST" })
-        assertEquals(1, transport.sentCommands.count { it == missedCommand })
-        assertEquals(1, transport.sentCommands.count { it == "CLN" })
+        assertFalse(result.succeeded)
+        assertEquals(3, transport.sentCommands.count { it == "GO 0" })
+        assertEquals(3, transport.sentCommands.count { it == missedCommand })
         assertEquals(0, transport.sentCommands.count { it == "TMP" })
-        assertEquals(1, transport.sentCommands.count { it == "MAS Q ${plan.checksum}" })
-        assertEquals(listOf("RST", "MAS P") + plan.steps.take(8).map { it.command } + "CLN", commandsWhenRecoveryDrainStarted)
-        assertTrue(result.linesReceived.contains("CLN last=SPD P reply=SPD P tries=1 ok=9 fail=0"))
-        assertTrue(result.linesReceived.contains("late fragment"))
+        assertEquals(0, transport.sentCommands.count { it == "MAS Q ${plan.checksum}" })
+        assertTrue(result.failureMessage.orEmpty().contains("Firmware clone attempts: 3."))
     }
 
     @Test
-    fun fallsBackToTemperatureProbeWhenCloneDiagnosticIsUnsupported() {
+    fun failsChecksumCommitWithoutRetryingWholeCloneSession() {
+        val settings = sampleSettings()
+        val plan = FirmwareCloneProtocol.buildPlan(settings, currentTimeCompact = "260430171643")
+        val checksumCommand = "MAS Q ${plan.checksum}"
+        val transport =
+            PerSendReadTransport(
+                buildMap {
+                    put("GO 0", mutableListOf(listOf(emptyList()), listOf(emptyList()), listOf(emptyList())))
+                    put("MAS P", mutableListOf(listOf(listOf("MAS S")), listOf(listOf("MAS S")), listOf(listOf("MAS S"))))
+                    plan.steps.forEach { step ->
+                        val response =
+                            when (step.expectedReply) {
+                                "CLK T" -> "CLK T 1777569403"
+                                else -> step.expectedReply
+                            }
+                        put(step.command, mutableListOf(listOf(listOf(response)), listOf(listOf(response)), listOf(listOf(response))))
+                    }
+                    put(checksumCommand, mutableListOf(listOf(emptyList()), listOf(listOf("MAS ACK")), listOf(listOf("MAS ACK"))))
+                },
+            )
+
+        val result = FirmwareCloneSession.cloneFromTemplate(
+            transport = transport,
+            templateSettings = settings,
+            currentTimeCompact = { "260430171643" },
+        )
+
+        assertFalse(result.succeeded)
+        assertFalse(result.retryable)
+        assertEquals(1, transport.sentCommands.count { it == "GO 0" })
+        assertEquals(1, transport.sentCommands.count { it == checksumCommand })
+        assertFalse(result.failureMessage.orEmpty().contains("Firmware clone attempts:"))
+    }
+
+    @Test
+    fun retriesWholeFirmwareCloneSessionWithoutTemperatureProbe() {
         val settings = sampleSettings()
         val plan = FirmwareCloneProtocol.buildPlan(settings, currentTimeCompact = "260430171643")
         val transport =
             PerSendReadTransport(
                 buildMap {
-                    put("RST", mutableListOf(listOf(emptyList()), listOf(emptyList())))
+                    put("GO 0", mutableListOf(listOf(emptyList()), listOf(emptyList())))
                     put("MAS P", mutableListOf(listOf(listOf("MAS S")), listOf(listOf("MAS S"))))
                     plan.steps.forEach { step ->
                         val response =
@@ -380,8 +463,6 @@ class FirmwareCloneSessionTest {
                         put(step.command, mutableListOf(listOf(listOf(response)), listOf(listOf(response))))
                     }
                     put("CLK D 4", mutableListOf(listOf(emptyList()), listOf(listOf("CLK D"))))
-                    put("CLN", mutableListOf(listOf(emptyList())))
-                    put("TMP", mutableListOf(listOf(listOf("* Temp: 22.0C"))))
                 },
             )
 
@@ -392,9 +473,8 @@ class FirmwareCloneSessionTest {
         )
 
         assertTrue(result.succeeded)
-        assertEquals(1, transport.sentCommands.count { it == "CLN" })
-        assertEquals(1, transport.sentCommands.count { it == "TMP" })
-        assertTrue(result.linesReceived.contains("* Temp: 22.0C"))
+        assertEquals(0, transport.sentCommands.count { it == "TMP" })
+        assertEquals(2, transport.sentCommands.count { it == "CLK D 4" })
     }
 
     private fun sampleSettings(): DeviceSettings {

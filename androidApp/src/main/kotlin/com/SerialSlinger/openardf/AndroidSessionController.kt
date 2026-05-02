@@ -23,7 +23,6 @@ import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
-import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
@@ -193,8 +192,8 @@ object AndroidSessionController {
     private const val syncLatencySampleCount = 3
     private const val syncMaxAttempts = 2
     private const val syncVerificationSampleMax = 8
-    private const val firmwareCloneCommandSettleMs = 250L
-    private const val firmwareCloneResetMaxWaitMs = 8_000L
+    private const val firmwareCloneCommandSettleMs = 100L
+    private const val firmwareClonePreCloneStopMaxWaitMs = 1_500L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = linkedSetOf<() -> Unit>()
     private var applicationContext: Context? = null
@@ -466,6 +465,7 @@ object AndroidSessionController {
                 require(hasSignalSlingerReportLine(targetRefresh.linesReceived)) {
                     "The attached SignalSlinger did not respond. Check the configuration cable and try again."
                 }
+                clearFirmwareCloneBufferedFragments(transport)
                 val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
                 val possibleNewDeviceReasons =
                     possibleNewDeviceReasons(
@@ -476,17 +476,14 @@ object AndroidSessionController {
                     )
                 val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
                 val validated = editable.toValidatedDeviceSettings()
-                val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
                 val firmwareCloneResult =
                     FirmwareCloneSession.cloneFromTemplate(
                         transport = transport,
                         templateSettings = validated,
-                        targetSoftwareVersion = targetSnapshot.info.softwareVersion,
                         currentTimeCompact = ::nextFirmwareCloneClockTimeCompact,
-                        afterReset = { waitForFirmwareCloneReset(transport) },
+                        afterPreCloneStop = { waitForFirmwareClonePreCloneStop(transport) },
                         afterStartAttempt = ::waitForFirmwareCloneStartRetry,
                         afterCommandAcknowledged = { waitForFirmwareCloneCommandSettle() },
-                        afterCloneDiagnosticRecovered = { waitForFirmwareCloneDiagnosticRecovery(transport) },
                     )
                 cloneFailureTraceEntries = targetRefresh.traceEntries + firmwareCloneResult.traceEntries
                 if (firmwareCloneResult.succeeded) {
@@ -520,51 +517,7 @@ object AndroidSessionController {
                         possibleNewDeviceReasons = possibleNewDeviceReasons,
                     )
                 } else {
-                    require(firmwareCloneResult.legacyFallbackAllowed) {
-                        firmwareCloneResult.failureMessage ?: "Firmware clone failed after clone mode started."
-                    }
-                    val submitResult = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
-                    val verificationFailures = submitResult.verifications.filter { !it.verified }
-                    cloneFailureTraceEntries =
-                        cloneFailureTraceEntries + submitResult.submitTraceEntries + submitResult.readbackTraceEntries
-                    val refreshed = DeviceSessionController.refreshFromDevice(submitResult.state, transport, startEditing = true)
-                    cloneFailureTraceEntries = cloneFailureTraceEntries + refreshed.traceEntries
-                    require(hasSignalSlingerReportLine(refreshed.linesReceived)) {
-                        "The attached SignalSlinger did not respond during clone verification. Check the configuration cable and try again."
-                    }
-                    var finalState = refreshed.state
-                    var syncOperation: TimeSyncOperationResult? = null
-                    if (verificationFailures.isEmpty() && refreshed.state.snapshot?.capabilities?.supportsScheduling == true) {
-                        syncOperation =
-                            performAlignedTimeSync(
-                                transport = transport,
-                                state = refreshed.state,
-                                snapshot = requireNotNull(refreshed.state.snapshot),
-                            )
-                        finalState = syncOperation.finalAttempt.state
-                    }
-                    CloneSubmitResult(
-                        state = finalState,
-                        cloneProtocol = "legacy writes",
-                        writeCommandCount = writePlan.changes.size,
-                        writeResponseLineCount = submitResult.linesReceived.size,
-                        refreshCommandCount = refreshed.commandsSent.size,
-                        refreshResponseLineCount = refreshed.linesReceived.size,
-                        syncAttemptCount = syncOperation?.attempts?.size ?: 0,
-                        syncSucceeded = syncOperation?.succeeded ?: true,
-                        traceEntries =
-                            buildList {
-                                addAll(targetRefresh.traceEntries)
-                                addAll(firmwareCloneResult.traceEntries)
-                                addAll(submitResult.submitTraceEntries)
-                                addAll(submitResult.readbackTraceEntries)
-                                addAll(refreshed.traceEntries)
-                                syncOperation?.let { addAll(buildSyncTraceEntries(it)) }
-                            },
-                        clockPhaseErrorMillis = syncOperation?.finalAttempt?.phaseErrorMillis,
-                        clockReferenceTime = syncOperation?.finalAttempt?.verificationSamples?.lastOrNull()?.midpointAt,
-                        possibleNewDeviceReasons = possibleNewDeviceReasons,
-                    )
+                    error(firmwareCloneResult.failureMessage ?: "Firmware clone failed.")
                 }
             }
 
@@ -690,6 +643,12 @@ object AndroidSessionController {
         if (!hasCompleteCloneTimedEventSettings(template, cloneTemplateDaysRemaining)) {
             return IllegalStateException("Clone template is missing complete timed-event settings.")
         }
+        if (cloneTemplateEventWouldAlreadyBeRunning(template, cloneTemplateDaysRemaining)) {
+            return IllegalStateException(
+                "Clone cancelled because the source event would already be in progress. " +
+                    "Change the Start Time to a future time before cloning.",
+            )
+        }
         val target = preflight.target
             ?: return IllegalStateException("Connect the target SignalSlinger before using Clone.")
         if (!target.isAvailable(context)) {
@@ -763,6 +722,17 @@ object AndroidSessionController {
             return false
         }
         return true
+    }
+
+    private fun cloneTemplateEventWouldAlreadyBeRunning(settings: DeviceSettings, daysRemaining: Int?): Boolean {
+        val cloneClock = cloneClockCompactForSystemTime(LocalDateTime.now().withNano(0).plusSeconds(1))
+        return JvmTimeSupport.isCloneScheduleAlreadyRunning(
+            startTimeCompact = settings.startTimeCompact,
+            finishTimeCompact = settings.finishTimeCompact,
+            cloneClockCompact = cloneClock,
+            daysToRun = settings.daysToRun,
+            daysRemaining = daysRemaining,
+        )
     }
 
     private fun markSignalSlingerReadInFlight() {
@@ -3823,42 +3793,44 @@ object AndroidSessionController {
         if (delayNanos > 0L) {
             Thread.sleep(delayNanos / 1_000_000L, (delayNanos % 1_000_000L).toInt())
         }
-        return JvmTimeSupport.formatCompactTimestamp(target)
+        return cloneClockCompactForSystemTime(target)
     }
 
-    private fun waitForFirmwareCloneReset(transport: DeviceTransport): List<String> {
+    private fun cloneClockCompactForSystemTime(systemTime: LocalDateTime): String {
+        val offset = synchronized(this) { deviceTimeOffset }
+        return JvmTimeSupport.formatCompactTimestamp(systemTime.plus(offset ?: Duration.ZERO))
+    }
+
+    private fun waitForFirmwareClonePreCloneStop(transport: DeviceTransport): List<String> {
         val lines = mutableListOf<String>()
-        val deadline = System.currentTimeMillis() + firmwareCloneResetMaxWaitMs
-        var sawResetOutput = false
+        val deadline = System.currentTimeMillis() + firmwareClonePreCloneStopMaxWaitMs
+        var sawStopOutput = false
         while (System.currentTimeMillis() < deadline) {
             val responseLines = transport.readAvailableLines()
             if (responseLines.isNotEmpty()) {
                 lines += responseLines
-                sawResetOutput = true
-                Thread.sleep(250L)
-            } else if (sawResetOutput) {
+                sawStopOutput = true
+                Thread.sleep(firmwareCloneCommandSettleMs)
+            } else if (sawStopOutput) {
                 return lines
             } else {
-                Thread.sleep(250L)
+                Thread.sleep(firmwareCloneCommandSettleMs)
             }
         }
         return lines
     }
 
     private fun waitForFirmwareCloneStartRetry() {
-        Thread.sleep(250L)
+        Thread.sleep(firmwareCloneCommandSettleMs)
     }
 
     private fun waitForFirmwareCloneCommandSettle() {
         Thread.sleep(firmwareCloneCommandSettleMs)
     }
 
-    private fun waitForFirmwareCloneDiagnosticRecovery(transport: DeviceTransport): List<String> {
-        Thread.sleep(80L)
-        return if (transport is AndroidUsbTransport) {
-            transport.readAvailableLinesBriefly()
-        } else {
-            emptyList()
+    private fun clearFirmwareCloneBufferedFragments(transport: DeviceTransport) {
+        if (transport is AndroidUsbTransport) {
+            transport.clearBufferedInputFragments()
         }
     }
 

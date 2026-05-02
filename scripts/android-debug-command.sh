@@ -31,6 +31,7 @@ Usage:
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-days-to-run <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-time-sequence <device-time> <start-time> <finish-time> <days>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] clone
+  ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] clone-wait
 EOF
 }
 
@@ -243,6 +244,9 @@ set-days-to-run)
 	;;
 clone)
 	ACTION="com.SerialSlinger.openardf.DEBUG_CLONE"
+	;;
+clone-wait)
+	ACTION="com.SerialSlinger.openardf.DEBUG_CLONE_WAIT"
 	;;
 *)
 	echo "Unknown command: $COMMAND" >&2
