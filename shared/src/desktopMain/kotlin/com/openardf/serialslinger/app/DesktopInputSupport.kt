@@ -462,6 +462,22 @@ object DesktopInputSupport {
         return JvmTimeSupport.currentSystemTimeCompact(systemNow)
     }
 
+    fun isCloneScheduleAlreadyRunning(
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+        cloneClockCompact: String,
+        daysToRun: Int,
+        daysRemaining: Int? = null,
+    ): Boolean {
+        return JvmTimeSupport.isCloneScheduleAlreadyRunning(
+            startTimeCompact = startTimeCompact,
+            finishTimeCompact = finishTimeCompact,
+            cloneClockCompact = cloneClockCompact,
+            daysToRun = daysToRun,
+            daysRemaining = daysRemaining,
+        )
+    }
+
     fun formatTruncatedCompactTimestamp(timestamp: LocalDateTime): String {
         return JvmTimeSupport.formatTruncatedCompactTimestamp(timestamp)
     }

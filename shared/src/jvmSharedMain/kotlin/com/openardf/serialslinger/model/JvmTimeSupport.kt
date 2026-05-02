@@ -462,6 +462,37 @@ object JvmTimeSupport {
         return current.isBefore(overallFinish)
     }
 
+    fun isCloneScheduleAlreadyRunning(
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+        cloneClockCompact: String,
+        daysToRun: Int,
+        daysRemaining: Int? = null,
+    ): Boolean {
+        val start = startTimeCompact?.let(::parseCompactTimestamp) ?: return false
+        val finish = finishTimeCompact?.let(::parseCompactTimestamp) ?: return false
+        if (start == finish || !finish.isAfter(start)) {
+            return false
+        }
+
+        val cloneClock = normalizeCurrentTimeCompactForDisplay(cloneClockCompact)
+            ?.let(::parseCompactTimestamp)
+            ?: return false
+        val totalDays = daysToRun.coerceAtLeast(1)
+        val firstDayIndex = daysRemaining
+            ?.let { remaining -> (totalDays - remaining.coerceIn(0, totalDays)).coerceIn(0, totalDays - 1) }
+            ?: 0
+
+        for (dayIndex in firstDayIndex until totalDays) {
+            val dayStart = start.plusDays(dayIndex.toLong())
+            val dayFinish = finish.plusDays(dayIndex.toLong())
+            if (!cloneClock.isBefore(dayStart) && cloneClock.isBefore(dayFinish)) {
+                return true
+            }
+        }
+        return false
+    }
+
     private fun parseTextualDurationSummary(summary: String?): Duration? {
         val trimmed = summary?.trim().orEmpty()
         if (trimmed.isBlank()) {

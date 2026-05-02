@@ -2094,14 +2094,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun installTimedEventSettingsPickerOpenGuard(view: View) {
-        view.setOnTouchListener { touchedView, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN && cloneTemplateLocked) {
+        view.installTapOnlyClick { touchedView ->
+            if (cloneTemplateLocked) {
                 runTimedEventSettingsChangeWithCloneTemplateGuard {
                     touchedView.post { touchedView.performClick() }
                 }
-                true
             } else {
-                false
+                touchedView.performClick()
             }
         }
     }
@@ -5581,7 +5580,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             installTapOnlyClick()
         }
 
-    private fun View.installTapOnlyClick() {
+    private fun View.installTapOnlyClick(onTap: ((View) -> Unit)? = null) {
         val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
         var downX = 0f
         var downY = 0f
@@ -5607,7 +5606,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     touchedView.isPressed = false
                     if (shouldClick) {
                         touchedView.playSoundEffect(SoundEffectConstants.CLICK)
-                        touchedView.performClick()
+                        if (onTap == null) {
+                            touchedView.performClick()
+                        } else {
+                            onTap(touchedView)
+                        }
                     }
                     true
                 }
@@ -5814,9 +5817,17 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.runCloneTimedEventSettings(
             context = applicationContext,
             requestedDeviceName = requestedDeviceName,
-        ) {
+        ) { result ->
             if (!userDismissed && dialog.isShowing) {
                 dialog.dismiss()
+            }
+            result.exceptionOrNull()?.message?.let { message ->
+                val title = if (message.startsWith("Clone cancelled")) "Clone Cancelled" else "Clone Failed"
+                AlertDialog.Builder(this)
+                    .setTitle(title)
+                    .setMessage(message)
+                    .setPositiveButton("OK", null)
+                    .showLogged(title)
             }
         }
     }

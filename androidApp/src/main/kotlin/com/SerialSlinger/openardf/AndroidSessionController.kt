@@ -23,7 +23,6 @@ import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
-import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
@@ -31,6 +30,7 @@ import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSubmitResult
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
+import com.openardf.serialslinger.session.FirmwareCloneSession
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
@@ -135,6 +135,8 @@ private data class RawCommandResult(
 
 data class CloneSubmitResult(
     val state: DeviceSessionState,
+    val cloneProtocol: String,
+    val firmwareCloneChecksum: Long? = null,
     val writeCommandCount: Int,
     val writeResponseLineCount: Int,
     val refreshCommandCount: Int,
@@ -190,6 +192,8 @@ object AndroidSessionController {
     private const val syncLatencySampleCount = 3
     private const val syncMaxAttempts = 2
     private const val syncVerificationSampleMax = 8
+    private const val firmwareCloneCommandSettleMs = 100L
+    private const val firmwareClonePreCloneStopMaxWaitMs = 1_500L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = linkedSetOf<() -> Unit>()
     private var applicationContext: Context? = null
@@ -448,6 +452,7 @@ object AndroidSessionController {
 
         thread(name = "serialslinger-android-clone-submit") {
             var resolvedTarget: AndroidConnectionTarget? = null
+            var cloneFailureTraceEntries: List<SerialTraceEntry> = emptyList()
             val result = runWithResolvedTransport(
                 context = context,
                 requestedDeviceName = requestedDeviceName,
@@ -460,6 +465,7 @@ object AndroidSessionController {
                 require(hasSignalSlingerReportLine(targetRefresh.linesReceived)) {
                     "The attached SignalSlinger did not respond. Check the configuration cable and try again."
                 }
+                clearFirmwareCloneBufferedFragments(transport)
                 val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
                 val possibleNewDeviceReasons =
                     possibleNewDeviceReasons(
@@ -470,44 +476,49 @@ object AndroidSessionController {
                     )
                 val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
                 val validated = editable.toValidatedDeviceSettings()
-                val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
-                val submitResult = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
-                val verificationFailures = submitResult.verifications.filter { !it.verified }
-                val refreshed = DeviceSessionController.refreshFromDevice(submitResult.state, transport, startEditing = true)
-                require(hasSignalSlingerReportLine(refreshed.linesReceived)) {
-                    "The attached SignalSlinger did not respond during clone verification. Check the configuration cable and try again."
+                val firmwareCloneResult =
+                    FirmwareCloneSession.cloneFromTemplate(
+                        transport = transport,
+                        templateSettings = validated,
+                        currentTimeCompact = ::nextFirmwareCloneClockTimeCompact,
+                        afterPreCloneStop = { waitForFirmwareClonePreCloneStop(transport) },
+                        afterStartAttempt = ::waitForFirmwareCloneStartRetry,
+                        afterCommandAcknowledged = { waitForFirmwareCloneCommandSettle() },
+                    )
+                cloneFailureTraceEntries = targetRefresh.traceEntries + firmwareCloneResult.traceEntries
+                if (firmwareCloneResult.succeeded) {
+                    val refreshed = DeviceSessionController.refreshFromDevice(targetRefresh.state, transport, startEditing = true)
+                    cloneFailureTraceEntries = cloneFailureTraceEntries + refreshed.traceEntries
+                    require(hasSignalSlingerReportLine(refreshed.linesReceived)) {
+                        "The attached SignalSlinger did not respond during clone verification. Check the configuration cable and try again."
+                    }
+                    val clockSample = postLoadClockSample(transport, refreshed)
+                    val finalRefresh = clockSample?.first ?: refreshed
+                    val clockAnchor = clockSample?.second
+                    CloneSubmitResult(
+                        state = finalRefresh.state,
+                        cloneProtocol = "firmware MAS P",
+                        firmwareCloneChecksum = firmwareCloneResult.plan?.checksum,
+                        writeCommandCount = firmwareCloneResult.commandsSent.size,
+                        writeResponseLineCount = firmwareCloneResult.linesReceived.size,
+                        refreshCommandCount = refreshed.commandsSent.size + (clockSample?.first?.commandsSent?.size ?: 0),
+                        refreshResponseLineCount = refreshed.linesReceived.size + (clockSample?.first?.linesReceived?.size ?: 0),
+                        syncAttemptCount = 0,
+                        syncSucceeded = true,
+                        traceEntries =
+                            buildList {
+                                addAll(targetRefresh.traceEntries)
+                                addAll(firmwareCloneResult.traceEntries)
+                                addAll(refreshed.traceEntries)
+                                clockSample?.first?.let { addAll(it.traceEntries) }
+                            },
+                        clockPhaseErrorMillis = clockAnchor?.phaseErrorMillis,
+                        clockReferenceTime = clockAnchor?.referenceTime,
+                        possibleNewDeviceReasons = possibleNewDeviceReasons,
+                    )
+                } else {
+                    error(firmwareCloneResult.failureMessage ?: "Firmware clone failed.")
                 }
-                var finalState = refreshed.state
-                var syncOperation: TimeSyncOperationResult? = null
-                if (verificationFailures.isEmpty() && refreshed.state.snapshot?.capabilities?.supportsScheduling == true) {
-                    syncOperation =
-                        performAlignedTimeSync(
-                            transport = transport,
-                            state = refreshed.state,
-                            snapshot = requireNotNull(refreshed.state.snapshot),
-                        )
-                    finalState = syncOperation.finalAttempt.state
-                }
-                CloneSubmitResult(
-                    state = finalState,
-                    writeCommandCount = writePlan.changes.size,
-                    writeResponseLineCount = submitResult.linesReceived.size,
-                    refreshCommandCount = refreshed.commandsSent.size,
-                    refreshResponseLineCount = refreshed.linesReceived.size,
-                    syncAttemptCount = syncOperation?.attempts?.size ?: 0,
-                    syncSucceeded = syncOperation?.succeeded ?: true,
-                    traceEntries =
-                        buildList {
-                            addAll(targetRefresh.traceEntries)
-                            addAll(submitResult.submitTraceEntries)
-                            addAll(submitResult.readbackTraceEntries)
-                            addAll(refreshed.traceEntries)
-                            syncOperation?.let { addAll(buildSyncTraceEntries(it)) }
-                        },
-                    clockPhaseErrorMillis = syncOperation?.finalAttempt?.phaseErrorMillis,
-                    clockReferenceTime = syncOperation?.finalAttempt?.verificationSamples?.lastOrNull()?.midpointAt,
-                    possibleNewDeviceReasons = possibleNewDeviceReasons,
-                )
             }
 
             synchronized(this) {
@@ -518,8 +529,11 @@ object AndroidSessionController {
                         traceEntries = cloneResult.traceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    applySnapshotDrafts(cloneResult.state.snapshot, refreshClockDisplayAnchor = cloneResult.syncAttemptCount == 0)
-                    if (cloneResult.syncAttemptCount > 0) {
+                    applySnapshotDrafts(
+                        cloneResult.state.snapshot,
+                        refreshClockDisplayAnchor = cloneResult.clockPhaseErrorMillis == null,
+                    )
+                    if (cloneResult.clockPhaseErrorMillis != null || cloneResult.clockReferenceTime != null) {
                         applyClockDisplayAnchor(
                             currentTimeCompact = cloneResult.state.snapshot?.settings?.currentTimeCompact,
                             phaseErrorMillis = cloneResult.clockPhaseErrorMillis,
@@ -548,7 +562,14 @@ object AndroidSessionController {
                 }
             }
 
-            emitCommandLog("clone", source, success = result.isSuccess, summary = synchronized(this) { latestSubmitSummary })
+            emitCommandLog(
+                command = "clone",
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = result.getOrNull()?.traceEntries ?: cloneFailureTraceEntries,
+                warnOnMissingTimelyReplies = result.isFailure,
+            )
             notifyListeners()
             onComplete?.let { callback -> mainHandler.post { callback(result) } }
         }
@@ -621,6 +642,12 @@ object AndroidSessionController {
         }
         if (!hasCompleteCloneTimedEventSettings(template, cloneTemplateDaysRemaining)) {
             return IllegalStateException("Clone template is missing complete timed-event settings.")
+        }
+        if (cloneTemplateEventWouldAlreadyBeRunning(template, cloneTemplateDaysRemaining)) {
+            return IllegalStateException(
+                "Clone cancelled because the source event would already be in progress. " +
+                    "Change the Start Time to a future time before cloning.",
+            )
         }
         val target = preflight.target
             ?: return IllegalStateException("Connect the target SignalSlinger before using Clone.")
@@ -695,6 +722,17 @@ object AndroidSessionController {
             return false
         }
         return true
+    }
+
+    private fun cloneTemplateEventWouldAlreadyBeRunning(settings: DeviceSettings, daysRemaining: Int?): Boolean {
+        val cloneClock = cloneClockCompactForSystemTime(LocalDateTime.now().withNano(0).plusSeconds(1))
+        return JvmTimeSupport.isCloneScheduleAlreadyRunning(
+            startTimeCompact = settings.startTimeCompact,
+            finishTimeCompact = settings.finishTimeCompact,
+            cloneClockCompact = cloneClock,
+            daysToRun = settings.daysToRun,
+            daysRemaining = daysRemaining,
+        )
     }
 
     private fun markSignalSlingerReadInFlight() {
@@ -3749,6 +3787,53 @@ object AndroidSessionController {
         return traceEntries
     }
 
+    private fun nextFirmwareCloneClockTimeCompact(): String {
+        val target = LocalDateTime.now().withNano(0).plusSeconds(1)
+        val delayNanos = Duration.between(LocalDateTime.now(), target).toNanos().coerceAtLeast(0L)
+        if (delayNanos > 0L) {
+            Thread.sleep(delayNanos / 1_000_000L, (delayNanos % 1_000_000L).toInt())
+        }
+        return cloneClockCompactForSystemTime(target)
+    }
+
+    private fun cloneClockCompactForSystemTime(systemTime: LocalDateTime): String {
+        val offset = synchronized(this) { deviceTimeOffset }
+        return JvmTimeSupport.formatCompactTimestamp(systemTime.plus(offset ?: Duration.ZERO))
+    }
+
+    private fun waitForFirmwareClonePreCloneStop(transport: DeviceTransport): List<String> {
+        val lines = mutableListOf<String>()
+        val deadline = System.currentTimeMillis() + firmwareClonePreCloneStopMaxWaitMs
+        var sawStopOutput = false
+        while (System.currentTimeMillis() < deadline) {
+            val responseLines = transport.readAvailableLines()
+            if (responseLines.isNotEmpty()) {
+                lines += responseLines
+                sawStopOutput = true
+                Thread.sleep(firmwareCloneCommandSettleMs)
+            } else if (sawStopOutput) {
+                return lines
+            } else {
+                Thread.sleep(firmwareCloneCommandSettleMs)
+            }
+        }
+        return lines
+    }
+
+    private fun waitForFirmwareCloneStartRetry() {
+        Thread.sleep(firmwareCloneCommandSettleMs)
+    }
+
+    private fun waitForFirmwareCloneCommandSettle() {
+        Thread.sleep(firmwareCloneCommandSettleMs)
+    }
+
+    private fun clearFirmwareCloneBufferedFragments(transport: DeviceTransport) {
+        if (transport is AndroidUsbTransport) {
+            transport.clearBufferedInputFragments()
+        }
+    }
+
     private fun mergeLoadResults(
         base: DeviceLoadResult,
         additional: DeviceLoadResult?,
@@ -4068,6 +4153,10 @@ object AndroidSessionController {
     private fun renderCloneSubmitSummary(result: CloneSubmitResult): String {
         return buildString {
             appendLine("Clone submitted to attached SignalSlinger.")
+            appendLine("Clone protocol: ${result.cloneProtocol}")
+            result.firmwareCloneChecksum?.let { checksum ->
+                appendLine("Firmware clone checksum: $checksum")
+            }
             appendLine("Write commands sent: ${result.writeCommandCount}")
             appendLine("Write response lines: ${result.writeResponseLineCount}")
             appendLine("Reload commands sent: ${result.refreshCommandCount}")
@@ -4687,6 +4776,7 @@ object AndroidSessionController {
         success: Boolean,
         summary: String,
         traceEntries: List<SerialTraceEntry> = emptyList(),
+        warnOnMissingTimelyReplies: Boolean = true,
     ) {
         val normalizedSummary = summary.replace('\n', ' ').trim()
         Log.i(
@@ -4699,7 +4789,9 @@ object AndroidSessionController {
                 success -> snapshotUiState().sessionViewState?.traceEntries.orEmpty()
                 else -> emptyList()
             }
-        recordTimelyReplyWarningIfNeeded(persistedTraceEntries)
+        if (warnOnMissingTimelyReplies) {
+            recordTimelyReplyWarningIfNeeded(persistedTraceEntries)
+        }
         synchronized(this) {
             sessionLog
         }?.appendCommandSection(
@@ -4737,7 +4829,7 @@ object AndroidSessionController {
 
         fun closeActiveCommand() {
             val command = activeCommand
-            if (command != null && !activeCommandHasReply) {
+            if (command != null && !activeCommandHasReply && expectsTimelyReply(command)) {
                 missedCommands += command
             }
         }
@@ -4758,6 +4850,11 @@ object AndroidSessionController {
         }
         closeActiveCommand()
         return missedCommands.toList()
+    }
+
+    private fun expectsTimelyReply(command: String): Boolean {
+        return !command.equals("RST", ignoreCase = true) &&
+            !command.equals("MAS P", ignoreCase = true)
     }
 
     private fun notifyListeners() {

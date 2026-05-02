@@ -94,6 +94,55 @@ class JvmTimeSupportTest {
     }
 
     @Test
+    fun `clone schedule is not already running when start and finish are equal`() {
+        assertFalse(
+            JvmTimeSupport.isCloneScheduleAlreadyRunning(
+                startTimeCompact = "260430120000",
+                finishTimeCompact = "260430120000",
+                cloneClockCompact = "260430130000",
+                daysToRun = 1,
+            ),
+        )
+    }
+
+    @Test
+    fun `clone schedule is already running when clone clock is inside event window`() {
+        assertTrue(
+            JvmTimeSupport.isCloneScheduleAlreadyRunning(
+                startTimeCompact = "260430120000",
+                finishTimeCompact = "260430140000",
+                cloneClockCompact = "260430130000",
+                daysToRun = 1,
+            ),
+        )
+    }
+
+    @Test
+    fun `clone schedule is already running when clone clock equals event start`() {
+        assertTrue(
+            JvmTimeSupport.isCloneScheduleAlreadyRunning(
+                startTimeCompact = "260430120000",
+                finishTimeCompact = "260430140000",
+                cloneClockCompact = "260430120000",
+                daysToRun = 1,
+            ),
+        )
+    }
+
+    @Test
+    fun `clone schedule uses days remaining when checking multi day running window`() {
+        assertTrue(
+            JvmTimeSupport.isCloneScheduleAlreadyRunning(
+                startTimeCompact = "260428120000",
+                finishTimeCompact = "260428140000",
+                cloneClockCompact = "260430130000",
+                daysToRun = 5,
+                daysRemaining = 3,
+            ),
+        )
+    }
+
+    @Test
     fun `normalize start time for change snaps past selection to minimum boundary`() {
         val normalized =
             JvmTimeSupport.normalizeStartTimeForChange(

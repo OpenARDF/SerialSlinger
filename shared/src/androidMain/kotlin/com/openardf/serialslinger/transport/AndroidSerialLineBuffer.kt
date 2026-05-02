@@ -33,6 +33,8 @@ internal class AndroidSerialLineBuffer {
         return lines
     }
 
+    fun pendingFragment(): String = pendingText.toString()
+
     fun clear() {
         pendingText.clear()
         completeLines.clear()
