@@ -4501,14 +4501,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             setInformationalFieldText(
                 thermalShutdownThresholdField,
-                if (extendedTemperatureReadbackSupported) {
-                    DesktopInputSupport.formatTemperatureOrWaiting(
-                        snapshot.status.thermalShutdownThresholdC,
-                        displayPreferences.temperatureDisplayUnit,
-                    )
-                } else {
-                    "Not supported"
-                },
+                formatThermalShutdownThreshold(snapshot),
                 unreadPlaceholder = false,
             )
             thermalShutdownThresholdRowLabel.foreground = defaultRowLabelForeground
@@ -4522,6 +4515,73 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             updateWritableControlAvailability(backgroundWorkInProgress)
         } finally {
             updatingForm = false
+        }
+    }
+
+    private fun refreshLiveDeviceDataFields(snapshot: DeviceSnapshot?) {
+        if (snapshot == null) {
+            return
+        }
+        val temperatureReadbackSupported = snapshot.capabilities.supportsTemperatureReadback
+        val extendedTemperatureReadbackSupported = snapshot.capabilities.supportsExtendedTemperatureReadback
+        updatingForm = true
+        try {
+            setInformationalFieldText(
+                internalBatteryField,
+                DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.internalBatteryVolts),
+                unreadPlaceholder = false,
+            )
+            setInformationalFieldText(
+                externalBatteryField,
+                DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.externalBatteryVolts),
+                unreadPlaceholder = false,
+            )
+            updateTemperatureRow(
+                rowLabel = maximumEverTemperatureRowLabel,
+                field = maximumEverTemperatureField,
+                temperatureC = snapshot.status.maximumEverTemperatureC,
+                supported = extendedTemperatureReadbackSupported,
+            )
+            updateTemperatureRow(
+                rowLabel = maximumTemperatureRowLabel,
+                field = maximumTemperatureField,
+                temperatureC = snapshot.status.maximumTemperatureC,
+                supported = temperatureReadbackSupported,
+            )
+            updateTemperatureRow(
+                rowLabel = currentTemperatureRowLabel,
+                field = currentTemperatureField,
+                temperatureC = snapshot.status.temperatureC,
+                supported = temperatureReadbackSupported,
+            )
+            updateTemperatureRow(
+                rowLabel = minimumTemperatureRowLabel,
+                field = minimumTemperatureField,
+                temperatureC = snapshot.status.minimumTemperatureC,
+                supported = temperatureReadbackSupported,
+            )
+            setInformationalFieldText(
+                thermalShutdownThresholdField,
+                formatThermalShutdownThreshold(snapshot),
+                unreadPlaceholder = false,
+            )
+            thermalShutdownThresholdRowLabel.foreground = defaultRowLabelForeground
+            thermalShutdownThresholdField.foreground = defaultInformationalFieldForeground
+            updateThermalHeadlineWarning(snapshot.status.temperatureC)
+            updateWritableControlAvailability(backgroundWorkInProgress)
+        } finally {
+            updatingForm = false
+        }
+    }
+
+    private fun formatThermalShutdownThreshold(snapshot: DeviceSnapshot): String {
+        return if (snapshot.capabilities.supportsExtendedTemperatureReadback) {
+            DesktopInputSupport.formatTemperatureOrWaiting(
+                snapshot.status.thermalShutdownThresholdC,
+                displayPreferences.temperatureDisplayUnit,
+            )
+        } else {
+            "Not supported"
         }
     }
 
@@ -5211,16 +5271,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             writableEnabled &&
                 displayPreferences.advancedModeEnabled &&
                 loadedSnapshot?.capabilities?.supportsExtendedTemperatureReadback == true
-        thermalShutdownThresholdField.isEnabled = thermalThresholdEditable
-        thermalShutdownThresholdRowLabel.isEnabled = thermalThresholdEditable
-        val thermalCursor =
-            if (thermalThresholdEditable) {
-                java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-            } else {
-                java.awt.Cursor.getDefaultCursor()
-            }
-        thermalShutdownThresholdField.cursor = thermalCursor
-        thermalShutdownThresholdRowLabel.cursor = thermalCursor
+        updateThermalShutdownThresholdEditability(thermalThresholdEditable)
 
         daysField.isEnabled = schedulingFieldsEditable
         frequency1Field.isEnabled = writableEnabled
@@ -5248,6 +5299,25 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK &&
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED
+    }
+
+    private fun updateThermalShutdownThresholdEditability(editable: Boolean) {
+        thermalShutdownThresholdField.isEnabled = editable
+        thermalShutdownThresholdRowLabel.isEnabled = editable
+        thermalShutdownThresholdField.border = if (editable) editableTextFieldBorder else informationalTextFieldBorder
+        thermalShutdownThresholdField.background = if (editable) editableTextFieldBackground else readOnlyTextFieldBackground
+        thermalShutdownThresholdField.isOpaque = editable
+        val thermalCursor =
+            if (editable) {
+                java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+            } else {
+                java.awt.Cursor.getDefaultCursor()
+            }
+        thermalShutdownThresholdField.cursor = thermalCursor
+        thermalShutdownThresholdRowLabel.cursor = thermalCursor
+        val tooltip = if (editable) "Click to set thermal shutdown threshold." else null
+        thermalShutdownThresholdField.toolTipText = tooltip
+        thermalShutdownThresholdRowLabel.toolTipText = tooltip
     }
 
     private fun updateLastsRowEditability(enabled: Boolean) {
@@ -6020,7 +6090,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     sessionLog.appendTemperatureSample(sampleTime, temperatureC, externalBatteryVolts, internalBatteryVolts)
                 }
                 SwingUtilities.invokeLater {
-                    applySnapshotToForm(nextState.snapshot)
+                    refreshLiveDeviceDataFields(nextState.snapshot)
                 }
             } catch (exception: Exception) {
                 SwingUtilities.invokeLater {

@@ -28,3 +28,8 @@
 - evaluate an advanced thermal shutdown threshold control; keep the cutoff
   read-only until firmware command semantics, safety limits, validation, and
   tester guidance are defined
+
+## Release Workflow
+
+- before the next jDeploy deployment, address the GitHub Actions Node.js 20
+  deprecation warning from the nested jDeploy release action path
