@@ -1,20 +1,27 @@
 package com.openardf.serialslinger.cli
 
+import com.openardf.serialslinger.app.DesktopInputSupport
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.EditableDeviceSettings
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
-import com.openardf.serialslinger.model.SettingsField
 import com.openardf.serialslinger.session.DeviceSubmitResult
 import com.openardf.serialslinger.session.DeviceSessionController
+import com.openardf.serialslinger.session.FirmwareCloneSession
 import com.openardf.serialslinger.transport.DesktopSerialTransport
+import java.time.Duration
+import java.time.LocalDateTime
 
 sealed interface DesktopSmokeCommand {
     data object ListPorts : DesktopSmokeCommand
 
     data class Load(
+        val port: String,
+    ) : DesktopSmokeCommand
+
+    data class Clone(
         val port: String,
     ) : DesktopSmokeCommand
 
@@ -40,6 +47,10 @@ object DesktopSmokeCliParser {
             "load" -> {
                 if (args.size < 2) return null
                 DesktopSmokeCommand.Load(port = args[1])
+            }
+            "clone" -> {
+                if (args.size < 2) return null
+                DesktopSmokeCommand.Clone(port = args[1])
             }
             "submit" -> {
                 if (args.size < 3) return null
@@ -74,6 +85,7 @@ fun main(args: Array<String>) {
     when (val command = DesktopSmokeCliParser.parse(args)) {
         is DesktopSmokeCommand.ListPorts -> runListPorts()
         is DesktopSmokeCommand.Load -> runLoad(command.port)
+        is DesktopSmokeCommand.Clone -> runClone(command.port)
         is DesktopSmokeCommand.Submit -> runSubmit(command.port, command.assignments)
         is DesktopSmokeCommand.Raw -> runRaw(command.port, command.commands)
         null -> printUsage()
@@ -106,6 +118,47 @@ private fun runLoad(port: String) {
         println(formatSettings(result.state.snapshot?.settings ?: DeviceSettings.empty()))
     } finally {
         DeviceSessionController.disconnect(result.state, transport)
+    }
+}
+
+private fun runClone(port: String) {
+    val transport = DesktopSerialTransport(port)
+    val loadResult = DeviceSessionController.connectAndLoad(transport)
+    try {
+        val snapshot = requireNotNull(loadResult.state.snapshot) {
+            "No device snapshot was loaded."
+        }
+        val templateSettings = snapshot.settings
+        val result = FirmwareCloneSession.cloneFromTemplate(
+            transport = transport,
+            templateSettings = templateSettings,
+            currentTimeCompact = ::nextFirmwareCloneClockTimeCompact,
+            afterPreCloneStop = { waitForFirmwareClonePreCloneStop(transport) },
+            afterStartAttempt = ::waitForFirmwareCloneStartRetry,
+            afterCommandAcknowledged = { waitForFirmwareCloneCommandSettle() },
+        )
+        val refreshResult = DeviceSessionController.refreshFromDevice(loadResult.state, transport, startEditing = true)
+        println("Clone result:")
+        println("  succeeded=${result.succeeded}")
+        println("  enteredCloneMode=${result.enteredCloneMode}")
+        println("  acknowledged=${result.acknowledged}")
+        println("  checksum=${result.plan?.checksum ?: "<none>"}")
+        println("  failureMessage=${result.failureMessage ?: "<none>"}")
+        println()
+        println("Firmware clone trace:")
+        result.traceEntries.forEach { trace ->
+            println("  ${trace.direction.label} ${trace.payload}")
+        }
+        println()
+        println("Post-clone refresh:")
+        println("  commands=${refreshResult.commandsSent.size}")
+        println("  lines=${refreshResult.linesReceived.size}")
+        println(formatSettings(refreshResult.state.snapshot?.settings ?: DeviceSettings.empty()))
+        if (!result.succeeded) {
+            error(result.failureMessage ?: "Firmware clone failed.")
+        }
+    } finally {
+        DeviceSessionController.disconnect(loadResult.state, transport)
     }
 }
 
@@ -156,6 +209,42 @@ private fun runRaw(port: String, commands: List<String>) {
     } finally {
         transport.disconnect()
     }
+}
+
+private fun nextFirmwareCloneClockTimeCompact(): String {
+    val target = LocalDateTime.now().withNano(0).plusSeconds(1)
+    val delayNanos = Duration.between(LocalDateTime.now(), target).toNanos().coerceAtLeast(0L)
+    if (delayNanos > 0L) {
+        Thread.sleep(delayNanos / 1_000_000L, (delayNanos % 1_000_000L).toInt())
+    }
+    return DesktopInputSupport.currentSystemTimeCompact(target)
+}
+
+private fun waitForFirmwareClonePreCloneStop(transport: DesktopSerialTransport): List<String> {
+    val lines = mutableListOf<String>()
+    val deadline = System.currentTimeMillis() + FirmwareClonePreCloneStopMaxWaitMs
+    var sawStopOutput = false
+    while (System.currentTimeMillis() < deadline) {
+        val responseLines = transport.readAvailableLines()
+        if (responseLines.isNotEmpty()) {
+            lines += responseLines
+            sawStopOutput = true
+            Thread.sleep(FirmwareCloneCommandSettleMs)
+        } else if (sawStopOutput) {
+            return lines
+        } else {
+            Thread.sleep(FirmwareCloneCommandSettleMs)
+        }
+    }
+    return lines
+}
+
+private fun waitForFirmwareCloneStartRetry() {
+    Thread.sleep(FirmwareCloneCommandSettleMs)
+}
+
+private fun waitForFirmwareCloneCommandSettle() {
+    Thread.sleep(FirmwareCloneCommandSettleMs)
 }
 
 internal fun applyAssignments(
@@ -352,9 +441,13 @@ private fun printUsage() {
     println("Usage:")
     println("  list")
     println("  load <portDescriptor>")
+    println("  clone <portDescriptor>")
     println("  submit <portDescriptor> key=value [key=value ...]")
     println("  raw <portDescriptor> \"COMMAND\" [\"COMMAND\" ...]")
     println()
     println("Example:")
     println("  submit /dev/tty.usbserial stationId=W1FOX daysToRun=3 beaconFrequencyHz=3580000")
 }
+
+private const val FirmwareCloneCommandSettleMs = 100L
+private const val FirmwareClonePreCloneStopMaxWaitMs = 1_500L

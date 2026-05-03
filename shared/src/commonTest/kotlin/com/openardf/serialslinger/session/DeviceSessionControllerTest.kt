@@ -81,6 +81,46 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun connectAndLoadRunsInterventionBeforeNextLoadCommand() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "VER" to listOf("* SW Ver: 1.2.3 HW Build: 3.5"),
+                "EVT" to listOf("* Event:Classic", "* In progress"),
+                "GO 0" to listOf("* Not scheduled"),
+            ),
+        )
+
+        val result = DeviceSessionController.connectAndLoad(
+            transport = transport,
+            afterCommand = { command, state, activeTransport ->
+                if (command != "EVT" || state.snapshot?.status?.eventStartsInSummary != "In Progress") {
+                    return@connectAndLoad null
+                }
+                activeTransport.sendCommands(listOf("GO 0"))
+                val responseLines = activeTransport.readAvailableLines()
+                DeviceLoadInterventionResult(
+                    state = DeviceSessionWorkflow.ingestReportLines(state, responseLines),
+                    commandsSent = listOf("GO 0"),
+                    linesReceived = responseLines,
+                    traceEntries = listOf(
+                        SerialTraceEntry(1L, SerialTraceDirection.TX, "GO 0"),
+                        SerialTraceEntry(2L, SerialTraceDirection.RX, "* Not scheduled"),
+                    ),
+                )
+            },
+        )
+
+        val evtIndex = transport.sentCommands.indexOf("EVT")
+        val goStopIndex = transport.sentCommands.indexOf("GO 0")
+        val foxIndex = transport.sentCommands.indexOf("FOX")
+        assertTrue(evtIndex >= 0)
+        assertTrue(goStopIndex > evtIndex)
+        assertTrue(foxIndex > goStopIndex)
+        assertEquals(transport.sentCommands, result.commandsSent)
+        assertEquals(false, result.state.snapshot?.status?.eventEnabled)
+    }
+
+    @Test
     fun submitEditsSendsMinimalCommandsAndRefreshesState() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(
@@ -378,6 +418,34 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun submitEditsUsesClassicPatternSpeedWriteAndReadbackCommands() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "SPD P 8" to listOf("* PAT SPD:8 WPM"),
+                "SPD P" to listOf("* PAT SPD:8 WPM"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                eventType = EventType.CLASSIC,
+                patternCodeSpeedWpm = 12,
+            ),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            patternCodeSpeedWpm = SettingsField("patternCodeSpeedWpm", "Pattern Speed", 12, 8),
+        )
+
+        val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
+
+        assertEquals(listOf("SPD P 8"), result.commandsSent)
+        assertEquals(listOf("SPD P"), result.readbackCommandsSent)
+        assertEquals(listOf("SPD P 8", "SPD P"), transport.sentCommands)
+        assertTrue(result.verifications.all { it.observedInReadback && it.verified })
+    }
+
+    @Test
     fun submitEditsUsesFullReloadVerificationForFinishTime() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(
@@ -487,6 +555,92 @@ class DeviceSessionControllerTest {
                 verified = true,
             ),
             result.verifications.single(),
+        )
+    }
+
+    @Test
+    fun submitEditsCanSkipFullReloadVerificationForCurrentTime() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "CLK T 260410142233" to listOf("* Time:Fri 10-apr-2026 14:22:33"),
+                "CLK" to listOf(
+                    "* Time:Fri 10-apr-2026 14:22:34",
+                    "* Start:Fri 10-apr-2026 15:00:00",
+                    "* Finish:Fri 10-apr-2026 17:15:00",
+                    "* Days to run: 3",
+                ),
+                "EVT" to listOf(
+                    "* Event:Classic",
+                    "* Not scheduled",
+                ),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                currentTimeCompact = "260410142230",
+                startTimeCompact = "260410150000",
+                finishTimeCompact = "260410171500",
+                daysToRun = 3,
+            ),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            currentTimeCompact = SettingsField("currentTimeCompact", "Current Time", "260410142230", "260410142233"),
+        )
+
+        val result = DeviceSessionController.submitEdits(
+            connected.state,
+            editable,
+            transport,
+            allowFullReloadVerification = false,
+        )
+
+        assertEquals(listOf("CLK T 260410142233"), result.commandsSent)
+        assertEquals(listOf("CLK", "EVT"), result.readbackCommandsSent)
+        assertFalse("VER" in transport.sentCommands)
+        assertEquals("260410142234", result.state.snapshot?.settings?.currentTimeCompact)
+    }
+
+    @Test
+    fun submitEditsReportsUnobservedVerificationWhenDeviceDoesNotAnswer() {
+        val transport = FakeDeviceTransport()
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                startTimeCompact = "260427073000",
+                finishTimeCompact = "260427080000",
+                daysToRun = 1,
+            ),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            startTimeCompact = SettingsField("startTimeCompact", "Start Time", "260427073000", "260429180000"),
+            finishTimeCompact = SettingsField("finishTimeCompact", "Finish Time", "260427080000", "260429183000"),
+        )
+
+        val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
+
+        assertEquals(listOf("CLK S 260429180000", "CLK F 260429183000"), result.commandsSent)
+        assertEquals(0, result.linesReceived.size)
+        assertEquals(0, result.readbackLinesReceived.size)
+        assertEquals(
+            listOf(
+                SettingVerification(
+                    fieldKey = SettingKey.START_TIME,
+                    expectedValue = "260429180000",
+                    actualValue = null,
+                    observedInReadback = false,
+                    verified = false,
+                ),
+                SettingVerification(
+                    fieldKey = SettingKey.FINISH_TIME,
+                    expectedValue = "260429183000",
+                    actualValue = null,
+                    observedInReadback = false,
+                    verified = false,
+                ),
+            ),
+            result.verifications,
         )
     }
 

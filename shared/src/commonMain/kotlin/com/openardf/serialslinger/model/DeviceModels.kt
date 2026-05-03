@@ -61,6 +61,7 @@ enum class ExternalBatteryControlMode(
 data class DeviceCapabilities(
     val supportsTemperatureReadback: Boolean = false,
     val supportsExtendedTemperatureReadback: Boolean = false,
+    val supportsTemperatureLogging: Boolean = false,
     val supportsExternalBatteryControl: Boolean = false,
     val supportsPatternEditing: Boolean = false,
     val supportsScheduling: Boolean = false,
@@ -137,12 +138,16 @@ data class DeviceSettings(
     }
 }
 
+fun DeviceSettings.hasWallClockTimeSet(): Boolean = currentTimeCompact != null
+
 data class DeviceSnapshot(
     val info: DeviceInfo = DeviceInfo(),
     val status: DeviceStatus = DeviceStatus(),
     val settings: DeviceSettings = DeviceSettings.empty(),
     val capabilities: DeviceCapabilities = DeviceCapabilities(),
 )
+
+fun DeviceSnapshot.hasWallClockTimeSet(): Boolean = settings.hasWallClockTimeSet()
 
 enum class ValidationState {
     VALID,

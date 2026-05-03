@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -22,12 +23,15 @@ import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
-import com.openardf.serialslinger.model.WritePlanner
+import com.openardf.serialslinger.model.ThermalShutdownSupport
+import com.openardf.serialslinger.model.hasWallClockTimeSet
+import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSubmitResult
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
+import com.openardf.serialslinger.session.FirmwareCloneSession
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
@@ -37,6 +41,8 @@ import com.openardf.serialslinger.transport.DeviceTransport
 import java.io.File
 import java.time.Duration
 import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.concurrent.CountDownLatch
 import kotlin.concurrent.thread
 import kotlin.math.abs
 
@@ -53,6 +59,8 @@ data class AndroidUiState(
     val latestLoadedTarget: AndroidConnectionTarget?,
     val latestLoadedTargetLabel: String?,
     val latestLoadedDeviceName: String?,
+    val cloneTemplateSettings: DeviceSettings?,
+    val cloneTemplateDaysRemaining: Int?,
     val draftStationId: String?,
     val draftEventType: String?,
     val draftFoxRole: String?,
@@ -73,6 +81,7 @@ data class AndroidUiState(
     val clockPhaseErrorMillis: Long?,
     val hasClockPhaseWarning: Boolean,
     val canClone: Boolean,
+    val temperatureLoggingEnabled: Boolean,
 )
 
 private data class ScheduleImpactSummary(
@@ -86,6 +95,7 @@ private data class ClockReadSample(
     val receivedAt: LocalDateTime,
     val responseLines: List<String>,
     val reportedTimeCompact: String?,
+    val reportedTimeObserved: Boolean,
     val command: String,
 ) {
     val roundTripMillis: Long
@@ -128,6 +138,8 @@ private data class RawCommandResult(
 
 data class CloneSubmitResult(
     val state: DeviceSessionState,
+    val cloneProtocol: String,
+    val firmwareCloneChecksum: Long? = null,
     val writeCommandCount: Int,
     val writeResponseLineCount: Int,
     val refreshCommandCount: Int,
@@ -135,12 +147,39 @@ data class CloneSubmitResult(
     val syncAttemptCount: Int,
     val syncSucceeded: Boolean,
     val traceEntries: List<SerialTraceEntry>,
+    val clockPhaseErrorMillis: Long? = null,
+    val clockReferenceTime: LocalDateTime? = null,
+    val possibleNewDeviceReasons: List<String> = emptyList(),
+)
+
+data class EventPauseNotice(
+    val id: Long,
+    val message: String,
+)
+
+private data class ClonePreflight(
+    val sessionState: DeviceSessionState?,
+    val templateSettings: DeviceSettings?,
+    val target: AndroidConnectionTarget?,
+)
+
+private data class ProbeStart(
+    val started: Boolean,
+    val target: AndroidConnectionTarget?,
+    val previousSnapshot: DeviceSnapshot?,
+    val previousPhaseErrorMillis: Long?,
 )
 
 private data class ClockDisplayAnchor(
     val currentTimeCompact: String?,
     val referenceTime: LocalDateTime?,
     val phaseErrorMillis: Long?,
+)
+
+private data class EventPauseRequest(
+    val id: Long,
+    val message: String,
+    val latch: CountDownLatch,
 )
 
 private data class ResolvedTransport(
@@ -152,9 +191,12 @@ private data class ResolvedTransport(
 object AndroidSessionController {
     const val CLOCK_PHASE_WARNING_THRESHOLD_MILLIS = 500L
     private const val logTag = "SerialSlingerDebug"
+    private const val POSSIBLE_NEW_DEVICE_PHASE_SHIFT_THRESHOLD_MILLIS = 1_000L
     private const val syncLatencySampleCount = 3
     private const val syncMaxAttempts = 2
     private const val syncVerificationSampleMax = 8
+    private const val firmwareCloneCommandSettleMs = 100L
+    private const val firmwareClonePreCloneStopMaxWaitMs = 1_500L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = linkedSetOf<() -> Unit>()
     private var applicationContext: Context? = null
@@ -187,6 +229,13 @@ object AndroidSessionController {
     private var lastClockPhaseErrorMillis: Long? = null
     private var cachedManualWriteDelayMillis: Long? = null
     private var cloneTemplateSettings: DeviceSettings? = null
+    private var cloneTemplateDaysRemaining: Int? = null
+    private var cloneTemplateTimedEventEditsLocked: Boolean = false
+    private var pendingTimelyReplyWarning: String? = null
+    private var pendingEventPauseRequest: EventPauseRequest? = null
+    private var nextEventPauseRequestId: Long = 1L
+    private var temperatureLoggingEnabled: Boolean = false
+    private var temperatureLoggingThread: Thread? = null
 
     fun initialize(context: Context) {
         synchronized(this) {
@@ -194,7 +243,12 @@ object AndroidSessionController {
                 applicationContext = context.applicationContext
             }
             if (sessionLog == null) {
-                sessionLog = AndroidSessionLog(context.applicationContext.filesDir.resolve("logs"))
+                sessionLog =
+                    AndroidSessionLog(
+                        rootDirectory = context.applicationContext.filesDir.resolve("logs"),
+                        appVersion = BuildConfig.VERSION_NAME,
+                        platformLabel = "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})",
+                    )
             }
         }
     }
@@ -221,6 +275,8 @@ object AndroidSessionController {
                 latestLoadedTarget = latestLoadedTarget,
                 latestLoadedTargetLabel = latestLoadedTarget?.label,
                 latestLoadedDeviceName = latestLoadedDeviceName,
+                cloneTemplateSettings = cloneTemplateSettings,
+                cloneTemplateDaysRemaining = cloneTemplateDaysRemaining,
                 draftStationId = draftStationId,
                 draftEventType = draftEventType,
                 draftFoxRole = draftFoxRole,
@@ -241,6 +297,7 @@ object AndroidSessionController {
                 clockPhaseErrorMillis = currentClockSkewMillisLocked(),
                 hasClockPhaseWarning = hasClockPhaseWarningLocked(),
                 canClone = canCloneLocked(),
+                temperatureLoggingEnabled = temperatureLoggingEnabled,
             )
         }
     }
@@ -251,6 +308,49 @@ object AndroidSessionController {
             statusIsError = isError
         }
         notifyListeners()
+    }
+
+    fun lockCloneTemplateTimedEventEdits() {
+        synchronized(this) {
+            cloneTemplateTimedEventEditsLocked = true
+        }
+    }
+
+    fun allowCloneTemplateTimedEventEdits() {
+        synchronized(this) {
+            cloneTemplateTimedEventEditsLocked = false
+        }
+    }
+
+    fun consumeTimelyReplyWarning(): String? {
+        synchronized(this) {
+            val warning = pendingTimelyReplyWarning
+            pendingTimelyReplyWarning = null
+            return warning
+        }
+    }
+
+    fun pendingEventPauseNotice(): EventPauseNotice? {
+        synchronized(this) {
+            val request = pendingEventPauseRequest ?: return null
+            return EventPauseNotice(
+                id = request.id,
+                message = request.message,
+            )
+        }
+    }
+
+    fun confirmEventPauseNotice(id: Long) {
+        val request =
+            synchronized(this) {
+                pendingEventPauseRequest
+                    ?.takeIf { it.id == id }
+                    ?.also { pendingEventPauseRequest = null }
+            }
+        request?.latch?.countDown()
+        if (request != null) {
+            notifyListeners()
+        }
     }
 
     fun displayedDeviceTimeText(systemNow: LocalDateTime = LocalDateTime.now()): String {
@@ -322,24 +422,35 @@ object AndroidSessionController {
         source: String = "ui",
         onComplete: ((Result<CloneSubmitResult>) -> Unit)? = null,
     ) {
-        val sessionState = synchronized(this) { latestSessionViewState?.state }
-        val templateSettings = synchronized(this) { cloneTemplateSettings }
-        if (sessionState == null || sessionState.snapshot == null || templateSettings == null) {
-            val error = IllegalStateException("Load a SignalSlinger snapshot before using Clone.")
+        val clonePreflight =
             synchronized(this) {
-                latestSubmitSummary = "Clone failed.\n${error.message}"
-                statusText = "Clone failed."
+                ClonePreflight(
+                    sessionState = latestSessionViewState?.state,
+                    templateSettings = cloneTemplateSettings,
+                    target = resolveRequestedTargetLocked(
+                        requestedTarget = requestedTarget,
+                        requestedDeviceName = requestedDeviceName,
+                    ),
+                )
+            }
+        val preflightError = clonePreflightError(context, clonePreflight)
+        if (preflightError != null) {
+            synchronized(this) {
+                latestSubmitSummary = "Clone failed.\n${preflightError.message}"
+                statusText = "Clone unavailable."
                 statusIsError = true
             }
-            emitCommandLog("clone", source, success = false, summary = error.message.orEmpty())
+            emitCommandLog("clone", source, success = false, summary = preflightError.message.orEmpty())
             notifyListeners()
-            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(preflightError)) } }
             return
         }
+        val sessionState = requireNotNull(clonePreflight.sessionState)
+        val templateSettings = requireNotNull(clonePreflight.templateSettings)
 
         synchronized(this) {
-            latestSubmitSummary = "Submitting Clone..."
-            statusText = "Submitting Clone..."
+            latestSubmitSummary = "Submitting Clone to attached SignalSlinger..."
+            statusText = "Submitting Clone to attached SignalSlinger..."
             statusIsError = false
             markScheduleDerivedDataPendingLocked()
         }
@@ -347,6 +458,7 @@ object AndroidSessionController {
 
         thread(name = "serialslinger-android-clone-submit") {
             var resolvedTarget: AndroidConnectionTarget? = null
+            var cloneFailureTraceEntries: List<SerialTraceEntry> = emptyList()
             val result = runWithResolvedTransport(
                 context = context,
                 requestedDeviceName = requestedDeviceName,
@@ -356,41 +468,63 @@ object AndroidSessionController {
             ) { target, transport ->
                 resolvedTarget = target
                 val targetRefresh = DeviceSessionController.refreshFromDevice(sessionState, transport, startEditing = true)
+                require(hasSignalSlingerReportLine(targetRefresh.linesReceived)) {
+                    "The attached SignalSlinger did not respond. Check the configuration cable and try again."
+                }
+                clearFirmwareCloneBufferedFragments(transport)
                 val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
+                val possibleNewDeviceReasons =
+                    possibleNewDeviceReasons(
+                        previousSnapshot = sessionState.snapshot,
+                        loadedSnapshot = targetSnapshot,
+                        previousPhaseErrorMillis = null,
+                        loadedPhaseErrorMillis = null,
+                    )
                 val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
                 val validated = editable.toValidatedDeviceSettings()
-                val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
-                val submitResult = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
-                val verificationFailures = submitResult.verifications.filter { !it.verified }
-                val refreshed = DeviceSessionController.refreshFromDevice(submitResult.state, transport, startEditing = true)
-                var finalState = refreshed.state
-                var syncOperation: TimeSyncOperationResult? = null
-                if (verificationFailures.isEmpty() && refreshed.state.snapshot?.capabilities?.supportsScheduling == true) {
-                    syncOperation =
-                        performAlignedTimeSync(
-                            transport = transport,
-                            state = refreshed.state,
-                            snapshot = requireNotNull(refreshed.state.snapshot),
-                        )
-                    finalState = syncOperation.finalAttempt.state
+                val firmwareCloneResult =
+                    FirmwareCloneSession.cloneFromTemplate(
+                        transport = transport,
+                        templateSettings = validated,
+                        currentTimeCompact = ::nextFirmwareCloneClockTimeCompact,
+                        afterPreCloneStop = { waitForFirmwareClonePreCloneStop(transport) },
+                        afterStartAttempt = ::waitForFirmwareCloneStartRetry,
+                        afterCommandAcknowledged = { waitForFirmwareCloneCommandSettle() },
+                    )
+                cloneFailureTraceEntries = targetRefresh.traceEntries + firmwareCloneResult.traceEntries
+                if (firmwareCloneResult.succeeded) {
+                    val refreshed = DeviceSessionController.refreshFromDevice(targetRefresh.state, transport, startEditing = true)
+                    cloneFailureTraceEntries = cloneFailureTraceEntries + refreshed.traceEntries
+                    require(hasSignalSlingerReportLine(refreshed.linesReceived)) {
+                        "The attached SignalSlinger did not respond during clone verification. Check the configuration cable and try again."
+                    }
+                    val clockSample = postLoadClockSample(transport, refreshed)
+                    val finalRefresh = clockSample?.first ?: refreshed
+                    val clockAnchor = clockSample?.second
+                    CloneSubmitResult(
+                        state = finalRefresh.state,
+                        cloneProtocol = "firmware MAS P",
+                        firmwareCloneChecksum = firmwareCloneResult.plan?.checksum,
+                        writeCommandCount = firmwareCloneResult.commandsSent.size,
+                        writeResponseLineCount = firmwareCloneResult.linesReceived.size,
+                        refreshCommandCount = refreshed.commandsSent.size + (clockSample?.first?.commandsSent?.size ?: 0),
+                        refreshResponseLineCount = refreshed.linesReceived.size + (clockSample?.first?.linesReceived?.size ?: 0),
+                        syncAttemptCount = 0,
+                        syncSucceeded = true,
+                        traceEntries =
+                            buildList {
+                                addAll(targetRefresh.traceEntries)
+                                addAll(firmwareCloneResult.traceEntries)
+                                addAll(refreshed.traceEntries)
+                                clockSample?.first?.let { addAll(it.traceEntries) }
+                            },
+                        clockPhaseErrorMillis = clockAnchor?.phaseErrorMillis,
+                        clockReferenceTime = clockAnchor?.referenceTime,
+                        possibleNewDeviceReasons = possibleNewDeviceReasons,
+                    )
+                } else {
+                    error(firmwareCloneResult.failureMessage ?: "Firmware clone failed.")
                 }
-                CloneSubmitResult(
-                    state = finalState,
-                    writeCommandCount = writePlan.changes.size,
-                    writeResponseLineCount = submitResult.linesReceived.size,
-                    refreshCommandCount = refreshed.commandsSent.size,
-                    refreshResponseLineCount = refreshed.linesReceived.size,
-                    syncAttemptCount = syncOperation?.attempts?.size ?: 0,
-                    syncSucceeded = syncOperation?.succeeded ?: true,
-                    traceEntries =
-                        buildList {
-                            addAll(targetRefresh.traceEntries)
-                            addAll(submitResult.submitTraceEntries)
-                            addAll(submitResult.readbackTraceEntries)
-                            addAll(refreshed.traceEntries)
-                            syncOperation?.let { addAll(buildSyncTraceEntries(it)) }
-                        },
-                )
             }
 
             synchronized(this) {
@@ -401,8 +535,17 @@ object AndroidSessionController {
                         traceEntries = cloneResult.traceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    cloneResult.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
-                    applySnapshotDrafts(cloneResult.state.snapshot, refreshClockDisplayAnchor = cloneResult.syncAttemptCount == 0)
+                    applySnapshotDrafts(
+                        cloneResult.state.snapshot,
+                        refreshClockDisplayAnchor = cloneResult.clockPhaseErrorMillis == null,
+                    )
+                    if (cloneResult.clockPhaseErrorMillis != null || cloneResult.clockReferenceTime != null) {
+                        applyClockDisplayAnchor(
+                            currentTimeCompact = cloneResult.state.snapshot?.settings?.currentTimeCompact,
+                            phaseErrorMillis = cloneResult.clockPhaseErrorMillis,
+                            referenceTime = cloneResult.clockReferenceTime ?: LocalDateTime.now(),
+                        )
+                    }
                     timeWorkflowNotice = null
                     clearScheduleDerivedDataPendingLocked()
                     latestSubmitSummary = renderCloneSubmitSummary(cloneResult)
@@ -425,7 +568,14 @@ object AndroidSessionController {
                 }
             }
 
-            emitCommandLog("clone", source, success = result.isSuccess, summary = synchronized(this) { latestSubmitSummary })
+            emitCommandLog(
+                command = "clone",
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = result.getOrNull()?.traceEntries ?: cloneFailureTraceEntries,
+                warnOnMissingTimelyReplies = result.isFailure,
+            )
             notifyListeners()
             onComplete?.let { callback -> mainHandler.post { callback(result) } }
         }
@@ -443,7 +593,7 @@ object AndroidSessionController {
             source = source,
         ) { result ->
             synchronized(this) {
-                result.getOrNull()?.state?.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+                result.getOrNull()?.state?.snapshot?.let(::rememberCloneTemplateFrom)
                 if (result.isSuccess) {
                     latestSubmitSummary = "Clone template reloaded from attached device."
                     statusText = "Clone template reloaded from attached device."
@@ -476,10 +626,51 @@ object AndroidSessionController {
         }
         val snapshot = latestSessionViewState?.state?.snapshot ?: return false
         val template = cloneTemplateSettings ?: return false
+        if (latestLoadedTarget == null) {
+            return false
+        }
         if (!snapshot.capabilities.supportsScheduling) {
             return false
         }
-        return hasCompleteCloneTimedEventSettings(template)
+        return hasCompleteCloneTimedEventSettings(template, cloneTemplateDaysRemaining)
+    }
+
+    private fun clonePreflightError(
+        context: Context,
+        preflight: ClonePreflight,
+    ): IllegalStateException? {
+        val snapshot = preflight.sessionState?.snapshot
+            ?: return IllegalStateException("Load the source SignalSlinger before using Clone.")
+        val template = preflight.templateSettings
+            ?: return IllegalStateException("Load the source SignalSlinger before using Clone.")
+        if (!snapshot.capabilities.supportsScheduling) {
+            return IllegalStateException("Clone requires a SignalSlinger snapshot with timed-event support.")
+        }
+        if (!hasCompleteCloneTimedEventSettings(template, cloneTemplateDaysRemaining)) {
+            return IllegalStateException("Clone template is missing complete timed-event settings.")
+        }
+        if (cloneTemplateEventWouldAlreadyBeRunning(template, cloneTemplateDaysRemaining)) {
+            return IllegalStateException(
+                "Clone cancelled because the source event would already be in progress. " +
+                    "Change the Start Time to a future time before cloning.",
+            )
+        }
+        val target = preflight.target
+            ?: return IllegalStateException("Connect the target SignalSlinger before using Clone.")
+        if (!target.isAvailable(context)) {
+            return IllegalStateException("Connect the target SignalSlinger before using Clone.")
+        }
+        return null
+    }
+
+    private fun AndroidConnectionTarget.isAvailable(context: Context): Boolean {
+        return when (this) {
+            is AndroidConnectionTarget.DirectSerial -> true
+            is AndroidConnectionTarget.Usb -> {
+                val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
+                resolveUsbDevice(usbManager, deviceName) != null
+            }
+        }
     }
 
     private fun hasClockPhaseWarningLocked(): Boolean {
@@ -499,7 +690,7 @@ object AndroidSessionController {
         return Duration.between(displayedDeviceTime, systemNow).toMillis()
     }
 
-    private fun hasCompleteCloneTimedEventSettings(settings: DeviceSettings): Boolean {
+    private fun hasCompleteCloneTimedEventSettings(settings: DeviceSettings, daysRemaining: Int?): Boolean {
         if (settings.idCodeSpeedWpm !in 5..20) {
             return false
         }
@@ -509,10 +700,15 @@ object AndroidSessionController {
         ) {
             return false
         }
-        if (settings.startTimeCompact == null || settings.finishTimeCompact == null) {
-            return false
-        }
-        if (JvmTimeSupport.validEventDuration(settings.startTimeCompact, settings.finishTimeCompact) == null) {
+        if (
+            !JvmTimeSupport.isCloneScheduleEligible(
+                startTimeCompact = settings.startTimeCompact,
+                finishTimeCompact = settings.finishTimeCompact,
+                currentTimeCompact = settings.currentTimeCompact,
+                daysToRun = settings.daysToRun,
+                daysRemaining = daysRemaining,
+            )
+        ) {
             return false
         }
         if (settings.daysToRun !in 1..255) {
@@ -534,6 +730,17 @@ object AndroidSessionController {
         return true
     }
 
+    private fun cloneTemplateEventWouldAlreadyBeRunning(settings: DeviceSettings, daysRemaining: Int?): Boolean {
+        val cloneClock = cloneClockCompactForSystemTime(LocalDateTime.now().withNano(0).plusSeconds(1))
+        return JvmTimeSupport.isCloneScheduleAlreadyRunning(
+            startTimeCompact = settings.startTimeCompact,
+            finishTimeCompact = settings.finishTimeCompact,
+            cloneClockCompact = cloneClock,
+            daysToRun = settings.daysToRun,
+            daysRemaining = daysRemaining,
+        )
+    }
+
     private fun markSignalSlingerReadInFlight() {
         val shouldNotify =
             synchronized(this) {
@@ -553,6 +760,85 @@ object AndroidSessionController {
 
     private fun hasSignalSlingerReportLine(lines: List<String>): Boolean {
         return lines.any { line -> SignalSlingerProtocolCodec.parseReportLine(line) != null }
+    }
+
+    private fun pauseRunningEventAfterEvtIfNeeded(
+        command: String,
+        state: DeviceSessionState,
+        transport: DeviceTransport,
+    ): DeviceLoadInterventionResult? {
+        if (!command.equals("EVT", ignoreCase = true)) {
+            return null
+        }
+        val eventSummary = activeEventSummary(state) ?: return null
+        val message =
+            "The attached SignalSlinger reports that an event is in progress:\n\n" +
+                "$eventSummary\n\n" +
+                "A running event may let the SignalSlinger sleep between transmissions and miss commands. " +
+                "When you tap OK, SerialSlinger will send GO 0 to pause the event, then continue loading data."
+        waitForEventPauseDismissal(message)
+        val sentAtMs = System.currentTimeMillis()
+        transport.sendCommands(listOf("GO 0"))
+        val responseLines = transport.readAvailableLines()
+        val receivedAtMs = System.currentTimeMillis()
+        logAppEvent(
+            title = "event-state",
+            lines = listOf(
+                "SignalSlinger reported an event in progress: $eventSummary",
+                "User dismissed warning; sent GO 0 before continuing.",
+            ),
+        )
+        return DeviceLoadInterventionResult(
+            state = DeviceSessionWorkflow.ingestReportLines(state, responseLines),
+            commandsSent = listOf("GO 0"),
+            linesReceived = responseLines,
+            traceEntries =
+                listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, "GO 0")) +
+                    responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) },
+        )
+    }
+
+    private fun activeEventSummary(state: DeviceSessionState): String? {
+        val status = state.snapshot?.status ?: return null
+        if (status.eventEnabled != true) {
+            return null
+        }
+        val statusText = listOfNotNull(
+            status.eventStateSummary?.trim()?.takeIf { it.isNotEmpty() },
+            status.eventStartsInSummary?.trim()?.takeIf { it.isNotEmpty() },
+        )
+        val joinedStatus = statusText.joinToString(" ")
+        val lowerStatus = joinedStatus.lowercase()
+        val activeEventMarkers =
+            listOf(
+                "in progress",
+                "time remaining",
+                "on the air",
+                "running forever",
+                "user launched",
+            )
+        if (activeEventMarkers.none { marker -> lowerStatus.contains(marker) }) {
+            return null
+        }
+        return status.eventStateSummary?.trim()?.takeIf { it.isNotEmpty() }
+            ?: status.eventStartsInSummary?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun waitForEventPauseDismissal(message: String) {
+        val request =
+            synchronized(this) {
+                val request = EventPauseRequest(
+                    id = nextEventPauseRequestId++,
+                    message = message,
+                    latch = CountDownLatch(1),
+                )
+                pendingEventPauseRequest = request
+                statusText = "SignalSlinger event in progress."
+                statusIsError = false
+                request
+            }
+        notifyListeners()
+        request.latch.await()
     }
 
     fun clearLoadedSessionIfMatches(
@@ -588,14 +874,25 @@ object AndroidSessionController {
                         requestedTargets.first()
                     }
                 if (probeInFlight) {
-                    false to desiredTarget
+                    ProbeStart(
+                        started = false,
+                        target = desiredTarget,
+                        previousSnapshot = latestSessionViewState?.state?.snapshot,
+                        previousPhaseErrorMillis = lastClockPhaseErrorMillis,
+                    )
                 } else {
                     probeInFlight = true
                     signalSlingerReadInFlight = false
-                    true to desiredTarget
+                    ProbeStart(
+                        started = true,
+                        target = desiredTarget,
+                        previousSnapshot = latestSessionViewState?.state?.snapshot,
+                        previousPhaseErrorMillis = lastClockPhaseErrorMillis,
+                    )
                 }
             }
-        val (startedProbe, target) = probeStart
+        val startedProbe = probeStart.started
+        val target = probeStart.target
         if (!startedProbe) {
             onComplete?.let { callback ->
                 mainHandler.post {
@@ -629,6 +926,7 @@ object AndroidSessionController {
                     val initialLoad = DeviceSessionController.connectAndLoad(
                         transport = transport,
                         onReportReceived = ::markSignalSlingerReadInFlight,
+                        afterCommand = ::pauseRunningEventAfterEvtIfNeeded,
                     )
                     require(hasSignalSlingerReportLine(initialLoad.linesReceived)) {
                         "No SignalSlinger response was received."
@@ -685,15 +983,26 @@ object AndroidSessionController {
             synchronized(this) {
                 if (result.isSuccess) {
                     val (loadResult, clockAnchor) = result.getOrThrow()
+                    val loadedSnapshot = loadResult.state.snapshot
+                    val possibleNewDeviceReasons =
+                        possibleNewDeviceReasons(
+                            previousSnapshot = probeStart.previousSnapshot,
+                            loadedSnapshot = loadedSnapshot,
+                            previousPhaseErrorMillis = probeStart.previousPhaseErrorMillis,
+                            loadedPhaseErrorMillis = clockAnchor?.phaseErrorMillis,
+                        )
+                    if (possibleNewDeviceReasons.isNotEmpty()) {
+                        deviceTimeOffset = null
+                        lastClockPhaseErrorMillis = null
+                        cachedManualWriteDelayMillis = null
+                    }
                     latestSessionViewState = AndroidSessionViewState(
                         state = loadResult.state,
                         traceEntries = loadResult.traceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    if (cloneTemplateSettings == null) {
-                        loadResult.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
-                    }
-                    applySnapshotDrafts(loadResult.state.snapshot)
+                    loadedSnapshot?.let(::rememberCloneTemplateFrom)
+                    applySnapshotDrafts(loadedSnapshot)
                     clockAnchor?.let { anchor ->
                         applyClockDisplayAnchor(
                             currentTimeCompact = anchor.currentTimeCompact,
@@ -702,7 +1011,14 @@ object AndroidSessionController {
                         )
                     }
                     timeWorkflowNotice = null
-                    latestProbeSummary = renderProbeSummary(loadResult)
+                    latestProbeSummary =
+                        buildString {
+                            append(renderProbeSummary(loadResult))
+                            possibleNewDeviceReasons.forEach { reason ->
+                                appendLine()
+                                append("Possible new device detected due to $reason.")
+                            }
+                        }
                     statusText = "SignalSlinger Data Read Successfully"
                     statusIsError = false
                 } else {
@@ -795,6 +1111,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -912,6 +1229,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1206,9 +1524,98 @@ object AndroidSessionController {
         }
     }
 
+    fun runThermalShutdownThresholdSubmit(
+        context: Context,
+        thresholdCelsius: Int,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<Unit>) -> Unit)? = null,
+    ) {
+        val validatedThreshold = try {
+            ThermalShutdownSupport.validateCelsius(thresholdCelsius)
+        } catch (error: IllegalArgumentException) {
+            emitCommandLog("set-thermal-threshold", source, success = false, summary = error.message.orEmpty())
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+        val snapshot = sessionState?.snapshot
+        if (sessionState == null || snapshot == null) {
+            val error = IllegalStateException("Load a SignalSlinger snapshot before setting Thermal Shutdown Threshold.")
+            emitCommandLog("set-thermal-threshold", source, success = false, summary = error.message.orEmpty())
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+        if (!snapshot.capabilities.supportsExtendedTemperatureReadback) {
+            val error = IllegalStateException("Thermal Shutdown Threshold is not supported by the loaded snapshot.")
+            emitCommandLog("set-thermal-threshold", source, success = false, summary = error.message.orEmpty())
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        synchronized(this) {
+            latestSubmitSummary = "Submitting Thermal Shutdown Threshold update..."
+            statusText = "Submitting Thermal Shutdown Threshold update..."
+            statusIsError = false
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-thermal-threshold-submit") {
+            var traceEntries: List<SerialTraceEntry> = emptyList()
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                val command = ThermalShutdownSupport.commandForCelsius(validatedThreshold)
+                val sentAtMs = System.currentTimeMillis()
+                transport.sendCommands(listOf(command))
+                val responseLines = transport.readAvailableLines()
+                val receivedAtMs = System.currentTimeMillis()
+                traceEntries = listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)) +
+                    responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) }
+                val nextState = DeviceSessionWorkflow.ingestReportLines(sessionState, responseLines)
+                val reportedThreshold = nextState.snapshot?.status?.thermalShutdownThresholdC?.toInt()
+                require(reportedThreshold == validatedThreshold) {
+                    "Thermal Shutdown Threshold verification failed."
+                }
+                synchronized(this) {
+                    latestSessionViewState = AndroidSessionViewState(nextState, traceEntries)
+                    rememberLoadedTargetLocked(target)
+                    applySnapshotDrafts(nextState.snapshot, refreshClockDisplayAnchor = false)
+                    latestSubmitSummary = "Thermal Shutdown Threshold updated to $validatedThreshold C."
+                    latestProbeSummary = "Latest load remains available above. Thermal Shutdown Threshold submission completed."
+                    statusText = "Thermal Shutdown Threshold updated."
+                    statusIsError = false
+                }
+            }
+
+            if (result.isFailure) {
+                synchronized(this) {
+                    latestSubmitSummary = "Submit failed.\n${result.exceptionOrNull()?.message ?: "Unknown error"}"
+                    statusText = "Thermal Shutdown Threshold update failed."
+                    statusIsError = true
+                }
+            }
+            emitCommandLog(
+                command = "set-thermal-threshold",
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = traceEntries,
+            )
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(result.map { }) } }
+        }
+    }
+
     fun runPatternSpeedSubmit(
         context: Context,
         patternSpeedWpmText: String,
+        updateCloneTemplate: Boolean = false,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -1234,21 +1641,6 @@ object AndroidSessionController {
         val editableSettings = sessionState?.editableSettings
         if (sessionState == null || snapshot == null || editableSettings == null) {
             val error = IllegalStateException("Load a SignalSlinger snapshot before submitting changes.")
-            synchronized(this) {
-                latestSubmitSummary = "Submit failed.\n${error.message}"
-                statusText = "Pattern Speed update failed."
-                statusIsError = true
-            }
-            emitCommandLog("set-pattern-speed", source, success = false, summary = error.message.orEmpty())
-            notifyListeners()
-            onComplete?.let { callback ->
-                mainHandler.post { callback(Result.failure(error)) }
-            }
-            return
-        }
-
-        if (snapshot.settings.eventType != EventType.FOXORING) {
-            val error = IllegalStateException("Pattern Speed editing is currently limited to FOXORING snapshots.")
             synchronized(this) {
                 latestSubmitSummary = "Submit failed.\n${error.message}"
                 statusText = "Pattern Speed update failed."
@@ -1295,6 +1687,9 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    if (updateCloneTemplate) {
+                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
+                    }
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1679,6 +2074,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -1771,14 +2167,16 @@ object AndroidSessionController {
 
         synchronized(this) {
             draftFoxRole = parsedFoxRole.uiLabel
-            latestSubmitSummary = "Submitting Fox Role update..."
-            statusText = "Submitting Fox Role update..."
+            latestSubmitSummary = "Submitting Fox Role update: ${parsedFoxRole.uiLabel}"
+            statusText = "Submitting Fox Role: ${parsedFoxRole.uiLabel}"
             statusIsError = false
         }
         notifyListeners()
 
         thread(name = "serialslinger-android-fox-role-submit") {
             var resolvedTarget: AndroidConnectionTarget? = null
+            var callbackResult: Result<DeviceSubmitResult>
+            var commandSucceeded: Boolean
             val result = runWithResolvedTransport(
                 context = context,
                 requestedDeviceName = requestedDeviceName,
@@ -1797,32 +2195,44 @@ object AndroidSessionController {
                 if (result.isSuccess) {
                     val submitResult = result.getOrThrow()
                     val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Fox Role already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Fox Role submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Fox Role already matched the requested value."
-                        } else {
-                            "Fox Role updated and verified."
-                        }
-                    statusIsError = false
+                    val verificationFailure = submitResult.submitVerificationFailure()
+                    if (verificationFailure) {
+                        latestSubmitSummary = renderSubmitFailureSummary(submitResult)
+                        latestProbeSummary = "Latest load remains available above. Fox Role submission failed verification."
+                        statusText = "Fox Role update failed verification."
+                        statusIsError = true
+                        callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
+                        commandSucceeded = false
+                    } else {
+                        latestSessionViewState = AndroidSessionViewState(
+                            state = submitResult.state,
+                            traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
+                        )
+                        resolvedTarget?.let(::rememberLoadedTargetLocked)
+                        draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
+                        draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
+                        draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                        draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
+                        draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
+                        draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
+                        draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
+                        latestSubmitSummary = renderSubmitSummary(submitResult)
+                        latestProbeSummary =
+                            if (wasNoOp) {
+                                "Latest load remains available above. Fox Role already matched the requested value."
+                            } else {
+                                "Latest load remains available above. Fox Role submission completed."
+                            }
+                        statusText =
+                            if (wasNoOp) {
+                                "Fox Role already matched the requested value."
+                            } else {
+                                "Fox Role updated and verified."
+                            }
+                        statusIsError = false
+                        callbackResult = Result.success(submitResult)
+                        commandSucceeded = true
+                    }
                 } else {
                     latestSubmitSummary = buildString {
                         appendLine("Submit failed.")
@@ -1830,18 +2240,20 @@ object AndroidSessionController {
                     }.trim()
                     statusText = "Fox Role update failed."
                     statusIsError = true
+                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Fox Role update failed."))
+                    commandSucceeded = false
                 }
             }
 
             emitCommandLog(
                 command = "set-fox-role",
                 source = source,
-                success = result.isSuccess,
+                success = commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(callbackResult) }
             }
         }
     }
@@ -1920,6 +2332,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
                     draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
@@ -2058,6 +2471,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     latestSubmitSummary = renderSubmitSummary(submitResult)
                     latestProbeSummary =
@@ -2235,6 +2649,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     timeWorkflowNotice = null
                     clearScheduleDerivedDataPendingLocked()
@@ -2620,34 +3035,52 @@ object AndroidSessionController {
                 }
             }
 
+            var callbackResult: Result<DeviceSubmitResult>
+            var commandSucceeded: Boolean
+            var commandTraceEntries: List<SerialTraceEntry> = emptyList()
             synchronized(this) {
                 if (result.isSuccess) {
                     val submitResult = result.getOrThrow()
+                    commandTraceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries
+                    val verificationFailure = submitResult.submitVerificationFailure()
+                    commandSucceeded = !verificationFailure
                     val wasNoOp = submitResult.wasNoOp()
                     val scheduleImpact = summarizeScheduleImpact(snapshot.settings, submitResult.state.snapshot?.settings, SettingKey.CURRENT_TIME)
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    applySnapshotDrafts(submitResult.state.snapshot)
-                    timeWorkflowNotice = scheduleImpact.noticeText
-                    clearScheduleDerivedDataPendingLocked()
-                    latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Device Time already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Device Time submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Device Time already matched the requested value."
-                        } else {
-                            scheduleImpact.statusText ?: "Device Time updated and verified."
-                        }
-                    statusIsError = false
+                    if (verificationFailure) {
+                        latestSubmitSummary = renderSubmitFailureSummary(submitResult)
+                        latestProbeSummary = "Latest load remains available above. Device Time submission failed verification."
+                        statusText = "Device Time update failed verification."
+                        statusIsError = true
+                        clearScheduleDerivedDataPendingLocked()
+                        callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
+                    } else {
+                        latestSessionViewState = AndroidSessionViewState(
+                            state = submitResult.state,
+                            traceEntries = commandTraceEntries,
+                        )
+                        resolvedTarget?.let(::rememberLoadedTargetLocked)
+                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
+                        applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
+                        timeWorkflowNotice = scheduleImpact.noticeText
+                        clearScheduleDerivedDataPendingLocked()
+                        latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
+                        latestProbeSummary =
+                            if (wasNoOp) {
+                                "Latest load remains available above. Device Time already matched the requested value."
+                            } else {
+                                "Latest load remains available above. Device Time submission completed."
+                            }
+                        statusText =
+                            if (wasNoOp) {
+                                "Device Time already matched the requested value."
+                            } else {
+                                scheduleImpact.statusText ?: "Device Time updated and verified."
+                            }
+                        statusIsError = false
+                        callbackResult = Result.success(submitResult)
+                    }
                 } else {
+                    commandSucceeded = false
                     latestSubmitSummary = buildString {
                         appendLine("Submit failed.")
                         append(result.exceptionOrNull()?.message ?: "Unknown error")
@@ -2655,18 +3088,20 @@ object AndroidSessionController {
                     statusText = "Device Time update failed."
                     statusIsError = true
                     clearScheduleDerivedDataPendingLocked()
+                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Device Time update failed."))
                 }
             }
 
             emitCommandLog(
                 command = "set-current-time",
                 source = source,
-                success = result.isSuccess,
+                success = commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = commandTraceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(callbackResult) }
             }
         }
     }
@@ -2859,34 +3294,52 @@ object AndroidSessionController {
                     Result.failure(error)
                 }
 
+            var callbackResult: Result<DeviceSubmitResult>
+            var commandSucceeded: Boolean
+            var commandTraceEntries: List<SerialTraceEntry> = emptyList()
             synchronized(this) {
                 if (result.isSuccess) {
                     val submitResult = result.getOrThrow()
+                    commandTraceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries
+                    val verificationFailure = submitResult.submitVerificationFailure()
+                    commandSucceeded = !verificationFailure
                     val wasNoOp = submitResult.wasNoOp()
                     val scheduleImpact = summarizeScheduleImpact(snapshot.settings, submitResult.state.snapshot?.settings, SettingKey.START_TIME)
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    applySnapshotDrafts(submitResult.state.snapshot)
-                    timeWorkflowNotice = scheduleImpact.noticeText
-                    clearScheduleDerivedDataPendingLocked()
-                    latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Start Time already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Start Time submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Start Time already matched the requested value."
-                        } else {
-                            scheduleImpact.statusText ?: "Start Time updated and verified."
-                        }
-                    statusIsError = false
+                    if (verificationFailure) {
+                        latestSubmitSummary = renderSubmitFailureSummary(submitResult)
+                        latestProbeSummary = "Latest load remains available above. Start Time submission failed verification."
+                        statusText = "Start Time update failed verification."
+                        statusIsError = true
+                        clearScheduleDerivedDataPendingLocked()
+                        callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
+                    } else {
+                        latestSessionViewState = AndroidSessionViewState(
+                            state = submitResult.state,
+                            traceEntries = commandTraceEntries,
+                        )
+                        resolvedTarget?.let(::rememberLoadedTargetLocked)
+                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
+                        applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
+                        timeWorkflowNotice = scheduleImpact.noticeText
+                        clearScheduleDerivedDataPendingLocked()
+                        latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
+                        latestProbeSummary =
+                            if (wasNoOp) {
+                                "Latest load remains available above. Start Time already matched the requested value."
+                            } else {
+                                "Latest load remains available above. Start Time submission completed."
+                            }
+                        statusText =
+                            if (wasNoOp) {
+                                "Start Time already matched the requested value."
+                            } else {
+                                scheduleImpact.statusText ?: "Start Time updated and verified."
+                            }
+                        statusIsError = false
+                        callbackResult = Result.success(submitResult)
+                    }
                 } else {
+                    commandSucceeded = false
                     latestSubmitSummary = buildString {
                         appendLine("Submit failed.")
                         append(result.exceptionOrNull()?.message ?: "Unknown error")
@@ -2894,18 +3347,20 @@ object AndroidSessionController {
                     statusText = "Start Time update failed."
                     statusIsError = true
                     clearScheduleDerivedDataPendingLocked()
+                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Start Time update failed."))
                 }
             }
 
             emitCommandLog(
                 command = "set-start-time",
                 source = source,
-                success = result.isSuccess,
+                success = commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = commandTraceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(callbackResult) }
             }
         }
     }
@@ -3021,34 +3476,52 @@ object AndroidSessionController {
                     }
                 }.getOrElse { error -> Result.failure(error) }
 
+            var callbackResult: Result<DeviceSubmitResult>
+            var commandSucceeded: Boolean
+            var commandTraceEntries: List<SerialTraceEntry> = emptyList()
             synchronized(this) {
                 if (result.isSuccess) {
                     val submitResult = result.getOrThrow()
+                    commandTraceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries
+                    val verificationFailure = submitResult.submitVerificationFailure()
+                    commandSucceeded = !verificationFailure
                     val wasNoOp = submitResult.wasNoOp()
                     val scheduleImpact = summarizeScheduleImpact(snapshot.settings, submitResult.state.snapshot?.settings, SettingKey.FINISH_TIME)
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    applySnapshotDrafts(submitResult.state.snapshot)
-                    timeWorkflowNotice = scheduleImpact.noticeText
-                    clearScheduleDerivedDataPendingLocked()
-                    latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Finish Time already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Finish Time submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Finish Time already matched the requested value."
-                        } else {
-                            scheduleImpact.statusText ?: "Finish Time updated and verified."
-                        }
-                    statusIsError = false
+                    if (verificationFailure) {
+                        latestSubmitSummary = renderSubmitFailureSummary(submitResult)
+                        latestProbeSummary = "Latest load remains available above. Finish Time submission failed verification."
+                        statusText = "Finish Time update failed verification."
+                        statusIsError = true
+                        clearScheduleDerivedDataPendingLocked()
+                        callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
+                    } else {
+                        latestSessionViewState = AndroidSessionViewState(
+                            state = submitResult.state,
+                            traceEntries = commandTraceEntries,
+                        )
+                        resolvedTarget?.let(::rememberLoadedTargetLocked)
+                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
+                        applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
+                        timeWorkflowNotice = scheduleImpact.noticeText
+                        clearScheduleDerivedDataPendingLocked()
+                        latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
+                        latestProbeSummary =
+                            if (wasNoOp) {
+                                "Latest load remains available above. Finish Time already matched the requested value."
+                            } else {
+                                "Latest load remains available above. Finish Time submission completed."
+                            }
+                        statusText =
+                            if (wasNoOp) {
+                                "Finish Time already matched the requested value."
+                            } else {
+                                scheduleImpact.statusText ?: "Finish Time updated and verified."
+                            }
+                        statusIsError = false
+                        callbackResult = Result.success(submitResult)
+                    }
                 } else {
+                    commandSucceeded = false
                     latestSubmitSummary = buildString {
                         appendLine("Submit failed.")
                         append(result.exceptionOrNull()?.message ?: "Unknown error")
@@ -3056,18 +3529,20 @@ object AndroidSessionController {
                     statusText = "Finish Time update failed."
                     statusIsError = true
                     clearScheduleDerivedDataPendingLocked()
+                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Finish Time update failed."))
                 }
             }
 
             emitCommandLog(
                 command = "set-finish-time",
                 source = source,
-                success = result.isSuccess,
+                success = commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = commandTraceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(callbackResult) }
             }
         }
     }
@@ -3195,6 +3670,30 @@ object AndroidSessionController {
         }
     }
 
+    fun temperatureLogFiles(): List<AndroidTemperatureLogFile> {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return emptyList()
+        return log.listTemperatureLogFiles()
+    }
+
+    fun deleteTemperatureLog(name: String): Boolean {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return false
+        return log.deleteTemperatureLog(name)
+    }
+
+    fun deleteAllTemperatureLogs(): Int {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return 0
+        return log.deleteAllTemperatureLogs()
+    }
+
     fun clearSessionLogs(): String {
         val log =
             synchronized(this) {
@@ -3214,6 +3713,136 @@ object AndroidSessionController {
                 sessionLog
             } ?: return null
         return log.ensureCurrentLogFile()
+    }
+
+    fun setTemperatureLoggingEnabled(
+        context: Context,
+        enabled: Boolean,
+        requestedDeviceName: String? = null,
+    ) {
+        val log = synchronized(this) { sessionLog } ?: return
+        var shouldNotifyOnly = false
+        if (enabled) {
+            synchronized(this) {
+                if (temperatureLoggingEnabled) {
+                    return
+                }
+                if (latestSessionViewState?.state?.snapshot == null || latestLoadedTarget == null) {
+                    statusText = "Load a SignalSlinger before logging temperature."
+                    statusIsError = true
+                    shouldNotifyOnly = true
+                } else if (latestSessionViewState?.state?.snapshot?.capabilities?.supportsTemperatureLogging != true) {
+                    statusText = "Temperature logging is not supported by the attached firmware."
+                    statusIsError = true
+                    shouldNotifyOnly = true
+                } else {
+                    temperatureLoggingEnabled = true
+                    statusText = "Temperature logging in progress."
+                    statusIsError = false
+                    log.beginTemperatureLog()
+                    temperatureLoggingThread = thread(name = "serialslinger-android-temperature-log") {
+                        runTemperatureLogLoop(context.applicationContext, requestedDeviceName)
+                    }
+                }
+            }
+            if (shouldNotifyOnly) {
+                notifyListeners()
+                return
+            }
+        } else {
+            synchronized(this) {
+                if (!temperatureLoggingEnabled) {
+                    return
+                }
+                temperatureLoggingEnabled = false
+                temperatureLoggingThread = null
+                log.endTemperatureLog()
+                statusText = "Temperature logging deactivated."
+                statusIsError = false
+            }
+        }
+        notifyListeners()
+    }
+
+    private fun runTemperatureLogLoop(context: Context, requestedDeviceName: String?) {
+        var nextSampleTime = LocalDateTime.now().withNano(0).plusSeconds(1)
+        while (synchronized(this) { temperatureLoggingEnabled }) {
+            sleepUntil(nextSampleTime)
+            if (!synchronized(this) { temperatureLoggingEnabled }) {
+                return
+            }
+            val sampleTime = nextSampleTime
+            val sample = runTemperatureSample(context, requestedDeviceName)
+            synchronized(this) {
+                sessionLog?.appendTemperatureSample(
+                    timestamp = sampleTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+                    temperatureC = sample.getOrNull()?.temperatureC,
+                    externalBatteryVolts = sample.getOrNull()?.externalBatteryVolts,
+                    internalBatteryVolts = sample.getOrNull()?.internalBatteryVolts,
+                )
+                if (sample.isFailure) {
+                    statusText = "Temperature logging failed: ${sample.exceptionOrNull()?.message ?: "Unknown error"}"
+                    statusIsError = true
+                }
+            }
+            notifyListeners()
+            nextSampleTime = nextSampleTime.plusSeconds(10)
+        }
+    }
+
+    private fun sleepUntil(target: LocalDateTime) {
+        while (true) {
+            val remainingMillis = Duration.between(LocalDateTime.now(), target).toMillis()
+            if (remainingMillis <= 0L) {
+                return
+            }
+            Thread.sleep(remainingMillis.coerceAtMost(1_000L))
+        }
+    }
+
+    private data class TemperatureLogSample(
+        val temperatureC: Double?,
+        val externalBatteryVolts: Double?,
+        val internalBatteryVolts: Double?,
+    )
+
+    private fun runTemperatureSample(context: Context, requestedDeviceName: String?): Result<TemperatureLogSample> {
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+            ?: return Result.failure(IllegalStateException("Load a SignalSlinger before logging temperature."))
+        return runWithResolvedTransport(
+            context = context,
+            requestedDeviceName = requestedDeviceName,
+            requestedTarget = null,
+            allowUsbAutoDetect = false,
+            missingMessage = "SignalSlinger is no longer connected.",
+        ) { target, transport ->
+            val tmpCommand = "TMP"
+            val batCommand = "BAT"
+            val tmpSentAtMs = System.currentTimeMillis()
+            transport.sendCommands(listOf(tmpCommand))
+            val tmpLines = transport.readAvailableLines()
+            val stateAfterTemperature = DeviceSessionWorkflow.ingestReportLines(sessionState, tmpLines)
+            val batSentAtMs = System.currentTimeMillis()
+            transport.sendCommands(listOf(batCommand))
+            val batLines = transport.readAvailableLines()
+            val nextState = DeviceSessionWorkflow.ingestReportLines(stateAfterTemperature, batLines)
+            synchronized(this) {
+                latestSessionViewState = AndroidSessionViewState(
+                    state = nextState,
+                    traceEntries = listOf(SerialTraceEntry(tmpSentAtMs, SerialTraceDirection.TX, tmpCommand)) +
+                        tmpLines.map { line -> SerialTraceEntry(System.currentTimeMillis(), SerialTraceDirection.RX, line) } +
+                        listOf(SerialTraceEntry(batSentAtMs, SerialTraceDirection.TX, batCommand)) +
+                        batLines.map { line -> SerialTraceEntry(System.currentTimeMillis(), SerialTraceDirection.RX, line) },
+                )
+                rememberLoadedTargetLocked(target)
+                applySnapshotDrafts(nextState.snapshot, refreshClockDisplayAnchor = false)
+            }
+            TemperatureLogSample(
+                temperatureC = nextState.snapshot?.status?.temperatureC,
+                externalBatteryVolts = nextState.snapshot?.status?.externalBatteryVolts,
+                internalBatteryVolts = nextState.snapshot?.status?.internalBatteryVolts,
+            )
+        }
     }
 
     fun logAppEvent(
@@ -3391,6 +4020,53 @@ object AndroidSessionController {
         return traceEntries
     }
 
+    private fun nextFirmwareCloneClockTimeCompact(): String {
+        val target = LocalDateTime.now().withNano(0).plusSeconds(1)
+        val delayNanos = Duration.between(LocalDateTime.now(), target).toNanos().coerceAtLeast(0L)
+        if (delayNanos > 0L) {
+            Thread.sleep(delayNanos / 1_000_000L, (delayNanos % 1_000_000L).toInt())
+        }
+        return cloneClockCompactForSystemTime(target)
+    }
+
+    private fun cloneClockCompactForSystemTime(systemTime: LocalDateTime): String {
+        val offset = synchronized(this) { deviceTimeOffset }
+        return JvmTimeSupport.formatCompactTimestamp(systemTime.plus(offset ?: Duration.ZERO))
+    }
+
+    private fun waitForFirmwareClonePreCloneStop(transport: DeviceTransport): List<String> {
+        val lines = mutableListOf<String>()
+        val deadline = System.currentTimeMillis() + firmwareClonePreCloneStopMaxWaitMs
+        var sawStopOutput = false
+        while (System.currentTimeMillis() < deadline) {
+            val responseLines = transport.readAvailableLines()
+            if (responseLines.isNotEmpty()) {
+                lines += responseLines
+                sawStopOutput = true
+                Thread.sleep(firmwareCloneCommandSettleMs)
+            } else if (sawStopOutput) {
+                return lines
+            } else {
+                Thread.sleep(firmwareCloneCommandSettleMs)
+            }
+        }
+        return lines
+    }
+
+    private fun waitForFirmwareCloneStartRetry() {
+        Thread.sleep(firmwareCloneCommandSettleMs)
+    }
+
+    private fun waitForFirmwareCloneCommandSettle() {
+        Thread.sleep(firmwareCloneCommandSettleMs)
+    }
+
+    private fun clearFirmwareCloneBufferedFragments(transport: DeviceTransport) {
+        if (transport is AndroidUsbTransport) {
+            transport.clearBufferedInputFragments()
+        }
+    }
+
     private fun mergeLoadResults(
         base: DeviceLoadResult,
         additional: DeviceLoadResult?,
@@ -3412,6 +4088,9 @@ object AndroidSessionController {
         if (!loadedSnapshot.capabilities.supportsScheduling) {
             return null
         }
+        if (!loadedSnapshot.hasWallClockTimeSet()) {
+            return null
+        }
 
         Thread.sleep(80L)
         val samples = observeClockPhaseSamples(transport = transport, maxSamples = 4)
@@ -3422,15 +4101,16 @@ object AndroidSessionController {
         samples.forEach { sample ->
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, sample.responseLines)
         }
+        val phaseSamples =
+            samples.map { sample ->
+                ClockPhaseSample(
+                    midpointAt = sample.midpointAt,
+                    reportedTimeCompact = sample.reportedTimeCompact,
+                )
+            }
         val phaseErrorMillis =
-            JvmTimeSupport.estimateClockPhaseErrorMillis(
-                samples.map { sample ->
-                    ClockPhaseSample(
-                        midpointAt = sample.midpointAt,
-                        reportedTimeCompact = sample.reportedTimeCompact,
-                    )
-                },
-            )
+            JvmTimeSupport.estimateClockPhaseErrorMillis(phaseSamples)
+                ?: estimateCoarsePostLoadClockPhaseErrorMillis(phaseSamples)
         val latestSample = samples.lastOrNull()
         return DeviceLoadResult(
             state = updatedState,
@@ -3471,6 +4151,11 @@ object AndroidSessionController {
             return null
         }
         return (JvmTimeSupport.medianMillis(samples.map { it.roundTripMillis }) / 2).coerceAtLeast(0L)
+    }
+
+    private fun estimateCoarsePostLoadClockPhaseErrorMillis(samples: List<ClockPhaseSample>): Long? {
+        val estimates = samples.mapNotNull(JvmTimeSupport::estimateCoarseClockErrorMillis)
+        return estimates.takeIf { it.isNotEmpty() }?.let(JvmTimeSupport::medianMillis)
     }
 
     private fun performAlignedTimeSync(
@@ -3552,6 +4237,7 @@ object AndroidSessionController {
                             ),
                     ),
                 transport = transport,
+                allowFullReloadVerification = false,
             )
         var nextState = submitResult.state
         val verificationSamples = observeClockPhaseSamples(transport, maxSamples = syncVerificationSampleMax)
@@ -3588,6 +4274,9 @@ object AndroidSessionController {
             val sample = readClockSample(transport)
             samples += sample
             val previousReported = samples.getOrNull(samples.lastIndex - 1)?.reportedTimeCompact
+            if (sample.reportedTimeObserved && sample.reportedTimeCompact == null) {
+                return samples
+            }
             if (previousReported != null && sample.reportedTimeCompact != null && previousReported != sample.reportedTimeCompact) {
                 return samples
             }
@@ -3606,16 +4295,22 @@ object AndroidSessionController {
         transport.sendCommands(listOf(command))
         val responseLines = transport.readAvailableLines()
         val receivedAt = LocalDateTime.now()
+        val reportedTimeCompact =
+            responseLines
+                .mapNotNull { line -> com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec.parseReportLine(line)?.settingsPatch?.currentTimeCompact }
+                .firstOrNull()
         return ClockReadSample(
             sentAt = sentAt,
             receivedAt = receivedAt,
             responseLines = responseLines,
-            reportedTimeCompact =
-                responseLines
-                    .mapNotNull { line -> com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec.parseReportLine(line)?.settingsPatch?.currentTimeCompact }
-                    .firstOrNull(),
+            reportedTimeCompact = reportedTimeCompact,
+            reportedTimeObserved = responseLines.any(::isClockTimeResponseLine),
             command = command,
         )
+    }
+
+    private fun isClockTimeResponseLine(line: String): Boolean {
+        return line.trim().startsWith("* Time:", ignoreCase = true)
     }
 
     private fun chooseBetterSyncAttempt(
@@ -3646,13 +4341,15 @@ object AndroidSessionController {
 
     private fun renderProbeSummary(result: DeviceLoadResult): String {
         val snapshot = result.state.snapshot
+        val productName = snapshot?.info?.productName?.ifBlank { null }
+        val stationId = snapshot?.settings?.stationId?.ifBlank { null }
         return buildString {
             appendLine("Probe succeeded.")
             appendLine("Commands sent: ${result.commandsSent.size}")
             appendLine("Response lines: ${result.linesReceived.size}")
             appendLine("Software version: ${snapshot?.info?.softwareVersion ?: "<unknown>"}")
-            appendLine("Product name: ${snapshot?.info?.productName ?: "<unknown>"}")
-            appendLine("Station ID: ${snapshot?.settings?.stationId ?: "<unknown>"}")
+            productName?.let { appendLine("Product name: $it") }
+            stationId?.let { appendLine("Station ID: $it") }
             if (result.linesReceived.isNotEmpty()) {
                 appendLine("First lines:")
                 result.linesReceived.take(8).forEach { line ->
@@ -3688,13 +4385,20 @@ object AndroidSessionController {
 
     private fun renderCloneSubmitSummary(result: CloneSubmitResult): String {
         return buildString {
-            appendLine("Clone submitted.")
+            appendLine("Clone submitted to attached SignalSlinger.")
+            appendLine("Clone protocol: ${result.cloneProtocol}")
+            result.firmwareCloneChecksum?.let { checksum ->
+                appendLine("Firmware clone checksum: $checksum")
+            }
             appendLine("Write commands sent: ${result.writeCommandCount}")
             appendLine("Write response lines: ${result.writeResponseLineCount}")
             appendLine("Reload commands sent: ${result.refreshCommandCount}")
             appendLine("Reload response lines: ${result.refreshResponseLineCount}")
             appendLine("Sync attempts: ${result.syncAttemptCount}")
-            append("Time sync status: ${if (result.syncSucceeded) "ok" else "attention needed"}")
+            appendLine("Time sync status: ${if (result.syncSucceeded) "ok" else "attention needed"}")
+            result.possibleNewDeviceReasons.forEach { reason ->
+                appendLine("Possible new device detected due to $reason.")
+            }
         }.trim()
     }
 
@@ -3724,6 +4428,30 @@ object AndroidSessionController {
                     appendLine(line)
                 }
             }
+            appendLine()
+            appendLine("Verification")
+            if (result.verifications.isEmpty()) {
+                appendLine("No verification results were returned.")
+            } else {
+                result.verifications.forEach { verification ->
+                    appendLine(
+                        "${verification.fieldKey}: verified=${verification.verified} observed=${verification.observedInReadback} expected=${verification.expectedValue} actual=${verification.actualValue}",
+                    )
+                }
+            }
+        }.trim()
+    }
+
+    private fun renderSubmitFailureSummary(
+        result: DeviceSubmitResult,
+    ): String {
+        return buildString {
+            appendLine("Submit failed.")
+            appendLine(result.submitVerificationFailureMessage())
+            appendLine("Commands sent: ${result.commandsSent.size}")
+            appendLine("Submit response lines: ${result.linesReceived.size}")
+            appendLine("Readback commands sent: ${result.readbackCommandsSent.size}")
+            appendLine("Readback response lines: ${result.readbackLinesReceived.size}")
             appendLine()
             appendLine("Verification")
             if (result.verifications.isEmpty()) {
@@ -3830,6 +4558,70 @@ object AndroidSessionController {
         }
     }
 
+    private fun rememberCloneTemplateFrom(sourceSnapshot: DeviceSnapshot) {
+        rememberCloneTemplateFrom(sourceSnapshot.settings)
+        cloneTemplateDaysRemaining = sourceSnapshot.status.daysRemaining
+        cloneTemplateTimedEventEditsLocked = false
+    }
+
+    private fun possibleNewDeviceReasons(
+        previousSnapshot: DeviceSnapshot?,
+        loadedSnapshot: DeviceSnapshot?,
+        previousPhaseErrorMillis: Long?,
+        loadedPhaseErrorMillis: Long?,
+    ): List<String> {
+        previousSnapshot ?: return emptyList()
+        loadedSnapshot ?: return emptyList()
+        return buildList {
+            if (previousSnapshot.info != loadedSnapshot.info) {
+                add("device info changed")
+            }
+            if (previousSnapshot.capabilities != loadedSnapshot.capabilities) {
+                add("device capabilities changed")
+            }
+            if (previousSnapshot.settings.copy(currentTimeCompact = null) != loadedSnapshot.settings.copy(currentTimeCompact = null)) {
+                add("device settings changed other than Device Time")
+            }
+            if (
+                previousSnapshot.status.copy(
+                    eventStartsInSummary = null,
+                    eventDurationSummary = null,
+                    lastCommunicationError = null,
+                ) != loadedSnapshot.status.copy(
+                    eventStartsInSummary = null,
+                    eventDurationSummary = null,
+                    lastCommunicationError = null,
+                )
+            ) {
+                add("device data changed")
+            }
+
+            val previousClockValid = previousSnapshot.hasValidWallClockTime()
+            val loadedClockValid = loadedSnapshot.hasValidWallClockTime()
+            if (previousClockValid != loadedClockValid) {
+                add(
+                    "wall clock validity changed from " +
+                        "${if (previousClockValid) "valid" else "invalid"} to ${if (loadedClockValid) "valid" else "invalid"}",
+                )
+            }
+
+            if (previousPhaseErrorMillis != null && loadedPhaseErrorMillis != null) {
+                val phaseShiftMillis = loadedPhaseErrorMillis - previousPhaseErrorMillis
+                if (abs(phaseShiftMillis) > POSSIBLE_NEW_DEVICE_PHASE_SHIFT_THRESHOLD_MILLIS) {
+                    add(
+                        "clock phase changed by ${JvmTimeSupport.formatSignedDurationMillis(phaseShiftMillis)} " +
+                            "(previous ${JvmTimeSupport.formatSignedDurationMillis(previousPhaseErrorMillis)}, " +
+                            "now ${JvmTimeSupport.formatSignedDurationMillis(loadedPhaseErrorMillis)})",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun DeviceSnapshot.hasValidWallClockTime(): Boolean {
+        return JvmTimeSupport.normalizeCurrentTimeCompactForDisplay(settings.currentTimeCompact) != null
+    }
+
     private fun rememberCloneTemplateFrom(sourceSettings: DeviceSettings) {
         val existingTemplate = cloneTemplateSettings
         cloneTemplateSettings =
@@ -3839,8 +4631,11 @@ object AndroidSessionController {
                 existingTemplate.copy(
                     stationId = sourceSettings.stationId,
                     eventType = sourceSettings.eventType,
+                    foxRole = sourceSettings.foxRole,
                     idCodeSpeedWpm = sourceSettings.idCodeSpeedWpm,
+                    patternText = sourceSettings.patternText,
                     patternCodeSpeedWpm = sourceSettings.patternCodeSpeedWpm,
+                    currentTimeCompact = sourceSettings.currentTimeCompact,
                     startTimeCompact = sourceSettings.startTimeCompact,
                     finishTimeCompact = sourceSettings.finishTimeCompact,
                     daysToRun = sourceSettings.daysToRun,
@@ -3850,6 +4645,30 @@ object AndroidSessionController {
                     beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
                 )
             }
+    }
+
+    private fun rememberCloneTemplateTimedEventFieldsFrom(sourceSnapshot: DeviceSnapshot?) {
+        if (sourceSnapshot == null || cloneTemplateTimedEventEditsLocked) {
+            return
+        }
+        val existingTemplate = cloneTemplateSettings ?: return
+        val sourceSettings = sourceSnapshot.settings
+        cloneTemplateSettings =
+            existingTemplate.copy(
+                stationId = sourceSettings.stationId,
+                eventType = sourceSettings.eventType,
+                idCodeSpeedWpm = sourceSettings.idCodeSpeedWpm,
+                patternCodeSpeedWpm = sourceSettings.patternCodeSpeedWpm,
+                currentTimeCompact = sourceSettings.currentTimeCompact,
+                startTimeCompact = sourceSettings.startTimeCompact,
+                finishTimeCompact = sourceSettings.finishTimeCompact,
+                daysToRun = sourceSettings.daysToRun,
+                lowFrequencyHz = sourceSettings.lowFrequencyHz,
+                mediumFrequencyHz = sourceSettings.mediumFrequencyHz,
+                highFrequencyHz = sourceSettings.highFrequencyHz,
+                beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
+            )
+        cloneTemplateDaysRemaining = sourceSnapshot.status.daysRemaining
     }
 
     private fun buildCloneEditableSettings(
@@ -4000,6 +4819,7 @@ object AndroidSessionController {
                         traceEntries = submitResult.traceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                     timeWorkflowNotice = scheduleImpact.noticeText
                     clearScheduleDerivedDataPendingLocked()
@@ -4126,6 +4946,7 @@ object AndroidSessionController {
                         )
                     latestSessionViewState = AndroidSessionViewState(state = normalizedState, traceEntries = commandResult.traceEntries)
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(normalizedState.snapshot)
                     applySnapshotDrafts(normalizedState.snapshot, refreshClockDisplayAnchor = false)
                     latestSubmitSummary =
                         buildString {
@@ -4188,6 +5009,7 @@ object AndroidSessionController {
         success: Boolean,
         summary: String,
         traceEntries: List<SerialTraceEntry> = emptyList(),
+        warnOnMissingTimelyReplies: Boolean = true,
     ) {
         val normalizedSummary = summary.replace('\n', ' ').trim()
         Log.i(
@@ -4200,6 +5022,9 @@ object AndroidSessionController {
                 success -> snapshotUiState().sessionViewState?.traceEntries.orEmpty()
                 else -> emptyList()
             }
+        if (warnOnMissingTimelyReplies) {
+            recordTimelyReplyWarningIfNeeded(persistedTraceEntries)
+        }
         synchronized(this) {
             sessionLog
         }?.appendCommandSection(
@@ -4209,6 +5034,60 @@ object AndroidSessionController {
             summary = summary,
             traceEntries = persistedTraceEntries,
         )
+    }
+
+    private fun recordTimelyReplyWarningIfNeeded(traceEntries: List<SerialTraceEntry>) {
+        val missedCommands = commandsWithoutTimelyReplies(traceEntries)
+        if (missedCommands.isEmpty()) {
+            return
+        }
+        val commandSummary = missedCommands.take(6).joinToString(", ")
+        val suffix =
+            if (missedCommands.size > 6) {
+                ", and ${missedCommands.size - 6} more"
+            } else {
+                ""
+            }
+        synchronized(this) {
+            pendingTimelyReplyWarning =
+                "The attached SignalSlinger did not provide timely replies to: $commandSummary$suffix.\n\n" +
+                    "Check that the SignalSlinger is awake, powered, and firmly connected. If this repeats, reload the device data before making changes."
+        }
+    }
+
+    private fun commandsWithoutTimelyReplies(traceEntries: List<SerialTraceEntry>): List<String> {
+        val missedCommands = linkedSetOf<String>()
+        var activeCommand: String? = null
+        var activeCommandHasReply = false
+
+        fun closeActiveCommand() {
+            val command = activeCommand
+            if (command != null && !activeCommandHasReply && expectsTimelyReply(command)) {
+                missedCommands += command
+            }
+        }
+
+        traceEntries.forEach { entry ->
+            when (entry.direction) {
+                SerialTraceDirection.TX -> {
+                    closeActiveCommand()
+                    activeCommand = entry.payload
+                    activeCommandHasReply = false
+                }
+                SerialTraceDirection.RX -> {
+                    if (activeCommand != null && entry.payload.isNotBlank()) {
+                        activeCommandHasReply = true
+                    }
+                }
+            }
+        }
+        closeActiveCommand()
+        return missedCommands.toList()
+    }
+
+    private fun expectsTimelyReply(command: String): Boolean {
+        return !command.equals("RST", ignoreCase = true) &&
+            !command.equals("MAS P", ignoreCase = true)
     }
 
     private fun notifyListeners() {
@@ -4228,5 +5107,17 @@ object AndroidSessionController {
         return commandsSent.isEmpty() &&
             readbackCommandsSent.isEmpty() &&
             verifications.isEmpty()
+    }
+
+    private fun DeviceSubmitResult.submitVerificationFailure(): Boolean {
+        return !wasNoOp() && verifications.any { !it.verified }
+    }
+
+    private fun DeviceSubmitResult.submitVerificationFailureMessage(): String {
+        return if (readbackLinesReceived.isEmpty()) {
+            "SignalSlinger did not return readback data, so the change could not be verified."
+        } else {
+            "SignalSlinger readback did not match the requested change."
+        }
     }
 }

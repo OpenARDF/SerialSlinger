@@ -14,6 +14,7 @@ class SignalSlingerFirmwareSupportTest {
         assertTrue(profile.capabilities.supportsScheduling)
         assertTrue(profile.capabilities.supportsTemperatureReadback)
         assertFalse(profile.capabilities.supportsExtendedTemperatureReadback)
+        assertFalse(profile.capabilities.supportsTemperatureLogging)
         assertTrue("TMP" in profile.fullLoadCommands)
         assertTrue("FUN" in profile.fullLoadCommands)
         assertTrue("FOX" in profile.fullLoadCommands)
@@ -44,9 +45,22 @@ class SignalSlingerFirmwareSupportTest {
     fun resolvesTmpOnlyTemperatureProfileForFirmware121AndLater() {
         val profile = SignalSlingerFirmwareSupport.resolve("1.2.1")
 
-        assertEquals("modern-1.2.1+", profile.id)
+        assertEquals("modern-1.2.1", profile.id)
         assertTrue(profile.capabilities.supportsTemperatureReadback)
         assertTrue(profile.capabilities.supportsExtendedTemperatureReadback)
+        assertFalse(profile.capabilities.supportsTemperatureLogging)
+        assertTrue("TMP" in profile.fullLoadCommands)
+        assertFalse("FUN" in profile.fullLoadCommands)
+    }
+
+    @Test
+    fun enablesTemperatureLoggingOnlyForFirmwareAfter121() {
+        val profile = SignalSlingerFirmwareSupport.resolve("1.2.2")
+
+        assertEquals("modern-1.2.2+", profile.id)
+        assertTrue(profile.capabilities.supportsTemperatureReadback)
+        assertTrue(profile.capabilities.supportsExtendedTemperatureReadback)
+        assertTrue(profile.capabilities.supportsTemperatureLogging)
         assertTrue("TMP" in profile.fullLoadCommands)
         assertFalse("FUN" in profile.fullLoadCommands)
     }

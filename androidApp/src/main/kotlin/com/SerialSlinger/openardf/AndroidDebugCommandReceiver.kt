@@ -392,6 +392,32 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                     pendingResult.finish()
                 }
             }
+            ACTION_CLONE -> {
+                AndroidSessionController.runCloneTimedEventSettings(
+                    context = context,
+                    requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
+                    source = "adb",
+                )
+                resultCode = resultOk
+                resultData = "Clone started. Poll DEBUG_GET_LOG for completion."
+            }
+            ACTION_CLONE_WAIT -> {
+                val pendingResult = goAsync()
+                AndroidSessionController.runCloneTimedEventSettings(
+                    context = context,
+                    requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
+                    source = "adb",
+                ) { result ->
+                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
+                    pendingResult.resultData =
+                        if (result.isSuccess) {
+                            AndroidSessionController.debugStateSummary()
+                        } else {
+                            result.exceptionOrNull()?.message ?: "Unknown clone failure"
+                        }
+                    pendingResult.finish()
+                }
+            }
             else -> {
                 resultCode = resultCanceled
                 resultData = "Unsupported action: ${intent.action}"
@@ -426,6 +452,8 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val ACTION_SET_START_TIME = "com.SerialSlinger.openardf.DEBUG_SET_START_TIME"
         const val ACTION_SET_FINISH_TIME = "com.SerialSlinger.openardf.DEBUG_SET_FINISH_TIME"
         const val ACTION_SET_DAYS_TO_RUN = "com.SerialSlinger.openardf.DEBUG_SET_DAYS_TO_RUN"
+        const val ACTION_CLONE = "com.SerialSlinger.openardf.DEBUG_CLONE"
+        const val ACTION_CLONE_WAIT = "com.SerialSlinger.openardf.DEBUG_CLONE_WAIT"
 
         const val EXTRA_DEVICE_NAME = "device_name"
         const val EXTRA_EVENT_TYPE = "event_type"

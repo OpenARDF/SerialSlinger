@@ -2,9 +2,9 @@ package com.openardf.serialslinger.model
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlin.test.assertFailsWith
 
 class DeviceModelsTest {
     @Test
@@ -99,6 +99,29 @@ class DeviceModelsTest {
         assertEquals("FREQ 1", FoxRole.FOXORING_1.toString())
         assertEquals("FREQ 2", FoxRole.FOXORING_2.toString())
         assertEquals("FREQ 3", FoxRole.FOXORING_3.toString())
+    }
+
+    @Test
+    fun hasWallClockTimeSetIsFalseWhenCurrentTimeIsMissing() {
+        val snapshot = DeviceSnapshot(
+            settings = DeviceSettings.empty(),
+            capabilities = DeviceCapabilities(supportsScheduling = true),
+        )
+
+        assertFalse(snapshot.hasWallClockTimeSet())
+        assertFalse(snapshot.settings.hasWallClockTimeSet())
+    }
+
+    @Test
+    fun hasWallClockTimeSetIsTrueWhenCurrentTimeIsPresent() {
+        val settings = DeviceSettings.empty().copy(currentTimeCompact = "260429101530")
+        val snapshot = DeviceSnapshot(
+            settings = settings,
+            capabilities = DeviceCapabilities(supportsScheduling = true),
+        )
+
+        assertTrue(snapshot.hasWallClockTimeSet())
+        assertTrue(settings.hasWallClockTimeSet())
     }
 
     private fun sampleSettings(): DeviceSettings {

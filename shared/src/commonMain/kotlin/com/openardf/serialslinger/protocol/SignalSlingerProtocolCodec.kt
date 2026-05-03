@@ -36,8 +36,11 @@ data class DeviceSettingsPatch(
     val idCodeSpeedWpm: Int? = null,
     val patternCodeSpeedWpm: Int? = null,
     val currentTimeCompact: String? = null,
+    val currentTimeObserved: Boolean = false,
     val startTimeCompact: String? = null,
+    val startTimeObserved: Boolean = false,
     val finishTimeCompact: String? = null,
+    val finishTimeObserved: Boolean = false,
     val daysToRun: Int? = null,
     val defaultFrequencyHz: Long? = null,
     val lowFrequencyHz: Long? = null,
@@ -70,9 +73,9 @@ data class DeviceSettingsPatch(
             patternText = patternText ?: base.patternText,
             idCodeSpeedWpm = idCodeSpeedWpm ?: base.idCodeSpeedWpm,
             patternCodeSpeedWpm = patternCodeSpeedWpm ?: base.patternCodeSpeedWpm,
-            currentTimeCompact = currentTimeCompact ?: base.currentTimeCompact,
-            startTimeCompact = startTimeCompact ?: base.startTimeCompact,
-            finishTimeCompact = finishTimeCompact ?: base.finishTimeCompact,
+            currentTimeCompact = if (currentTimeObserved) currentTimeCompact else base.currentTimeCompact,
+            startTimeCompact = if (startTimeObserved) startTimeCompact else base.startTimeCompact,
+            finishTimeCompact = if (finishTimeObserved) finishTimeCompact else base.finishTimeCompact,
             daysToRun = daysToRun ?: base.daysToRun,
             defaultFrequencyHz = defaultFrequencyHz ?: base.defaultFrequencyHz,
             lowFrequencyHz = lowFrequencyHz ?: base.lowFrequencyHz,
@@ -212,6 +215,7 @@ object SignalSlingerProtocolCodec {
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
                     currentTimeCompact = parseFirmwareDisplayTime(match.groupValues[1]),
+                    currentTimeObserved = true,
                 ),
             )
         }
@@ -220,6 +224,7 @@ object SignalSlingerProtocolCodec {
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
                     startTimeCompact = parseFirmwareDisplayTime(match.groupValues[1]),
+                    startTimeObserved = true,
                 ),
             )
         }
@@ -228,6 +233,7 @@ object SignalSlingerProtocolCodec {
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
                     finishTimeCompact = parseFirmwareDisplayTime(match.groupValues[1]),
+                    finishTimeObserved = true,
                 ),
             )
         }

@@ -96,10 +96,10 @@ object SignalSlingerFirmwareSupport {
         "BAT",
         "TMP",
         // NOTE: SignalSlinger firmware 1.2.0 and earlier needs the no-arg FUN read to collect
-        // Cur/Max/Min temperature values. Firmware 1.2.1 and later moved the full temperature
-        // report to TMP with no arguments, so FUN should no longer be used there. This area is
-        // tightly coupled to firmware behavior and more likely than most other commands to change
-        // or be deprecated, so re-check the serial report contract before editing it.
+        // Cur/Max/Min temperature values. Firmware 1.2.1 moved the full temperature report to TMP
+        // with no arguments, but observed 1.2.1 hardware does not refresh the sensor value on each
+        // read. Keep logging support separate from readback support so the app does not record
+        // misleading repeated temperature samples.
         "FUN",
     )
     private val modern121LoadCommands = modern120LoadCommands - "FUN"
@@ -136,11 +136,12 @@ object SignalSlingerFirmwareSupport {
     )
 
     private val modern121Profile = SignalSlingerFirmwareProfile(
-        id = "modern-1.2.1+",
+        id = "modern-1.2.1",
         minimumVersion = SignalSlingerFirmwareVersion(1, 2, 1),
         capabilities = DeviceCapabilities(
             supportsTemperatureReadback = true,
             supportsExtendedTemperatureReadback = true,
+            supportsTemperatureLogging = false,
             supportsExternalBatteryControl = true,
             supportsPatternEditing = true,
             supportsScheduling = true,
@@ -151,6 +152,14 @@ object SignalSlingerFirmwareSupport {
         verificationReadbackCommands = sharedVerificationReadbackCommands,
     )
 
+    private val modern122Profile = modern121Profile.copy(
+        id = "modern-1.2.2+",
+        minimumVersion = SignalSlingerFirmwareVersion(1, 2, 2),
+        capabilities = modern121Profile.capabilities.copy(
+            supportsTemperatureLogging = true,
+        ),
+    )
+
     fun resolve(softwareVersion: String?): SignalSlingerFirmwareProfile {
         val parsedVersion = SignalSlingerFirmwareVersion.parse(softwareVersion)
         if (parsedVersion == null) {
@@ -158,6 +167,7 @@ object SignalSlingerFirmwareSupport {
         }
 
         return when {
+            parsedVersion >= SignalSlingerFirmwareVersion(1, 2, 2) -> modern122Profile
             parsedVersion >= SignalSlingerFirmwareVersion(1, 2, 1) -> modern121Profile
             parsedVersion >= SignalSlingerFirmwareVersion(1, 2) -> modern120Profile
             else -> legacyProfile

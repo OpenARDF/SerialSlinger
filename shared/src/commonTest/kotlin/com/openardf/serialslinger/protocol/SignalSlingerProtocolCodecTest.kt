@@ -65,6 +65,22 @@ class SignalSlingerProtocolCodecTest {
     }
 
     @Test
+    fun notSetClockRepliesClearExistingScheduleTimes() {
+        val settings = sampleSettings().copy(
+            currentTimeCompact = "260430073600",
+            startTimeCompact = "260430143000",
+            finishTimeCompact = "260430203000",
+        )
+        val currentUpdate = SignalSlingerProtocolCodec.parseReportLine("* Time:not set")
+        val startUpdate = SignalSlingerProtocolCodec.parseReportLine("* Start:not set")
+        val finishUpdate = SignalSlingerProtocolCodec.parseReportLine("* Finish:not set")
+
+        assertNull(currentUpdate?.settingsPatch?.applyTo(settings)?.currentTimeCompact)
+        assertNull(startUpdate?.settingsPatch?.applyTo(settings)?.startTimeCompact)
+        assertNull(finishUpdate?.settingsPatch?.applyTo(settings)?.finishTimeCompact)
+    }
+
+    @Test
     fun parsesTemperatureReplyIntoDeviceStatus() {
         val update = SignalSlingerProtocolCodec.parseReportLine("* Temp: 42.5C")
 
