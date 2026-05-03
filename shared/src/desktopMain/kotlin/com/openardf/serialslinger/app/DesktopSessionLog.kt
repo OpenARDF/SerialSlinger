@@ -7,7 +7,9 @@ import java.nio.file.StandardOpenOption
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 enum class DesktopLogCategory(
     val label: String,
@@ -24,6 +26,13 @@ data class DesktopLogEntry(
     val timestampMs: Long = System.currentTimeMillis(),
 )
 
+data class DesktopTemperatureLogFile(
+    val path: Path,
+    val name: String,
+    val sizeBytes: Long,
+    val lastModifiedMs: Long,
+)
+
 class DesktopSessionLog(
     private val rootDirectory: Path = defaultLogDirectory(),
     private val clock: Clock = Clock.systemDefaultZone(),
@@ -31,7 +40,9 @@ class DesktopSessionLog(
     private val platformLabel: String = defaultPlatformLabel(),
 ) {
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
+    private val dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+    private var temperatureLogFile: Path? = null
 
     fun logDirectory(): Path {
         Files.createDirectories(rootDirectory)
@@ -39,8 +50,37 @@ class DesktopSessionLog(
     }
 
     fun currentLogFile(): Path {
+        temperatureLogFile?.let { return it }
         val date = LocalDate.now(clock).format(dateFormatter)
         return logDirectory().resolve("serialslinger-$date.log")
+    }
+
+    fun beginTemperatureLog(): Path {
+        archiveCurrentLog()
+        val file = logDirectory().resolve("serialslinger-temperature-${LocalDateTime.now(clock).format(dateTimeFormatter)}.csv")
+        Files.writeString(file, "timestamp,temperature_c,external_battery_v,internal_battery_v\n", StandardOpenOption.CREATE_NEW)
+        temperatureLogFile = file
+        return file
+    }
+
+    fun endTemperatureLog(): Path {
+        temperatureLogFile = null
+        archiveCurrentLog()
+        return ensureCurrentLogFile()
+    }
+
+    fun appendTemperatureSample(
+        timestamp: LocalDateTime,
+        temperatureC: Double?,
+        externalBatteryVolts: Double?,
+        internalBatteryVolts: Double?,
+    ) {
+        val file = temperatureLogFile ?: return
+        val line = "${timestamp.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)}," +
+            "${temperatureC?.let { String.format(Locale.US, "%.1f", it) }.orEmpty()}," +
+            "${externalBatteryVolts?.let { String.format(Locale.US, "%.1f", it) }.orEmpty()}," +
+            "${internalBatteryVolts?.let { String.format(Locale.US, "%.1f", it) }.orEmpty()}\n"
+        Files.writeString(file, line, StandardOpenOption.APPEND)
     }
 
     fun loadCurrentLogText(): String {
@@ -52,7 +92,20 @@ class DesktopSessionLog(
         return Files.readString(file)
     }
 
+    fun ensureCurrentLogFile(): Path {
+        val file = currentLogFile()
+        if (!Files.exists(file)) {
+            Files.writeString(file, renderHeader(), StandardOpenOption.CREATE_NEW)
+        } else {
+            ensureHeaderAtTop(file)
+        }
+        return file
+    }
+
     fun appendSection(title: String, entries: List<DesktopLogEntry>): String {
+        if (temperatureLogFile != null) {
+            return ""
+        }
         val file = currentLogFile()
         val header = headerTextIfNeeded(file)
         val rendered = renderSection(title, entries)
@@ -95,12 +148,47 @@ class DesktopSessionLog(
 
         Files.list(directory).use { paths ->
             val logFiles = paths
-                .filter { Files.isRegularFile(it) && it.fileName.toString().startsWith("serialslinger-") && it.fileName.toString().endsWith(".log") }
+                .filter {
+                    val name = it.fileName.toString()
+                    Files.isRegularFile(it) &&
+                        name.startsWith("serialslinger-") &&
+                        (name.endsWith(".log") || name.endsWith(".csv"))
+                }
                 .toList()
 
             logFiles.forEach(Files::deleteIfExists)
             return logFiles.size
         }
+    }
+
+    fun listTemperatureLogFiles(): List<DesktopTemperatureLogFile> {
+        return temperatureLogFiles()
+            .sortedByDescending { Files.getLastModifiedTime(it).toMillis() }
+            .map { file ->
+                DesktopTemperatureLogFile(
+                    path = file,
+                    name = file.fileName.toString(),
+                    sizeBytes = Files.size(file),
+                    lastModifiedMs = Files.getLastModifiedTime(file).toMillis(),
+                )
+            }
+    }
+
+    fun deleteTemperatureLog(path: Path): Boolean {
+        val file = path.normalize()
+        if (!isTemperatureLogFile(file) || file.parent != logDirectory()) {
+            return false
+        }
+        if (temperatureLogFile?.normalize() == file) {
+            return false
+        }
+        return Files.deleteIfExists(file)
+    }
+
+    fun deleteAllTemperatureLogs(): Int {
+        return temperatureLogFiles()
+            .filter { file -> temperatureLogFile?.normalize() != file.normalize() }
+            .count { file -> Files.deleteIfExists(file) }
     }
 
     fun renderSection(title: String, entries: List<DesktopLogEntry>): String {
@@ -158,6 +246,25 @@ class DesktopSessionLog(
             .atZone(clock.zone)
             .toLocalTime()
             .format(timeFormatter)
+    }
+
+    private fun temperatureLogFiles(): List<Path> {
+        val directory = logDirectory()
+        if (!Files.exists(directory)) {
+            return emptyList()
+        }
+        Files.list(directory).use { paths ->
+            return paths
+                .filter(::isTemperatureLogFile)
+                .toList()
+        }
+    }
+
+    private fun isTemperatureLogFile(file: Path): Boolean {
+        val name = file.fileName.toString()
+        return Files.isRegularFile(file) &&
+            name.startsWith("serialslinger-temperature-") &&
+            name.endsWith(".csv")
     }
 
     private fun nextArchiveFile(currentFile: Path): Path {

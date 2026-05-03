@@ -23,6 +23,7 @@ import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
+import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
@@ -40,6 +41,7 @@ import com.openardf.serialslinger.transport.DeviceTransport
 import java.io.File
 import java.time.Duration
 import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.CountDownLatch
 import kotlin.concurrent.thread
 import kotlin.math.abs
@@ -79,6 +81,7 @@ data class AndroidUiState(
     val clockPhaseErrorMillis: Long?,
     val hasClockPhaseWarning: Boolean,
     val canClone: Boolean,
+    val temperatureLoggingEnabled: Boolean,
 )
 
 private data class ScheduleImpactSummary(
@@ -231,6 +234,8 @@ object AndroidSessionController {
     private var pendingTimelyReplyWarning: String? = null
     private var pendingEventPauseRequest: EventPauseRequest? = null
     private var nextEventPauseRequestId: Long = 1L
+    private var temperatureLoggingEnabled: Boolean = false
+    private var temperatureLoggingThread: Thread? = null
 
     fun initialize(context: Context) {
         synchronized(this) {
@@ -292,6 +297,7 @@ object AndroidSessionController {
                 clockPhaseErrorMillis = currentClockSkewMillisLocked(),
                 hasClockPhaseWarning = hasClockPhaseWarningLocked(),
                 canClone = canCloneLocked(),
+                temperatureLoggingEnabled = temperatureLoggingEnabled,
             )
         }
     }
@@ -1518,6 +1524,94 @@ object AndroidSessionController {
         }
     }
 
+    fun runThermalShutdownThresholdSubmit(
+        context: Context,
+        thresholdCelsius: Int,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<Unit>) -> Unit)? = null,
+    ) {
+        val validatedThreshold = try {
+            ThermalShutdownSupport.validateCelsius(thresholdCelsius)
+        } catch (error: IllegalArgumentException) {
+            emitCommandLog("set-thermal-threshold", source, success = false, summary = error.message.orEmpty())
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+        val snapshot = sessionState?.snapshot
+        if (sessionState == null || snapshot == null) {
+            val error = IllegalStateException("Load a SignalSlinger snapshot before setting Thermal Shutdown Threshold.")
+            emitCommandLog("set-thermal-threshold", source, success = false, summary = error.message.orEmpty())
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+        if (!snapshot.capabilities.supportsExtendedTemperatureReadback) {
+            val error = IllegalStateException("Thermal Shutdown Threshold is not supported by the loaded snapshot.")
+            emitCommandLog("set-thermal-threshold", source, success = false, summary = error.message.orEmpty())
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        synchronized(this) {
+            latestSubmitSummary = "Submitting Thermal Shutdown Threshold update..."
+            statusText = "Submitting Thermal Shutdown Threshold update..."
+            statusIsError = false
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-thermal-threshold-submit") {
+            var traceEntries: List<SerialTraceEntry> = emptyList()
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                val command = ThermalShutdownSupport.commandForCelsius(validatedThreshold)
+                val sentAtMs = System.currentTimeMillis()
+                transport.sendCommands(listOf(command))
+                val responseLines = transport.readAvailableLines()
+                val receivedAtMs = System.currentTimeMillis()
+                traceEntries = listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)) +
+                    responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) }
+                val nextState = DeviceSessionWorkflow.ingestReportLines(sessionState, responseLines)
+                val reportedThreshold = nextState.snapshot?.status?.thermalShutdownThresholdC?.toInt()
+                require(reportedThreshold == validatedThreshold) {
+                    "Thermal Shutdown Threshold verification failed."
+                }
+                synchronized(this) {
+                    latestSessionViewState = AndroidSessionViewState(nextState, traceEntries)
+                    rememberLoadedTargetLocked(target)
+                    applySnapshotDrafts(nextState.snapshot, refreshClockDisplayAnchor = false)
+                    latestSubmitSummary = "Thermal Shutdown Threshold updated to $validatedThreshold C."
+                    latestProbeSummary = "Latest load remains available above. Thermal Shutdown Threshold submission completed."
+                    statusText = "Thermal Shutdown Threshold updated."
+                    statusIsError = false
+                }
+            }
+
+            if (result.isFailure) {
+                synchronized(this) {
+                    latestSubmitSummary = "Submit failed.\n${result.exceptionOrNull()?.message ?: "Unknown error"}"
+                    statusText = "Thermal Shutdown Threshold update failed."
+                    statusIsError = true
+                }
+            }
+            emitCommandLog(
+                command = "set-thermal-threshold",
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = traceEntries,
+            )
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(result.map { }) } }
+        }
+    }
+
     fun runPatternSpeedSubmit(
         context: Context,
         patternSpeedWpmText: String,
@@ -1547,21 +1641,6 @@ object AndroidSessionController {
         val editableSettings = sessionState?.editableSettings
         if (sessionState == null || snapshot == null || editableSettings == null) {
             val error = IllegalStateException("Load a SignalSlinger snapshot before submitting changes.")
-            synchronized(this) {
-                latestSubmitSummary = "Submit failed.\n${error.message}"
-                statusText = "Pattern Speed update failed."
-                statusIsError = true
-            }
-            emitCommandLog("set-pattern-speed", source, success = false, summary = error.message.orEmpty())
-            notifyListeners()
-            onComplete?.let { callback ->
-                mainHandler.post { callback(Result.failure(error)) }
-            }
-            return
-        }
-
-        if (snapshot.settings.eventType != EventType.FOXORING) {
-            val error = IllegalStateException("Pattern Speed editing is currently limited to FOXORING snapshots.")
             synchronized(this) {
                 latestSubmitSummary = "Submit failed.\n${error.message}"
                 statusText = "Pattern Speed update failed."
@@ -3591,6 +3670,30 @@ object AndroidSessionController {
         }
     }
 
+    fun temperatureLogFiles(): List<AndroidTemperatureLogFile> {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return emptyList()
+        return log.listTemperatureLogFiles()
+    }
+
+    fun deleteTemperatureLog(name: String): Boolean {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return false
+        return log.deleteTemperatureLog(name)
+    }
+
+    fun deleteAllTemperatureLogs(): Int {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return 0
+        return log.deleteAllTemperatureLogs()
+    }
+
     fun clearSessionLogs(): String {
         val log =
             synchronized(this) {
@@ -3610,6 +3713,136 @@ object AndroidSessionController {
                 sessionLog
             } ?: return null
         return log.ensureCurrentLogFile()
+    }
+
+    fun setTemperatureLoggingEnabled(
+        context: Context,
+        enabled: Boolean,
+        requestedDeviceName: String? = null,
+    ) {
+        val log = synchronized(this) { sessionLog } ?: return
+        var shouldNotifyOnly = false
+        if (enabled) {
+            synchronized(this) {
+                if (temperatureLoggingEnabled) {
+                    return
+                }
+                if (latestSessionViewState?.state?.snapshot == null || latestLoadedTarget == null) {
+                    statusText = "Load a SignalSlinger before logging temperature."
+                    statusIsError = true
+                    shouldNotifyOnly = true
+                } else if (latestSessionViewState?.state?.snapshot?.capabilities?.supportsTemperatureLogging != true) {
+                    statusText = "Temperature logging is not supported by the attached firmware."
+                    statusIsError = true
+                    shouldNotifyOnly = true
+                } else {
+                    temperatureLoggingEnabled = true
+                    statusText = "Temperature logging in progress."
+                    statusIsError = false
+                    log.beginTemperatureLog()
+                    temperatureLoggingThread = thread(name = "serialslinger-android-temperature-log") {
+                        runTemperatureLogLoop(context.applicationContext, requestedDeviceName)
+                    }
+                }
+            }
+            if (shouldNotifyOnly) {
+                notifyListeners()
+                return
+            }
+        } else {
+            synchronized(this) {
+                if (!temperatureLoggingEnabled) {
+                    return
+                }
+                temperatureLoggingEnabled = false
+                temperatureLoggingThread = null
+                log.endTemperatureLog()
+                statusText = "Temperature logging deactivated."
+                statusIsError = false
+            }
+        }
+        notifyListeners()
+    }
+
+    private fun runTemperatureLogLoop(context: Context, requestedDeviceName: String?) {
+        var nextSampleTime = LocalDateTime.now().withNano(0).plusSeconds(1)
+        while (synchronized(this) { temperatureLoggingEnabled }) {
+            sleepUntil(nextSampleTime)
+            if (!synchronized(this) { temperatureLoggingEnabled }) {
+                return
+            }
+            val sampleTime = nextSampleTime
+            val sample = runTemperatureSample(context, requestedDeviceName)
+            synchronized(this) {
+                sessionLog?.appendTemperatureSample(
+                    timestamp = sampleTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+                    temperatureC = sample.getOrNull()?.temperatureC,
+                    externalBatteryVolts = sample.getOrNull()?.externalBatteryVolts,
+                    internalBatteryVolts = sample.getOrNull()?.internalBatteryVolts,
+                )
+                if (sample.isFailure) {
+                    statusText = "Temperature logging failed: ${sample.exceptionOrNull()?.message ?: "Unknown error"}"
+                    statusIsError = true
+                }
+            }
+            notifyListeners()
+            nextSampleTime = nextSampleTime.plusSeconds(10)
+        }
+    }
+
+    private fun sleepUntil(target: LocalDateTime) {
+        while (true) {
+            val remainingMillis = Duration.between(LocalDateTime.now(), target).toMillis()
+            if (remainingMillis <= 0L) {
+                return
+            }
+            Thread.sleep(remainingMillis.coerceAtMost(1_000L))
+        }
+    }
+
+    private data class TemperatureLogSample(
+        val temperatureC: Double?,
+        val externalBatteryVolts: Double?,
+        val internalBatteryVolts: Double?,
+    )
+
+    private fun runTemperatureSample(context: Context, requestedDeviceName: String?): Result<TemperatureLogSample> {
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+            ?: return Result.failure(IllegalStateException("Load a SignalSlinger before logging temperature."))
+        return runWithResolvedTransport(
+            context = context,
+            requestedDeviceName = requestedDeviceName,
+            requestedTarget = null,
+            allowUsbAutoDetect = false,
+            missingMessage = "SignalSlinger is no longer connected.",
+        ) { target, transport ->
+            val tmpCommand = "TMP"
+            val batCommand = "BAT"
+            val tmpSentAtMs = System.currentTimeMillis()
+            transport.sendCommands(listOf(tmpCommand))
+            val tmpLines = transport.readAvailableLines()
+            val stateAfterTemperature = DeviceSessionWorkflow.ingestReportLines(sessionState, tmpLines)
+            val batSentAtMs = System.currentTimeMillis()
+            transport.sendCommands(listOf(batCommand))
+            val batLines = transport.readAvailableLines()
+            val nextState = DeviceSessionWorkflow.ingestReportLines(stateAfterTemperature, batLines)
+            synchronized(this) {
+                latestSessionViewState = AndroidSessionViewState(
+                    state = nextState,
+                    traceEntries = listOf(SerialTraceEntry(tmpSentAtMs, SerialTraceDirection.TX, tmpCommand)) +
+                        tmpLines.map { line -> SerialTraceEntry(System.currentTimeMillis(), SerialTraceDirection.RX, line) } +
+                        listOf(SerialTraceEntry(batSentAtMs, SerialTraceDirection.TX, batCommand)) +
+                        batLines.map { line -> SerialTraceEntry(System.currentTimeMillis(), SerialTraceDirection.RX, line) },
+                )
+                rememberLoadedTargetLocked(target)
+                applySnapshotDrafts(nextState.snapshot, refreshClockDisplayAnchor = false)
+            }
+            TemperatureLogSample(
+                temperatureC = nextState.snapshot?.status?.temperatureC,
+                externalBatteryVolts = nextState.snapshot?.status?.externalBatteryVolts,
+                internalBatteryVolts = nextState.snapshot?.status?.internalBatteryVolts,
+            )
+        }
     }
 
     fun logAppEvent(

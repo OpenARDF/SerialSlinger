@@ -418,6 +418,34 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun submitEditsUsesClassicPatternSpeedWriteAndReadbackCommands() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "SPD P 8" to listOf("* PAT SPD:8 WPM"),
+                "SPD P" to listOf("* PAT SPD:8 WPM"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                eventType = EventType.CLASSIC,
+                patternCodeSpeedWpm = 12,
+            ),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
+            patternCodeSpeedWpm = SettingsField("patternCodeSpeedWpm", "Pattern Speed", 12, 8),
+        )
+
+        val result = DeviceSessionController.submitEdits(connected.state, editable, transport)
+
+        assertEquals(listOf("SPD P 8"), result.commandsSent)
+        assertEquals(listOf("SPD P"), result.readbackCommandsSent)
+        assertEquals(listOf("SPD P 8", "SPD P"), transport.sentCommands)
+        assertTrue(result.verifications.all { it.observedInReadback && it.verified })
+    }
+
+    @Test
     fun submitEditsUsesFullReloadVerificationForFinishTime() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(

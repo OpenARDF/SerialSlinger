@@ -61,6 +61,7 @@ enum class ExternalBatteryControlMode(
 data class DeviceCapabilities(
     val supportsTemperatureReadback: Boolean = false,
     val supportsExtendedTemperatureReadback: Boolean = false,
+    val supportsTemperatureLogging: Boolean = false,
     val supportsExternalBatteryControl: Boolean = false,
     val supportsPatternEditing: Boolean = false,
     val supportsScheduling: Boolean = false,

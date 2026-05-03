@@ -83,12 +83,17 @@ import com.openardf.serialslinger.model.StartTimeDaysToRunChoice
 import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
 import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
+import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.transport.AndroidUsbDeviceDescriptor
 import com.openardf.serialslinger.transport.AndroidUsbTransport
 import com.openardf.serialslinger.transport.SignalSlingerReadPlan
+import java.io.File
+import java.text.SimpleDateFormat
 import java.time.Duration
 import java.time.LocalDateTime
+import java.util.Date
+import java.util.Locale
 import java.util.WeakHashMap
 import kotlin.math.abs
 
@@ -155,6 +160,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var rawSerialVisible: Boolean = true
     private var systemTimeVisible: Boolean = false
     private var deviceDataVisible: Boolean = true
+    private var advancedModeEnabled: Boolean = false
     private val autoDetectHandler = Handler(Looper.getMainLooper())
     private val clockDisplayHandler = Handler(Looper.getMainLooper())
     private var autoDetectGeneration: Int = 0
@@ -319,6 +325,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         rawSerialVisible = uiPreferences.getBoolean(PREF_RAW_SERIAL_VISIBLE, true)
         systemTimeVisible = uiPreferences.getBoolean(PREF_SYSTEM_TIME_VISIBLE, false)
         deviceDataVisible = uiPreferences.getBoolean(PREF_DEVICE_DATA_VISIBLE, true)
+        advancedModeEnabled = uiPreferences.getBoolean(PREF_ADVANCED_MODE_ENABLED, false)
         frequencyDisplayUnit =
             AndroidFrequencyDisplayUnit.valueOf(
                 uiPreferences.getString(PREF_FREQUENCY_DISPLAY_UNIT, AndroidFrequencyDisplayUnit.MHZ.name)
@@ -1678,12 +1685,34 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         if (temperatureReadbackSupported) {
             applyTemperatureRowAppearance(minimumTemperatureLabelView, minimumTemperatureField, loadedStatus?.minimumTemperatureC)
         }
-        deviceDataCard.addView(
+        val thermalThresholdText = formatTemperatureForDeviceData(loadedStatus?.thermalShutdownThresholdC, extendedTemperatureReadbackSupported)
+        val thermalThresholdField =
+            if (advancedModeEnabled && extendedTemperatureReadbackSupported) {
+                pickerField(
+                    text = thermalThresholdText,
+                    hint = "Thermal Shutdown Threshold",
+                    actionLabel = "Thermal Shutdown Threshold",
+                ) {
+                    showThermalShutdownThresholdDialog(loadedStatus?.thermalShutdownThresholdC)
+                }
+            } else {
+                readOnlyField(thermalThresholdText)
+            }
+        var thermalThresholdLabelView: TextView? = null
+        val thermalThresholdRow =
             compactLabeledRow(
                 "Thermal Shutdown Threshold",
-                readOnlyField(formatTemperatureForDeviceData(loadedStatus?.thermalShutdownThresholdC, extendedTemperatureReadbackSupported)),
+                thermalThresholdField,
                 labelWidthDp = 132,
-            ),
+                captureLabelView = { thermalThresholdLabelView = it },
+            )
+        if (advancedModeEnabled && extendedTemperatureReadbackSupported) {
+            val clickListener = View.OnClickListener { showThermalShutdownThresholdDialog(loadedStatus?.thermalShutdownThresholdC) }
+            thermalThresholdLabelView?.setOnClickListener(clickListener)
+            thermalThresholdRow.setOnClickListener(clickListener)
+        }
+        deviceDataCard.addView(
+            thermalThresholdRow,
         )
         installTemperatureDisplayUnitToggle(currentTemperatureField, currentTemperatureLabelView, currentTemperatureRow)
         deviceDataCard.addView(
@@ -3900,15 +3929,24 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun showToolsDialog(uiState: AndroidUiState) {
+        data class ToolOption(
+            val label: String,
+            val advancedModeItem: Boolean = false,
+            val action: () -> Unit,
+        )
+
         val options =
-            buildList<Pair<String, () -> Unit>> {
+            buildList<ToolOption> {
                 if (isRunningInAndroidEmulator()) {
                     add(
-                        (if (isEmulatorDirectSerialTarget(uiState.latestLoadedTarget)) {
-                            "Refresh Emulator SignalSlinger"
-                        } else {
-                            "Load Emulator SignalSlinger"
-                        }) to {
+                        ToolOption(
+                            label =
+                                if (isEmulatorDirectSerialTarget(uiState.latestLoadedTarget)) {
+                                    "Refresh Emulator SignalSlinger"
+                                } else {
+                                    "Load Emulator SignalSlinger"
+                                },
+                        ) {
                             AndroidSessionController.runProbe(
                                 context = applicationContext,
                                 requestedTargets = emulatorDirectSerialTargets(),
@@ -3917,39 +3955,124 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         },
                     )
                 }
-                add("Send Command To SignalSlinger" to {
-                    showSendCommandDialog(uiState)
-                })
-                add("View Android Session Log" to {
-                    showLargeTextDialog(
-                        title = "Android Session Log",
-                        text = AndroidSessionController.debugSessionLogSummary(),
-                        colorizeLogCategories = true,
+                add(
+                    ToolOption("Send Command To SignalSlinger") {
+                        showSendCommandDialog(uiState)
+                    },
+                )
+                add(
+                    ToolOption("View Android Session Log") {
+                        showLargeTextDialog(
+                            title = "Android Session Log",
+                            text = AndroidSessionController.debugSessionLogSummary(),
+                            colorizeLogCategories = true,
+                        )
+                    },
+                )
+                add(
+                    ToolOption("Email Android Session Log") {
+                        emailAndroidSessionLog()
+                    },
+                )
+                add(
+                    ToolOption("Clear Android Session Logs") {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Clear Android Session Logs")
+                            .setMessage("Delete all current SerialSlinger log files stored by this Android app?")
+                            .setPositiveButton("Delete") { _, _ ->
+                                val message = AndroidSessionController.clearSessionLogs()
+                                AndroidSessionController.recordStatus(message, isError = false)
+                                showLargeTextDialog("Android Session Logs", message)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .showLogged("Clear Android Session Logs")
+                    },
+                )
+                if (advancedModeEnabled) {
+                    add(
+                        ToolOption("Disable Advanced Mode", advancedModeItem = true) {
+                            setAdvancedModeEnabled(false)
+                        },
                     )
-                })
-                add("Email Android Session Log" to {
-                    emailAndroidSessionLog()
-                })
-                add("Clear Android Session Logs" to {
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Clear Android Session Logs")
-                        .setMessage("Delete all current SerialSlinger log files stored by this Android app?")
-                        .setPositiveButton("Delete") { _, _ ->
-                            val message = AndroidSessionController.clearSessionLogs()
-                            AndroidSessionController.recordStatus(message, isError = false)
-                            showLargeTextDialog("Android Session Logs", message)
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .showLogged("Clear Android Session Logs")
-                })
+                    add(
+                        ToolOption("Temperature Logs", advancedModeItem = true) {
+                            showTemperatureLogsDialog()
+                        },
+                    )
+                    add(
+                        ToolOption(
+                            label =
+                                if (uiState.temperatureLoggingEnabled) {
+                                    "Stop Logging Temperature"
+                                } else {
+                                    "Log Temperature"
+                                },
+                            advancedModeItem = true,
+                        ) {
+                            if (!uiState.temperatureLoggingEnabled && !temperatureLoggingSupported(uiState)) {
+                                showTemperatureLoggingUnsupportedDialog(uiState)
+                                return@ToolOption
+                            }
+                            AndroidSessionController.setTemperatureLoggingEnabled(
+                                context = applicationContext,
+                                enabled = !uiState.temperatureLoggingEnabled,
+                            )
+                            renderContent()
+                        },
+                    )
+                } else {
+                    add(
+                        ToolOption("Enable Advanced Mode...") {
+                            showEnableAdvancedModeDialog()
+                        },
+                    )
+                }
+            }
+        val adapter =
+            object : ArrayAdapter<ToolOption>(this, android.R.layout.simple_list_item_1, options) {
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                    val view = super.getView(position, convertView, parent)
+                    val textView = view.findViewById<TextView>(android.R.id.text1)
+                    val option = getItem(position)
+                    textView.text = option?.label.orEmpty()
+                    if (advancedModeEnabled && option?.advancedModeItem == true) {
+                        textView.setTextColor(Color.parseColor("#9E1C1C"))
+                        textView.setTypeface(Typeface.DEFAULT_BOLD)
+                    } else {
+                        textView.setTextColor(Color.parseColor("#1F1F1F"))
+                        textView.setTypeface(Typeface.DEFAULT)
+                    }
+                    return view
+                }
             }
         AlertDialog.Builder(this)
             .setTitle("Tools")
-            .setItems(options.map { it.first }.toTypedArray()) { _, which ->
-                options[which].second.invoke()
+            .setAdapter(adapter) { _, which ->
+                options[which].action.invoke()
             }
             .setNegativeButton("Close", null)
             .showLogged("Tools")
+    }
+
+    private fun temperatureLoggingSupported(uiState: AndroidUiState): Boolean {
+        return uiState.sessionViewState?.state?.snapshot?.capabilities?.supportsTemperatureLogging == true
+    }
+
+    private fun showTemperatureLoggingUnsupportedDialog(uiState: AndroidUiState) {
+        val version = uiState.sessionViewState?.state?.snapshot?.info?.softwareVersion?.takeIf { it.isNotBlank() } ?: "unknown"
+        val message =
+            "The attached SignalSlinger is running firmware $version.\n\n" +
+                "This firmware can report Device Data temperature values, but it does not refresh the temperature for reliable periodic logging.\n\n" +
+                "Temperature logging requires SignalSlinger firmware with live temperature logging support."
+        AndroidSessionController.recordStatus(
+            "Temperature logging is not supported by the attached firmware.",
+            isError = true,
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Temperature Logging Unavailable")
+            .setMessage(message)
+            .setPositiveButton("Close", null)
+            .showLogged("Temperature Logging Unavailable")
     }
 
     private fun isRunningInAndroidEmulator(): Boolean {
@@ -3973,6 +4096,216 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             product.contains("sdk") ||
             product.contains("emulator") ||
             product.contains("simulator")
+    }
+
+    private fun showEnableAdvancedModeDialog() {
+        val passcodeEditor =
+            EditText(this).apply {
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+                hint = "Pass code"
+                setSingleLine(true)
+            }
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Enable Advanced Mode")
+                .setMessage("Advanced settings can affect device protection behavior.")
+                .setView(passcodeEditor)
+                .setPositiveButton("Enable", null)
+                .setNegativeButton("Cancel", null)
+                .showLogged("Enable Advanced Mode")
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            if (passcodeEditor.text.toString().trim() == ThermalShutdownSupport.passcode) {
+                dialog.dismiss()
+                setAdvancedModeEnabled(true)
+            } else {
+                passcodeEditor.error = "Incorrect pass code"
+            }
+        }
+    }
+
+    private fun setAdvancedModeEnabled(enabled: Boolean) {
+        advancedModeEnabled = enabled
+        uiPreferences.edit().putBoolean(PREF_ADVANCED_MODE_ENABLED, enabled).apply()
+        if (!enabled && AndroidSessionController.snapshotUiState().temperatureLoggingEnabled) {
+            AndroidSessionController.setTemperatureLoggingEnabled(applicationContext, enabled = false)
+        }
+        AndroidSessionController.recordStatus(
+            if (enabled) "Advanced mode enabled." else "Advanced mode disabled.",
+            isError = false,
+        )
+        renderContent()
+    }
+
+    private fun showTemperatureLogsDialog() {
+        val logs = AndroidSessionController.temperatureLogFiles()
+        if (logs.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Temperature Logs")
+                .setMessage("No saved temperature logs were found.")
+                .setPositiveButton("Close", null)
+                .showLogged("Temperature Logs")
+            return
+        }
+        val options =
+            listOf("Share All Temperature Logs") +
+                logs.map { log -> formatTemperatureLogListLabel(log) } +
+                listOf("Delete All Temperature Logs...")
+        AlertDialog.Builder(this)
+            .setTitle("Temperature Logs")
+            .setItems(options.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> shareTemperatureLogs(logs.map { it.file })
+                    logs.size + 1 -> confirmDeleteAllTemperatureLogs()
+                    else -> showTemperatureLogActions(logs[which - 1])
+                }
+            }
+            .setNegativeButton("Close", null)
+            .showLogged("Temperature Logs")
+    }
+
+    private fun showTemperatureLogActions(log: AndroidTemperatureLogFile) {
+        AlertDialog.Builder(this)
+            .setTitle(log.name)
+            .setMessage(
+                buildString {
+                    appendLine("Modified: ${formatLogTimestamp(log.lastModifiedMs)}")
+                    append("Size: ${formatByteCount(log.sizeBytes)}")
+                },
+            )
+            .setItems(arrayOf("Share Temperature Log", "Delete Temperature Log")) { _, which ->
+                when (which) {
+                    0 -> shareTemperatureLogs(listOf(log.file))
+                    1 -> confirmDeleteTemperatureLog(log.name)
+                }
+            }
+            .setNegativeButton("Back") { _, _ -> showTemperatureLogsDialog() }
+            .showLogged("Temperature Log")
+    }
+
+    private fun shareTemperatureLogs(files: List<File>) {
+        val attachmentUris =
+            files.mapNotNull { file ->
+                runCatching {
+                    FileProvider.getUriForFile(
+                        this,
+                        "${BuildConfig.APPLICATION_ID}.fileprovider",
+                        file,
+                    )
+                }.getOrNull()
+            }
+
+        if (attachmentUris.size != files.size || attachmentUris.isEmpty()) {
+            AndroidSessionController.recordStatus("Could not prepare temperature log for sharing.", isError = true)
+            renderContent()
+            return
+        }
+
+        val intent =
+            if (attachmentUris.size == 1) {
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/csv"
+                    putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Temperature Log")
+                    putExtra(Intent.EXTRA_TEXT, "Temperature log attached.")
+                    putExtra(Intent.EXTRA_STREAM, attachmentUris.first())
+                    clipData = ClipData.newRawUri("SerialSlinger Temperature Log", attachmentUris.first())
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            } else {
+                Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                    type = "text/csv"
+                    putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Temperature Logs")
+                    putExtra(Intent.EXTRA_TEXT, "Temperature logs attached.")
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(attachmentUris))
+                    clipData = ClipData.newUri(contentResolver, "SerialSlinger Temperature Logs", attachmentUris.first())
+                    attachmentUris.drop(1).forEach { uri ->
+                        clipData?.addItem(ClipData.Item(uri))
+                    }
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }
+        try {
+            startActivity(Intent.createChooser(intent, "Share Temperature Logs"))
+        } catch (_: Throwable) {
+            AndroidSessionController.recordStatus("No app is available to share the temperature log.", isError = true)
+            renderContent()
+        }
+    }
+
+    private fun showThermalShutdownThresholdDialog(currentThresholdC: Double?) {
+        val celsiusOptions = ThermalShutdownSupport.minimumCelsius..ThermalShutdownSupport.maximumCelsius
+        val labels = celsiusOptions.map { "$it C" }.toTypedArray()
+        val currentValue = currentThresholdC?.toInt()?.coerceIn(celsiusOptions) ?: 50
+        AlertDialog.Builder(this)
+            .setTitle("Thermal Shutdown Threshold")
+            .setSingleChoiceItems(labels, currentValue - ThermalShutdownSupport.minimumCelsius) { dialog, which ->
+                val celsius = ThermalShutdownSupport.minimumCelsius + which
+                AndroidSessionController.runThermalShutdownThresholdSubmit(
+                    context = applicationContext,
+                    thresholdCelsius = celsius,
+                    source = "advanced",
+                ) {
+                    runOnUiThread { renderContent() }
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Thermal Shutdown Threshold")
+    }
+
+    private fun confirmDeleteTemperatureLog(name: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete Temperature Log")
+            .setMessage("Delete $name?")
+            .setPositiveButton("Delete") { _, _ ->
+                val deleted = AndroidSessionController.deleteTemperatureLog(name)
+                val message =
+                    if (deleted) {
+                        "Deleted $name."
+                    } else {
+                        "Could not delete $name. Stop temperature logging first if this file is active."
+                    }
+                AndroidSessionController.recordStatus(message, isError = !deleted)
+                showLargeTextDialog("Temperature Logs", message)
+            }
+            .setNegativeButton("Cancel") { _, _ -> showTemperatureLogsDialog() }
+            .showLogged("Delete Temperature Log")
+    }
+
+    private fun confirmDeleteAllTemperatureLogs() {
+        AlertDialog.Builder(this)
+            .setTitle("Delete All Temperature Logs")
+            .setMessage("Delete all saved SerialSlinger temperature CSV files stored by this Android app?")
+            .setPositiveButton("Delete") { _, _ ->
+                val deletedCount = AndroidSessionController.deleteAllTemperatureLogs()
+                val message =
+                    when (deletedCount) {
+                        0 -> "No saved temperature logs were deleted. Stop temperature logging first if the only file is active."
+                        1 -> "Deleted 1 temperature log."
+                        else -> "Deleted $deletedCount temperature logs."
+                    }
+                AndroidSessionController.recordStatus(message, isError = false)
+                showLargeTextDialog("Temperature Logs", message)
+            }
+            .setNegativeButton("Cancel") { _, _ -> showTemperatureLogsDialog() }
+            .showLogged("Delete All Temperature Logs")
+    }
+
+    private fun formatTemperatureLogListLabel(log: AndroidTemperatureLogFile): String {
+        return "${log.name}\n${formatLogTimestamp(log.lastModifiedMs)} - ${formatByteCount(log.sizeBytes)}"
+    }
+
+    private fun formatLogTimestamp(timestampMs: Long): String {
+        return SimpleDateFormat("MMM d, yyyy h:mm a", Locale.US).format(Date(timestampMs))
+    }
+
+    private fun formatByteCount(sizeBytes: Long): String {
+        val kb = 1024.0
+        val mb = kb * 1024.0
+        return when {
+            sizeBytes >= mb -> String.format(Locale.US, "%.1f MB", sizeBytes / mb)
+            sizeBytes >= kb -> String.format(Locale.US, "%.1f KB", sizeBytes / kb)
+            else -> "$sizeBytes B"
+        }
     }
 
     private fun emailAndroidSessionLog() {
@@ -5944,6 +6277,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val PREF_RAW_SERIAL_VISIBLE = "raw_serial_visible"
         private const val PREF_SYSTEM_TIME_VISIBLE = "system_time_visible"
         private const val PREF_DEVICE_DATA_VISIBLE = "device_data_visible"
+        private const val PREF_ADVANCED_MODE_ENABLED = "advanced_mode_enabled"
         private const val PREF_SCHEDULE_TIME_INPUT_MODE = "schedule_time_input_mode"
         private const val PREF_DEFAULT_EVENT_LENGTH_MINUTES = "default_event_length_minutes"
         private const val PREF_FREQUENCY_DISPLAY_UNIT = "frequency_display_unit"

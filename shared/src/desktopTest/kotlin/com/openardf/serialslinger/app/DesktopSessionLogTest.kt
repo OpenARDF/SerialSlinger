@@ -172,4 +172,49 @@ class DesktopSessionLogTest {
         assertFalse(Files.exists(directory.resolve("serialslinger-2026-04-10-1.log")))
         assertTrue(Files.exists(directory.resolve("notes.txt")))
     }
+
+    @Test
+    fun writesTemperatureLogWithInternalBatteryVoltageColumn() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val log = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+        )
+
+        val file = log.beginTemperatureLog()
+        log.appendTemperatureSample(
+            timestamp = java.time.LocalDateTime.parse("2026-04-10T14:22:40"),
+            temperatureC = 21.5,
+            externalBatteryVolts = 12.1,
+            internalBatteryVolts = 4.8,
+        )
+
+        assertEquals(
+            "timestamp,temperature_c,external_battery_v,internal_battery_v\n" +
+                "2026-04-10T14:22:40,21.5,12.1,4.8\n",
+            Files.readString(file),
+        )
+    }
+
+    @Test
+    fun listsAndDeletesTemperatureLogsOnly() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val log = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+        )
+        val directory = log.logDirectory()
+        val temperatureLog = directory.resolve("serialslinger-temperature-2026-04-10-142233.csv")
+        Files.writeString(temperatureLog, "temperature")
+        Files.writeString(directory.resolve("serialslinger-2026-04-10.log"), "daily")
+        Files.writeString(directory.resolve("notes.csv"), "keep")
+
+        val logs = log.listTemperatureLogFiles()
+
+        assertEquals(listOf("serialslinger-temperature-2026-04-10-142233.csv"), logs.map { it.name })
+        assertTrue(log.deleteTemperatureLog(temperatureLog))
+        assertFalse(Files.exists(temperatureLog))
+        assertTrue(Files.exists(directory.resolve("serialslinger-2026-04-10.log")))
+        assertTrue(Files.exists(directory.resolve("notes.csv")))
+    }
 }

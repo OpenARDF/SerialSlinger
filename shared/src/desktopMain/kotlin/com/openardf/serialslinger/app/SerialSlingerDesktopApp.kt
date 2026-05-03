@@ -22,6 +22,7 @@ import com.openardf.serialslinger.model.StartTimeDaysToRunChoice
 import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
 import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
+import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.model.hasWallClockTimeSet
@@ -64,11 +65,15 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.util.Calendar
 import java.util.Date
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.imageio.ImageIO
 import javax.swing.border.Border
 import javax.swing.AbstractButton
@@ -94,6 +99,7 @@ import javax.swing.JMenuBar
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JScrollPane
+import javax.swing.ListSelectionModel
 import javax.swing.JSplitPane
 import javax.swing.KeyStroke
 import javax.swing.JSpinner
@@ -390,6 +396,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private lateinit var scheduleTimeAbsoluteMenuItem: JRadioButtonMenuItem
     private lateinit var scheduleTimeRelativeMenuItem: JRadioButtonMenuItem
     private lateinit var defaultEventLengthMenuItem: JMenuItem
+    private lateinit var advancedModeMenuItem: JMenuItem
+    private lateinit var temperatureLogsMenuItem: JMenuItem
+    private lateinit var temperatureLogMenuItem: JCheckBoxMenuItem
+    private var temperatureLogTimer: Timer? = null
+    private val temperatureLogSampleInProgress = AtomicBoolean(false)
+    private var advancedDeviceDataTimer: Timer? = null
     private val headerLogStyle = SimpleAttributeSet().apply {
         StyleConstants.setForeground(this, Color(0x11, 0x18, 0x27))
         StyleConstants.setBold(this, true)
@@ -466,6 +478,24 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureInformationalField(maximumTemperatureField)
         configureInformationalField(maximumEverTemperatureField)
         configureInformationalField(thermalShutdownThresholdField)
+        thermalShutdownThresholdField.addMouseListener(
+            object : MouseAdapter() {
+                override fun mouseClicked(event: MouseEvent) {
+                    if (displayPreferences.advancedModeEnabled && thermalShutdownThresholdField.isEnabled) {
+                        showThermalShutdownThresholdDialog()
+                    }
+                }
+            },
+        )
+        thermalShutdownThresholdRowLabel.addMouseListener(
+            object : MouseAdapter() {
+                override fun mouseClicked(event: MouseEvent) {
+                    if (displayPreferences.advancedModeEnabled && thermalShutdownThresholdField.isEnabled) {
+                        showThermalShutdownThresholdDialog()
+                    }
+                }
+            },
+        )
         configureInformationalField(transmissionsField)
         configureNullableDateTimeSpinner(startTimeSpinner, startTimeStatusLabel)
         configureNullableDateTimeSpinner(finishTimeSpinner, finishTimeStatusLabel)
@@ -776,7 +806,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         addActionListener { setLogVisible(isSelected) }
                     }
                     add(showLogMenuItem)
-                    addSeparator()
                     add(
                         JMenuItem("Open Log Folder").apply {
                             addActionListener { openLogFolder() }
@@ -798,6 +827,26 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                             addActionListener { confirmAndDeleteAllLogs() }
                         },
                     )
+                    addSeparator()
+                    advancedModeMenuItem = JMenuItem().apply {
+                        addActionListener {
+                            if (displayPreferences.advancedModeEnabled) {
+                                setAdvancedModeEnabled(false)
+                            } else {
+                                showEnableAdvancedModeDialog()
+                            }
+                        }
+                    }
+                    add(advancedModeMenuItem)
+                    temperatureLogsMenuItem = JMenuItem("Temperature Logs").apply {
+                        addActionListener { showTemperatureLogsDialog() }
+                    }
+                    add(temperatureLogsMenuItem)
+                    temperatureLogMenuItem = JCheckBoxMenuItem("Log Temperature").apply {
+                        addActionListener { setTemperatureLoggingEnabled(isSelected) }
+                    }
+                    add(temperatureLogMenuItem)
+                    updateAdvancedMenuItems()
                 },
             )
         }
@@ -1650,6 +1699,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         currentState = updatedState
         loadedSnapshot = updatedState?.snapshot
+        updateAdvancedDeviceDataRefreshTimer()
         consecutiveDeviceTimeCheckNoResponseCount = 0
         clockPhaseWarningActive = false
         lastClockPhaseErrorMillis = null
@@ -5157,6 +5207,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         batteryThresholdField.isEnabled = writableEnabled
         batteryModeCombo.isEnabled = writableEnabled
         transmissionsField.isEnabled = true
+        val thermalThresholdEditable =
+            writableEnabled &&
+                displayPreferences.advancedModeEnabled &&
+                loadedSnapshot?.capabilities?.supportsExtendedTemperatureReadback == true
+        thermalShutdownThresholdField.isEnabled = thermalThresholdEditable
+        thermalShutdownThresholdRowLabel.isEnabled = thermalThresholdEditable
+        val thermalCursor =
+            if (thermalThresholdEditable) {
+                java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+            } else {
+                java.awt.Cursor.getDefaultCursor()
+            }
+        thermalShutdownThresholdField.cursor = thermalCursor
+        thermalShutdownThresholdRowLabel.cursor = thermalCursor
 
         daysField.isEnabled = schedulingFieldsEditable
         frequency1Field.isEnabled = writableEnabled
@@ -5276,6 +5340,109 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         temperatureFMenuItem.isSelected = unit == TemperatureDisplayUnit.FAHRENHEIT
         applySnapshotToForm(loadedSnapshot, recalculateClockOffset = false)
         setStatus("Temperature units set to ${if (unit == TemperatureDisplayUnit.CELSIUS) "Celsius" else "Fahrenheit"}.")
+    }
+
+    private fun showEnableAdvancedModeDialog() {
+        val passcode = JOptionPane.showInputDialog(
+            this,
+            "Advanced settings can affect device protection behavior.\n\nPass code:",
+            "Enable Advanced Mode",
+            JOptionPane.WARNING_MESSAGE,
+        ) ?: return
+        if (passcode.trim() == ThermalShutdownSupport.passcode) {
+            setAdvancedModeEnabled(true)
+        } else {
+            JOptionPane.showMessageDialog(this, "Incorrect pass code.", "Enable Advanced Mode", JOptionPane.WARNING_MESSAGE)
+        }
+    }
+
+    private fun setAdvancedModeEnabled(enabled: Boolean) {
+        displayPreferences = displayPreferences.copy(advancedModeEnabled = enabled)
+        if (!enabled) {
+            setTemperatureLoggingEnabled(false)
+        }
+        persistDisplayPreferences()
+        updateAdvancedMenuItems()
+        updateAdvancedDeviceDataRefreshTimer()
+        updateWritableControlAvailability(backgroundWorkInProgress)
+        setStatus(if (enabled) "Advanced mode enabled." else "Advanced mode disabled.")
+    }
+
+    private fun updateAdvancedMenuItems() {
+        val advancedColor = Color(0x9E, 0x1C, 0x1C)
+        val defaultMenuForeground = UIManager.getColor("MenuItem.foreground") ?: Color.BLACK
+        val defaultCheckBoxMenuForeground = UIManager.getColor("CheckBoxMenuItem.foreground") ?: defaultMenuForeground
+        val advancedEnabled = displayPreferences.advancedModeEnabled
+        if (::advancedModeMenuItem.isInitialized) {
+            advancedModeMenuItem.text =
+                if (advancedEnabled) "Disable Advanced Mode" else "Enable Advanced Mode..."
+            advancedModeMenuItem.foreground = if (advancedEnabled) advancedColor else defaultMenuForeground
+            advancedModeMenuItem.font =
+                if (advancedEnabled) {
+                    advancedModeMenuItem.font.deriveFont(advancedModeMenuItem.font.style or java.awt.Font.BOLD)
+                } else {
+                    advancedModeMenuItem.font.deriveFont(java.awt.Font.PLAIN)
+                }
+        }
+        if (::temperatureLogsMenuItem.isInitialized) {
+            temperatureLogsMenuItem.isVisible = advancedEnabled
+            temperatureLogsMenuItem.isEnabled = advancedEnabled
+            temperatureLogsMenuItem.foreground = if (advancedEnabled) advancedColor else defaultMenuForeground
+            temperatureLogsMenuItem.font =
+                if (advancedEnabled) {
+                    temperatureLogsMenuItem.font.deriveFont(temperatureLogsMenuItem.font.style or java.awt.Font.BOLD)
+                } else {
+                    temperatureLogsMenuItem.font.deriveFont(java.awt.Font.PLAIN)
+                }
+        }
+        if (::temperatureLogMenuItem.isInitialized) {
+            temperatureLogMenuItem.isEnabled = advancedEnabled
+            temperatureLogMenuItem.isSelected = temperatureLogTimer != null
+            temperatureLogMenuItem.foreground = if (advancedEnabled) advancedColor else defaultCheckBoxMenuForeground
+            temperatureLogMenuItem.font =
+                if (advancedEnabled) {
+                    temperatureLogMenuItem.font.deriveFont(temperatureLogMenuItem.font.style or java.awt.Font.BOLD)
+                } else {
+                    temperatureLogMenuItem.font.deriveFont(java.awt.Font.PLAIN)
+                }
+        }
+    }
+
+    private fun showThermalShutdownThresholdDialog() {
+        val snapshot = loadedSnapshot ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        if (!snapshot.capabilities.supportsExtendedTemperatureReadback) {
+            JOptionPane.showMessageDialog(this, "Thermal Shutdown Threshold is not supported by the loaded snapshot.")
+            return
+        }
+        val initial =
+            snapshot.status.thermalShutdownThresholdC
+                ?.toInt()
+                ?.coerceIn(ThermalShutdownSupport.minimumCelsius, ThermalShutdownSupport.maximumCelsius)
+                ?: 50
+        val model = SpinnerNumberModel(
+            initial,
+            ThermalShutdownSupport.minimumCelsius,
+            ThermalShutdownSupport.maximumCelsius,
+            1,
+        )
+        val spinner = JSpinner(model)
+        val result = JOptionPane.showConfirmDialog(
+            this,
+            arrayOf(
+                "Thermal Shutdown Threshold (${ThermalShutdownSupport.minimumCelsius}-${ThermalShutdownSupport.maximumCelsius} C):",
+                spinner,
+            ),
+            "Thermal Shutdown Threshold",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (result != JOptionPane.OK_OPTION) {
+            return
+        }
+        submitThermalShutdownThreshold(model.number.toInt())
     }
 
     private fun setTimeSetMode(mode: TimeSetMode) {
@@ -5707,6 +5874,174 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun submitThermalShutdownThreshold(thresholdCelsius: Int) {
+        val transport = currentTransport ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        val state = currentState ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        val command = ThermalShutdownSupport.commandForCelsius(thresholdCelsius)
+        runInBackground("Setting thermal shutdown threshold...") {
+            setBusyProgress(0, 1, commandProgressLabel(0, 1))
+            val sentAtMs = System.currentTimeMillis()
+            transport.sendCommands(listOf(command))
+            val responseLines = transport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
+            setBusyProgress(1, 1, commandProgressLabel(1, 1))
+            val nextState = DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+            val reportedThreshold = nextState.snapshot?.status?.thermalShutdownThresholdC?.toInt()
+            require(reportedThreshold == thresholdCelsius) {
+                "Thermal Shutdown Threshold verification failed."
+            }
+            currentState = nextState
+            loadedSnapshot = nextState.snapshot
+            SwingUtilities.invokeLater {
+                applySnapshotToForm(nextState.snapshot)
+                appendLog(
+                    "Thermal Shutdown Threshold",
+                    buildList {
+                        add(DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL, sentAtMs))
+                        responseLines.forEach { line ->
+                            add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, receivedAtMs))
+                        }
+                    },
+                )
+                setStatus("Thermal Shutdown Threshold updated.")
+            }
+        }
+    }
+
+    private fun setTemperatureLoggingEnabled(enabled: Boolean) {
+        if (enabled && temperatureLogTimer == null) {
+            if (currentTransport == null || currentState == null) {
+                JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+                updateAdvancedMenuItems()
+                return
+            }
+            val snapshot = loadedSnapshot
+            if (snapshot?.capabilities?.supportsTemperatureLogging != true) {
+                val version = snapshot?.info?.softwareVersion?.takeIf { it.isNotBlank() } ?: "unknown"
+                JOptionPane.showMessageDialog(
+                    this,
+                    "The attached SignalSlinger is running firmware $version.\n\n" +
+                        "This firmware can report Device Data temperature values, but it does not refresh the temperature " +
+                        "for reliable periodic logging.\n\n" +
+                        "Temperature logging requires SignalSlinger firmware with live temperature logging support.",
+                    "Temperature Logging Unavailable",
+                    JOptionPane.WARNING_MESSAGE,
+                )
+                setStatus("Temperature logging is not supported by the attached firmware.")
+                updateAdvancedMenuItems()
+                return
+            }
+            stopAdvancedDeviceDataRefreshTimer()
+            sessionLog.beginTemperatureLog()
+            temperatureLogTimer = Timer(10_000) {
+                captureTemperatureLogSample()
+            }.apply {
+                initialDelay = millisUntilNextSecond()
+                start()
+            }
+            setStatus("Temperature logging in progress.")
+        } else if (!enabled && temperatureLogTimer != null) {
+            temperatureLogTimer?.stop()
+            temperatureLogTimer = null
+            temperatureLogSampleInProgress.set(false)
+            sessionLog.endTemperatureLog()
+            refreshDisplayedLogFromDisk()
+            setStatus("Temperature logging deactivated.")
+            updateAdvancedDeviceDataRefreshTimer()
+        }
+        updateAdvancedMenuItems()
+    }
+
+    private fun captureTemperatureLogSample() {
+        captureDeviceDataSample(writeTemperatureLog = true)
+    }
+
+    private fun updateAdvancedDeviceDataRefreshTimer() {
+        val shouldRun =
+            displayPreferences.advancedModeEnabled &&
+                temperatureLogTimer == null &&
+                currentTransport != null &&
+                currentState?.connectionState == ConnectionState.CONNECTED
+        if (shouldRun) {
+            if (advancedDeviceDataTimer == null) {
+                advancedDeviceDataTimer = Timer(10_000) {
+                    captureDeviceDataSample(writeTemperatureLog = false)
+                }.apply {
+                    initialDelay = 0
+                    start()
+                }
+            }
+        } else {
+            stopAdvancedDeviceDataRefreshTimer()
+        }
+    }
+
+    private fun stopAdvancedDeviceDataRefreshTimer() {
+        advancedDeviceDataTimer?.stop()
+        advancedDeviceDataTimer = null
+    }
+
+    private fun captureDeviceDataSample(writeTemperatureLog: Boolean) {
+        if (!temperatureLogSampleInProgress.compareAndSet(false, true)) {
+            return
+        }
+        val transport = currentTransport
+        val state = currentState
+        if (transport == null || state == null) {
+            if (writeTemperatureLog) {
+                setTemperatureLoggingEnabled(false)
+            } else {
+                updateAdvancedDeviceDataRefreshTimer()
+            }
+            temperatureLogSampleInProgress.set(false)
+            return
+        }
+        Thread {
+            try {
+                val sampleTime = LocalDateTime.now().withNano(0)
+                transport.sendCommands(listOf("TMP"))
+                val temperatureLines = transport.readAvailableLines()
+                val stateAfterTemperature = DeviceSessionWorkflow.ingestReportLines(state, temperatureLines)
+                transport.sendCommands(listOf("BAT"))
+                val batteryLines = transport.readAvailableLines()
+                val nextState = DeviceSessionWorkflow.ingestReportLines(stateAfterTemperature, batteryLines)
+                val temperatureC = nextState.snapshot?.status?.temperatureC
+                val externalBatteryVolts = nextState.snapshot?.status?.externalBatteryVolts
+                val internalBatteryVolts = nextState.snapshot?.status?.internalBatteryVolts
+                currentState = nextState
+                loadedSnapshot = nextState.snapshot
+                if (writeTemperatureLog) {
+                    sessionLog.appendTemperatureSample(sampleTime, temperatureC, externalBatteryVolts, internalBatteryVolts)
+                }
+                SwingUtilities.invokeLater {
+                    applySnapshotToForm(nextState.snapshot)
+                }
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    if (writeTemperatureLog) {
+                        setStatus("Temperature logging failed: ${exception.message ?: exception::class.simpleName}")
+                    } else {
+                        setStatus("Advanced Mode device data refresh failed: ${exception.message ?: exception::class.simpleName}")
+                    }
+                }
+            } finally {
+                temperatureLogSampleInProgress.set(false)
+            }
+        }.start()
+    }
+
+    private fun millisUntilNextSecond(): Int {
+        val now = LocalDateTime.now()
+        val nextSecond = now.withNano(0).plusSeconds(1)
+        return Duration.between(now, nextSecond).toMillis().coerceAtLeast(0L).toInt()
+    }
+
     private fun showRawCommandReplyDialog(
         command: String,
         responseLines: List<String>,
@@ -6033,6 +6368,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 connection.result.state.snapshot,
                 recalculateClockOffset = connection.clockAnchor == null,
             )
+            updateAdvancedDeviceDataRefreshTimer()
             SwingUtilities.invokeLater {
                 autoDetectButton.requestFocusInWindow()
             }
@@ -6113,6 +6449,154 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             null,
         )
         setStatus("Copied current log to the clipboard.")
+    }
+
+    private fun showTemperatureLogsDialog() {
+        val logs = sessionLog.listTemperatureLogFiles()
+        if (logs.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No saved temperature logs were found.", "Temperature Logs", JOptionPane.INFORMATION_MESSAGE)
+            return
+        }
+
+        val list = JList(logs.toTypedArray()).apply {
+            selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
+            selectedIndex = 0
+            visibleRowCount = logs.size.coerceIn(4, 10)
+            cellRenderer =
+                object : DefaultListCellRenderer() {
+                    override fun getListCellRendererComponent(
+                        list: JList<*>?,
+                        value: Any?,
+                        index: Int,
+                        isSelected: Boolean,
+                        cellHasFocus: Boolean,
+                    ): Component {
+                        val component = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+                        val logFile = value as? DesktopTemperatureLogFile
+                        text =
+                            logFile?.let {
+                                "${it.name}  ${formatLogTimestamp(it.lastModifiedMs)}  ${formatByteCount(it.sizeBytes)}"
+                            } ?: value.toString()
+                        return component
+                    }
+                }
+        }
+
+        val options = arrayOf("Open Selected", "Copy Path", "Delete Selected", "Delete All", "Open Log Folder", "Close")
+        when (
+            JOptionPane.showOptionDialog(
+                this,
+                JScrollPane(list).apply {
+                    preferredSize = Dimension(760, 260)
+                },
+                "Temperature Logs",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.PLAIN_MESSAGE,
+                null,
+                options,
+                options.first(),
+            )
+        ) {
+            0 -> openSelectedTemperatureLog(list.selectedValue)
+            1 -> copySelectedTemperatureLogPaths(list.selectedValuesList)
+            2 -> confirmAndDeleteTemperatureLogs(list.selectedValuesList)
+            3 -> confirmAndDeleteAllTemperatureLogs()
+            4 -> openLogFolder()
+        }
+    }
+
+    private fun openSelectedTemperatureLog(selectedLog: DesktopTemperatureLogFile?) {
+        if (selectedLog == null) {
+            JOptionPane.showMessageDialog(this, "Select a temperature log first.")
+            return
+        }
+        require(Desktop.isDesktopSupported()) {
+            "Desktop integration is not supported on this system."
+        }
+        Desktop.getDesktop().open(selectedLog.path.toFile())
+        setStatus("Opened ${selectedLog.name}.")
+    }
+
+    private fun copySelectedTemperatureLogPaths(selectedLogs: List<DesktopTemperatureLogFile>) {
+        if (selectedLogs.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Select at least one temperature log first.")
+            return
+        }
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(
+            StringSelection(selectedLogs.joinToString(separator = System.lineSeparator()) { it.path.toAbsolutePath().toString() }),
+            null,
+        )
+        setStatus(
+            if (selectedLogs.size == 1) {
+                "Copied temperature log path to the clipboard."
+            } else {
+                "Copied ${selectedLogs.size} temperature log paths to the clipboard."
+            },
+        )
+    }
+
+    private fun confirmAndDeleteTemperatureLogs(selectedLogs: List<DesktopTemperatureLogFile>) {
+        if (selectedLogs.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Select at least one temperature log first.")
+            return
+        }
+        val confirmation = JOptionPane.showConfirmDialog(
+            this,
+            "Delete ${selectedLogs.size} selected temperature log file(s)?",
+            "Delete Temperature Logs",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (confirmation != JOptionPane.OK_OPTION) {
+            return
+        }
+        val deletedCount = selectedLogs.count { sessionLog.deleteTemperatureLog(it.path) }
+        setStatus(
+            if (deletedCount == 1) {
+                "Deleted 1 temperature log."
+            } else {
+                "Deleted $deletedCount temperature logs."
+            },
+        )
+    }
+
+    private fun confirmAndDeleteAllTemperatureLogs() {
+        val confirmation = JOptionPane.showConfirmDialog(
+            this,
+            "Delete all saved SerialSlinger temperature CSV files in ${sessionLog.logDirectory()}?",
+            "Delete All Temperature Logs",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (confirmation != JOptionPane.OK_OPTION) {
+            return
+        }
+        val deletedCount = sessionLog.deleteAllTemperatureLogs()
+        setStatus(
+            if (deletedCount == 1) {
+                "Deleted 1 temperature log."
+            } else {
+                "Deleted $deletedCount temperature logs."
+            },
+        )
+    }
+
+    private fun formatLogTimestamp(timestampMs: Long): String {
+        return Instant.ofEpochMilli(timestampMs)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDateTime()
+            .toString()
+            .replace('T', ' ')
+    }
+
+    private fun formatByteCount(sizeBytes: Long): String {
+        val kb = 1024.0
+        val mb = kb * 1024.0
+        return when {
+            sizeBytes >= mb -> String.format("%.1f MB", sizeBytes / mb)
+            sizeBytes >= kb -> String.format("%.1f KB", sizeBytes / kb)
+            else -> "$sizeBytes B"
+        }
     }
 
     private fun confirmAndClearCurrentLog() {
@@ -6828,6 +7312,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         currentState = updatedState
         loadedSnapshot = updatedState?.snapshot
+        updateAdvancedDeviceDataRefreshTimer()
         knownProbeResults[portPath] = knownProbeResults[portPath]?.copy(
             state = PortProbeState.NOT_DETECTED,
             summary = "SignalSlinger no longer detected",
@@ -6879,6 +7364,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             } catch (_: Exception) {
             }
             currentTransport = null
+            updateAdvancedDeviceDataRefreshTimer()
             setStatus("Communication error: $message")
         }
         if (showDialog) {
