@@ -5168,6 +5168,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
         backgroundWorkInProgress = true
+        stopAdvancedDeviceDataRefreshTimer()
         clearBusyProgress()
         setBusy(true)
         setStatus(status)
@@ -5176,6 +5177,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         Thread {
             try {
+                waitForDeviceDataSampleToFinish()
                 task()
             } catch (exception: Exception) {
                 SwingUtilities.invokeLater {
@@ -5206,9 +5208,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     hideBusyDialog()
                     clearBusyProgress()
                     setBusy(false)
+                    updateAdvancedDeviceDataRefreshTimer()
                 }
             }
         }.start()
+    }
+
+    private fun waitForDeviceDataSampleToFinish() {
+        while (temperatureLogSampleInProgress.get()) {
+            Thread.sleep(25L)
+        }
     }
 
     private fun setBusy(isBusy: Boolean) {
@@ -6058,6 +6067,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun captureDeviceDataSample(writeTemperatureLog: Boolean) {
+        if (backgroundWorkInProgress) {
+            return
+        }
         if (!temperatureLogSampleInProgress.compareAndSet(false, true)) {
             return
         }
