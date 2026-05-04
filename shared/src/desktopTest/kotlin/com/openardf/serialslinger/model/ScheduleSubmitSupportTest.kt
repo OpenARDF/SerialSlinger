@@ -39,6 +39,19 @@ class ScheduleSubmitSupportTest {
     }
 
     @Test
+    fun `absolute start edit rounds start up to five minute boundary before deriving finish`() {
+        val request = ScheduleSubmitSupport.absoluteStartEdit(
+            currentSettings = sampleSettings().copy(currentTimeCompact = "260420100000"),
+            normalizedStartTime = "260420120401",
+            defaultEventLengthMinutes = 360,
+        )
+
+        assertEquals("260420120500", request.startTimeCompact)
+        assertEquals("260420180500", request.finishTimeCompact)
+        assertEquals(emptySet(), request.forceWriteKeys)
+    }
+
+    @Test
     fun `absolute finish edit preserves days and resolves schedule`() {
         val request = ScheduleSubmitSupport.absoluteFinishEdit(
             currentSettings = sampleSettings().copy(

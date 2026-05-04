@@ -175,6 +175,9 @@ class SignalSlingerProtocolCodecTest {
     fun parsesDeviceReportedEventStateLines() {
         val enabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Running forever.")
         val disabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Not scheduled")
+        val eventStartDisabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Event start disabled (Start = Finish)")
+        val configErrorUpdate = SignalSlingerProtocolCodec.parseReportLine("* Config err 1")
+        val interruptedUpdate = SignalSlingerProtocolCodec.parseReportLine("* Event interrupted!")
         val startsInUpdate = SignalSlingerProtocolCodec.parseReportLine("* Starts in: 23 hours 4 minutes 5 seconds")
         val lastsUpdate = SignalSlingerProtocolCodec.parseReportLine("* Lasts: 2 hours 0 minutes 0 seconds")
         val inProgressUpdate = SignalSlingerProtocolCodec.parseReportLine("* In progress")
@@ -183,6 +186,12 @@ class SignalSlingerProtocolCodecTest {
         assertEquals("Running forever.", enabledUpdate?.deviceStatusPatch?.eventStateSummary)
         assertEquals(false, disabledUpdate?.deviceStatusPatch?.eventEnabled)
         assertEquals("Not scheduled", disabledUpdate?.deviceStatusPatch?.eventStateSummary)
+        assertEquals(false, eventStartDisabledUpdate?.deviceStatusPatch?.eventEnabled)
+        assertEquals("Event start disabled (Start = Finish)", eventStartDisabledUpdate?.deviceStatusPatch?.eventStateSummary)
+        assertEquals(false, configErrorUpdate?.deviceStatusPatch?.eventEnabled)
+        assertEquals("Config err 1", configErrorUpdate?.deviceStatusPatch?.eventStateSummary)
+        assertEquals(false, interruptedUpdate?.deviceStatusPatch?.eventEnabled)
+        assertEquals("Event interrupted!", interruptedUpdate?.deviceStatusPatch?.eventStateSummary)
         assertEquals("23 hours 4 minutes 5 seconds", startsInUpdate?.deviceStatusPatch?.eventStartsInSummary)
         assertEquals("2 hours 0 minutes 0 seconds", lastsUpdate?.deviceStatusPatch?.eventDurationSummary)
         assertEquals("In Progress", inProgressUpdate?.deviceStatusPatch?.eventStartsInSummary)
@@ -301,6 +310,20 @@ class SignalSlingerProtocolCodecTest {
         val commands = SignalSlingerProtocolCodec.encodeWritePlan(writePlan, edited)
 
         assertEquals(listOf("BAT X 0"), commands)
+    }
+
+    @Test
+    fun encodesDisabledTransmissionsAsBatX2EvenWhenExternalControlIsOff() {
+        val original = sampleSettings()
+        val edited = original.copy(
+            externalBatteryControlMode = ExternalBatteryControlMode.OFF,
+            transmissionsEnabled = false,
+        )
+
+        val writePlan = WritePlanner.create(original, edited)
+        val commands = SignalSlingerProtocolCodec.encodeWritePlan(writePlan, edited)
+
+        assertEquals(listOf("BAT X 2"), commands)
     }
 
     @Test

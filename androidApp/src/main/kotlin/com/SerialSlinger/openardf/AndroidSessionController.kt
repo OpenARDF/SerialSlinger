@@ -3280,6 +3280,7 @@ object AndroidSessionController {
 
         thread(name = "serialslinger-android-start-time-submit") {
             var resolvedTarget: AndroidConnectionTarget? = null
+            var submittedStartTimeCompact: String? = null
             val result =
                 try {
                     val normalizedRequestedFinishTime =
@@ -3304,6 +3305,7 @@ object AndroidSessionController {
                         },
                         preserveDaysToRun = preserveDaysToRun,
                     )
+                    submittedStartTimeCompact = editRequest.startTimeCompact
 
                     if (
                         editRequest.startTimeCompact == snapshot.settings.startTimeCompact &&
@@ -3364,7 +3366,20 @@ object AndroidSessionController {
                         applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                         timeWorkflowNotice = scheduleImpact.noticeText
                         clearScheduleDerivedDataPendingLocked()
-                        latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
+                        val adjustmentLines =
+                            buildList {
+                                val submittedStart = submittedStartTimeCompact
+                                if (submittedStart != null && submittedStart != normalizedStartTime) {
+                                    add(
+                                        "Start Time adjusted from " +
+                                            "${JvmTimeSupport.formatCompactTimestamp(normalizedStartTime)} to " +
+                                            "${JvmTimeSupport.formatCompactTimestamp(submittedStart)} " +
+                                            "to match SignalSlinger 5-minute start boundaries.",
+                                    )
+                                }
+                                addAll(scheduleImpact.summaryLines)
+                            }
+                        latestSubmitSummary = renderSubmitSummary(submitResult, adjustmentLines)
                         latestProbeSummary =
                             if (wasNoOp) {
                                 "Latest load remains available above. Start Time already matched the requested value."

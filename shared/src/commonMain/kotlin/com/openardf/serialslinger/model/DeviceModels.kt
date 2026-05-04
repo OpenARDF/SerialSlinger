@@ -220,6 +220,13 @@ data class EditableDeviceSettings(
         require(invalidField == null) {
             "Field `${invalidField!!.key}` is invalid${invalidField.errorMessage?.let { ": $it" } ?: "."}"
         }
+        val normalizedExternalBatteryControlMode = when {
+            externalBatteryControlMode.editedValue == ExternalBatteryControlMode.CHARGE_ONLY ||
+                !transmissionsEnabled.editedValue -> ExternalBatteryControlMode.CHARGE_ONLY
+            else -> externalBatteryControlMode.editedValue
+        }
+        val normalizedTransmissionsEnabled =
+            normalizedExternalBatteryControlMode != ExternalBatteryControlMode.CHARGE_ONLY
 
         return DeviceSettings(
             stationId = stationId.editedValue,
@@ -238,8 +245,8 @@ data class EditableDeviceSettings(
             highFrequencyHz = highFrequencyHz.editedValue,
             beaconFrequencyHz = beaconFrequencyHz.editedValue,
             lowBatteryThresholdVolts = lowBatteryThresholdVolts.editedValue,
-            externalBatteryControlMode = externalBatteryControlMode.editedValue,
-            transmissionsEnabled = transmissionsEnabled.editedValue,
+            externalBatteryControlMode = normalizedExternalBatteryControlMode,
+            transmissionsEnabled = normalizedTransmissionsEnabled,
         )
     }
 

@@ -61,6 +61,24 @@ class DeviceModelsTest {
     }
 
     @Test
+    fun validatedSettingsNormalizeDisabledTransmissionsToChargeOnlyMode() {
+        val editable = sampleEditableSettings(
+            externalBatteryControlMode = SettingsField(
+                "externalBatteryControlMode",
+                "External Battery Control",
+                ExternalBatteryControlMode.OFF,
+                ExternalBatteryControlMode.OFF,
+            ),
+            transmissionsEnabled = SettingsField("transmissionsEnabled", "RF Transmissions", true, false),
+        )
+
+        val settings = editable.toValidatedDeviceSettings()
+
+        assertEquals(ExternalBatteryControlMode.CHARGE_ONLY, settings.externalBatteryControlMode)
+        assertFalse(settings.transmissionsEnabled)
+    }
+
+    @Test
     fun unsupportedFieldsAreFilteredOutByCapabilities() {
         val editable = sampleEditableSettings()
         val capabilities = DeviceCapabilities(

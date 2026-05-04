@@ -41,6 +41,15 @@ class DesktopSerialLineBufferTest {
     }
 
     @Test
+    fun ignoresNulPaddingWithinSerialChunks() {
+        val buffer = DesktopSerialLineBuffer()
+
+        buffer.appendAscii(byteArrayOf(0, 0) + "VER".encodeToByteArray() + byteArrayOf(0, 0) + "\n".encodeToByteArray())
+
+        assertEquals(listOf("VER"), buffer.drainCompletedLines())
+    }
+
+    @Test
     fun clearDropsAnyPartialTrailingText() {
         val buffer = DesktopSerialLineBuffer()
 

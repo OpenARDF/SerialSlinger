@@ -65,9 +65,20 @@ It:
 The intended release flow is:
 
 1. run `npm run jdeploy:release-preflight`
-2. merge the desired release state to `main`
-3. create and push a tag like `v1.0.93`
-4. let the GitHub Actions workflow publish the release artifacts
+2. review platform parity:
+   - ask whether any Android app changes in the release should also be carried into the desktop app
+   - ask whether any desktop app changes in the release should also be carried into the Android app
+   - either carry the needed changes across or explicitly record why no cross-platform change is needed
+3. run the automated Android tablet regression: `./scripts/android-regression.sh --serial <adb-serial>`
+4. run the desktop app regression series on macOS with a real attached SignalSlinger
+5. merge the desired release state to `main`
+6. create and push a tag like `v1.0.93`
+7. let the GitHub Actions workflow publish the release artifacts
+
+Do not push a normal public release tag until both real-device regression passes have completed:
+
+- automated Android tablet regression on a real attached SignalSlinger test device. The regression is destructive to the attached device settings and starts from normal Android UI mode before exercising normal-mode load, setting submit, schedule, raw command, log, and clone paths.
+- desktop app regression on macOS with the SerialSlinger desktop UI launched against a real attached SignalSlinger. The pass should exercise the actual app window, not only the desktop smoke CLI: connect/load, normal-mode setting edits and submit, relative start-time scheduling, disable event, sync/set time, raw command/log behavior, clone where appropriate, and post-test CLI readback to confirm the device is left in a known acceptable state. Before GUI automation, close any installed SerialSlinger app, launch the checkout with Gradle, and confirm the tested window/log session shows the intended version, process ID, and launch directory so installed-app sessions do not contaminate the regression log.
 
 The chosen public package identity is `serialslinger`, and the shared public and app version line is `1.0.93`.
 

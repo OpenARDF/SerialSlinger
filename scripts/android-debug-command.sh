@@ -30,6 +30,7 @@ Usage:
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-finish-time <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-days-to-run <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-time-sequence <device-time> <start-time> <finish-time> <days>
+  ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] raw-command <command>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] clone
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] clone-wait
 EOF
@@ -241,6 +242,14 @@ set-days-to-run)
 	fi
 	ACTION="com.SerialSlinger.openardf.DEBUG_SET_DAYS_TO_RUN"
 	EXTRA_ARGS+=(--es days_to_run "$ARG1")
+	;;
+raw-command)
+	if [ -z "$ARG1" ]; then
+		echo "raw-command requires a command string." >&2
+		exit 1
+	fi
+	ACTION="com.SerialSlinger.openardf.DEBUG_RAW_COMMAND"
+	EXTRA_ARGS+=(--es command "$ARG1")
 	;;
 clone)
 	ACTION="com.SerialSlinger.openardf.DEBUG_CLONE"
