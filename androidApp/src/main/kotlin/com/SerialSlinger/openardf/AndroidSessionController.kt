@@ -201,6 +201,7 @@ object AndroidSessionController {
     private const val startupReportDrainReadWindowMs = 220L
     private const val startupReportDrainQuietPauseMs = 80L
     private const val startupReportDrainQuietReadCount = 3
+    private const val usbStartupWarmupMaxWaitMs = 25_000L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = linkedSetOf<() -> Unit>()
     private var applicationContext: Context? = null
@@ -879,6 +880,75 @@ object AndroidSessionController {
         )
     }
 
+    private fun connectAndLoadAfterUsbStartupWarmup(
+        transport: DeviceTransport,
+        onReportReceived: (() -> Unit)?,
+        afterCommand: ((
+            command: String,
+            state: DeviceSessionState,
+            transport: DeviceTransport,
+        ) -> DeviceLoadInterventionResult?)?,
+    ): DeviceLoadResult {
+        val usbTransport = transport as? AndroidUsbTransport
+            ?: return DeviceSessionController.connectAndLoad(
+                transport = transport,
+                onReportReceived = onReportReceived,
+                afterCommand = afterCommand,
+            )
+
+        usbTransport.connect()
+        val sentAtMs = System.currentTimeMillis()
+        usbTransport.sendCommands(listOf("VER"))
+        val warmupLines = waitForUsbStartupReport(usbTransport)
+        val receivedAtMs = System.currentTimeMillis()
+        require(hasSignalSlingerReportLine(warmupLines)) {
+            "No SignalSlinger response was received."
+        }
+        onReportReceived?.invoke()
+
+        val warmupState =
+            DeviceSessionWorkflow.ingestReportLines(
+                DeviceSessionWorkflow.connected(DeviceSettings.empty()),
+                warmupLines,
+            )
+        val warmupResult = DeviceLoadResult(
+            state = warmupState,
+            commandsSent = listOf("VER"),
+            linesReceived = warmupLines,
+            traceEntries =
+                listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, "VER")) +
+                    warmupLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) },
+        )
+        logAppEvent(
+            title = "startup-warmup",
+            lines = listOf("Received ${warmupLines.size} startup line(s) after initial VER before full load."),
+        )
+
+        val fullLoad = DeviceSessionController.refreshFromDevice(
+            state = warmupState,
+            transport = usbTransport,
+            startEditing = true,
+            onReportReceived = onReportReceived,
+            afterCommand = afterCommand,
+        )
+        return mergeLoadResults(warmupResult, fullLoad)
+    }
+
+    private fun waitForUsbStartupReport(transport: AndroidUsbTransport): List<String> {
+        val lines = mutableListOf<String>()
+        val deadline = System.currentTimeMillis() + usbStartupWarmupMaxWaitMs
+        while (System.currentTimeMillis() < deadline) {
+            val responseLines = transport.readAvailableLines()
+            if (responseLines.isNotEmpty()) {
+                lines += responseLines
+                if (hasSignalSlingerReportLine(lines)) {
+                    return lines
+                }
+            }
+        }
+        return lines
+    }
+
     private fun activeEventSummary(state: DeviceSessionState): String? {
         val status = state.snapshot?.status ?: return null
         if (status.eventEnabled != true) {
@@ -1004,7 +1074,7 @@ object AndroidSessionController {
                     missingMessage = missingMessage,
                 ) { activeTarget, transport ->
                     resolvedTarget = activeTarget
-                    val initialLoad = DeviceSessionController.connectAndLoad(
+                    val initialLoad = connectAndLoadAfterUsbStartupWarmup(
                         transport = transport,
                         onReportReceived = ::markSignalSlingerReadInFlight,
                         afterCommand = { command, state, activeTransport ->

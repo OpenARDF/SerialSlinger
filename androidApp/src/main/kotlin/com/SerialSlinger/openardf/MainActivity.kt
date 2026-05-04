@@ -1056,7 +1056,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         }
 
-        val schedulingFieldsEditable = JvmTimeSupport.areSchedulingFieldsEditable(timedEventSettings.currentTimeCompact)
+        val schedulingCurrentTimeCompact = displayedDeviceTimeCompactForUi() ?: timedEventSettings.currentTimeCompact
+        val schedulingFieldsEditable = JvmTimeSupport.areSchedulingFieldsEditable(schedulingCurrentTimeCompact)
 
         lateinit var startTimeField: EditText
         lateinit var finishTimeField: EditText
@@ -1160,7 +1161,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         JvmTimeSupport.formatCompactTimestamp(timedEventSettings.startTimeCompact)
                     pickValidatedStartTime(
                         initialValue = startTimeField.text.toString(),
-                        currentTimeCompact = displayedDeviceTimeCompactForUi(),
+                        currentTimeCompact = schedulingCurrentTimeCompact,
                         onCanceled = {
                             startTimeField.setText(originalStartTimeText)
                         },
@@ -1246,7 +1247,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             schedulingFieldsEditable &&
                 JvmTimeSupport.isFinishTimeEditable(
                     startTimeCompact = timedEventSettings.startTimeCompact,
-                    currentTimeCompact = timedEventSettings.currentTimeCompact,
+                    currentTimeCompact = schedulingCurrentTimeCompact,
                 )
 
         finishTimeField =
@@ -1294,18 +1295,18 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             relativeFinishDisplaySelectionOverride = effectiveSelection
                             val formattedSelection = formatRelativeTimeSelection(effectiveSelection)
                             finishTimeField.setText(formattedSelection)
+                            val effectiveFinishCompact =
+                                JvmTimeSupport.relativeTargetTimeCompact(
+                                    baseCompact = timedEventSettings.startTimeCompact,
+                                    hours = effectiveSelection.hours,
+                                    minutes = effectiveSelection.minutes,
+                                    useTopOfHour = effectiveSelection.useTopOfHour,
+                                )
                             runTimedEventSettingsChangeWithCloneTemplateGuard {
                                 if (isPreviewModeActive()) {
-                                    val previewFinishCompact =
-                                        JvmTimeSupport.relativeTargetTimeCompact(
-                                            baseCompact = timedEventSettings.startTimeCompact,
-                                            hours = effectiveSelection.hours,
-                                            minutes = effectiveSelection.minutes,
-                                            useTopOfHour = effectiveSelection.useTopOfHour,
-                                        )
                                     updatePreviewSettings { settings ->
                                         settings.copy(
-                                            finishTimeCompact = previewFinishCompact,
+                                            finishTimeCompact = effectiveFinishCompact,
                                             daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
                                         )
                                     }
@@ -1415,6 +1416,17 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
             },
         )
+        if (!derivedEventStatus.equals("Disabled", ignoreCase = true)) {
+            timedEventCard.addView(
+                rowButton("Disable Event") {
+                    runDisableEventViaStartTimeCommandOrPreview()
+                }.apply {
+                    isEnabled = schedulingFieldsEditable
+                    isClickable = schedulingFieldsEditable
+                    alpha = if (schedulingFieldsEditable) 1f else 0.55f
+                },
+            )
+        }
         val lastsField =
             pickerField(
                 text = durationSummary,
