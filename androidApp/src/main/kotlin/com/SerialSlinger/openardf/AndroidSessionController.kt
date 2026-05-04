@@ -197,6 +197,10 @@ object AndroidSessionController {
     private const val syncVerificationSampleMax = 8
     private const val firmwareCloneCommandSettleMs = 100L
     private const val firmwareClonePreCloneStopMaxWaitMs = 1_500L
+    private const val startupReportDrainMaxWaitMs = 2_000L
+    private const val startupReportDrainReadWindowMs = 220L
+    private const val startupReportDrainQuietPauseMs = 80L
+    private const val startupReportDrainQuietReadCount = 3
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = linkedSetOf<() -> Unit>()
     private var applicationContext: Context? = null
@@ -828,6 +832,53 @@ object AndroidSessionController {
         )
     }
 
+    private fun drainResidualStartupReportAfterVer(
+        command: String,
+        state: DeviceSessionState,
+        transport: DeviceTransport,
+    ): DeviceLoadInterventionResult? {
+        if (!command.equals("VER", ignoreCase = true)) {
+            return null
+        }
+        val usbTransport = transport as? AndroidUsbTransport ?: return null
+        val lines = mutableListOf<String>()
+        val traceEntries = mutableListOf<SerialTraceEntry>()
+        val deadline = System.currentTimeMillis() + startupReportDrainMaxWaitMs
+        var quietReads = 0
+
+        while (System.currentTimeMillis() < deadline && quietReads < startupReportDrainQuietReadCount) {
+            val responseLines = usbTransport.readAvailableLinesBriefly(startupReportDrainReadWindowMs)
+            if (responseLines.isEmpty()) {
+                quietReads++
+                if (quietReads < startupReportDrainQuietReadCount) {
+                    Thread.sleep(startupReportDrainQuietPauseMs)
+                }
+            } else {
+                val receivedAtMs = System.currentTimeMillis()
+                lines += responseLines
+                traceEntries += responseLines.map { line ->
+                    SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+                }
+                quietReads = 0
+            }
+        }
+
+        if (lines.isEmpty()) {
+            return null
+        }
+
+        logAppEvent(
+            title = "startup-drain",
+            lines = listOf("Drained ${lines.size} late startup report line(s) after VER before continuing load."),
+        )
+        return DeviceLoadInterventionResult(
+            state = DeviceSessionWorkflow.ingestReportLines(state, lines),
+            commandsSent = emptyList(),
+            linesReceived = lines,
+            traceEntries = traceEntries,
+        )
+    }
+
     private fun activeEventSummary(state: DeviceSessionState): String? {
         val status = state.snapshot?.status ?: return null
         if (status.eventEnabled != true) {
@@ -957,7 +1008,11 @@ object AndroidSessionController {
                         transport = transport,
                         onReportReceived = ::markSignalSlingerReadInFlight,
                         afterCommand = { command, state, activeTransport ->
-                            pauseRunningEventAfterEvtIfNeeded(
+                            drainResidualStartupReportAfterVer(
+                                command = command,
+                                state = state,
+                                transport = activeTransport,
+                            ) ?: pauseRunningEventAfterEvtIfNeeded(
                                 command = command,
                                 state = state,
                                 transport = activeTransport,
