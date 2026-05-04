@@ -6,6 +6,7 @@ import com.openardf.serialslinger.model.EditableDeviceSettings
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
+import com.openardf.serialslinger.model.FrequencyBankId
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.session.DeviceSubmitResult
 import com.openardf.serialslinger.session.DeviceSessionController
@@ -311,7 +312,29 @@ internal fun applyAssignments(
         }
     }
 
+    validateDefaultFrequencyAssignment(updated, assignments)
+
     return updated
+}
+
+private fun validateDefaultFrequencyAssignment(
+    updated: EditableDeviceSettings,
+    assignments: Map<String, String>,
+) {
+    val requestedDefaultFrequency = assignments["defaultFrequencyHz"]?.let(::parseFrequencyAssignment) ?: return
+    val activeBank = FrequencySupport.currentBankFromFoxRole(updated.foxRole.editedValue) ?: return
+    val activeBankAssignmentKey = when (activeBank) {
+        FrequencyBankId.ONE -> "lowFrequencyHz"
+        FrequencyBankId.TWO -> "mediumFrequencyHz"
+        FrequencyBankId.THREE -> "highFrequencyHz"
+        FrequencyBankId.BEACON -> "beaconFrequencyHz"
+    }
+    val requestedActiveBankFrequency = assignments[activeBankAssignmentKey]?.let(::parseFrequencyAssignment) ?: return
+
+    require(requestedDefaultFrequency == requestedActiveBankFrequency) {
+        "`defaultFrequencyHz` conflicts with `$activeBankAssignmentKey` for ${updated.foxRole.editedValue?.label ?: "the selected fox role"}. " +
+            "The firmware reports current frequency from the active bank, so set only the bank frequency or use the same value for both."
+    }
 }
 
 private fun parseEventType(value: String): EventType {

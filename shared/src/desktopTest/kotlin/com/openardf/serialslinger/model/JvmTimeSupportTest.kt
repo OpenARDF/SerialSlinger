@@ -165,4 +165,16 @@ class JvmTimeSupportTest {
         assertEquals("260421120500", normalized.startTimeCompact)
         assertFalse(normalized.wasAdjustedToMinimum)
     }
+
+    @Test
+    fun `normalize start time for change rounds future selection up to five minute boundary`() {
+        val normalized =
+            JvmTimeSupport.normalizeStartTimeForChange(
+                startTimeCompact = "260421120401",
+                currentTimeCompact = "260421115542",
+            )
+
+        assertEquals("260421120500", normalized.startTimeCompact)
+        assertFalse(normalized.wasAdjustedToMinimum)
+    }
 }

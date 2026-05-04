@@ -501,24 +501,38 @@ object AndroidSessionController {
                     val clockSample = postLoadClockSample(transport, refreshed)
                     val finalRefresh = clockSample?.first ?: refreshed
                     val clockAnchor = clockSample?.second
+                    val syncResult =
+                        if (clockAnchor?.phaseErrorMillis?.let { abs(it) > CLOCK_PHASE_WARNING_THRESHOLD_MILLIS } == true) {
+                            performAlignedTimeSync(
+                                transport = transport,
+                                state = finalRefresh.state,
+                                snapshot = requireNotNull(finalRefresh.state.snapshot),
+                            )
+                        } else {
+                            null
+                        }
+                    val finalState = syncResult?.finalAttempt?.state ?: finalRefresh.state
+                    val finalPhaseErrorMillis = syncResult?.finalAttempt?.phaseErrorMillis ?: clockAnchor?.phaseErrorMillis
+                    val syncTraceEntries = syncResult?.let(::buildSyncTraceEntries).orEmpty()
                     CloneSubmitResult(
-                        state = finalRefresh.state,
+                        state = finalState,
                         cloneProtocol = "firmware MAS P",
                         firmwareCloneChecksum = firmwareCloneResult.plan?.checksum,
                         writeCommandCount = firmwareCloneResult.commandsSent.size,
                         writeResponseLineCount = firmwareCloneResult.linesReceived.size,
                         refreshCommandCount = refreshed.commandsSent.size + (clockSample?.first?.commandsSent?.size ?: 0),
                         refreshResponseLineCount = refreshed.linesReceived.size + (clockSample?.first?.linesReceived?.size ?: 0),
-                        syncAttemptCount = 0,
-                        syncSucceeded = true,
+                        syncAttemptCount = syncResult?.attempts?.size ?: 0,
+                        syncSucceeded = syncResult?.succeeded ?: true,
                         traceEntries =
                             buildList {
                                 addAll(targetRefresh.traceEntries)
                                 addAll(firmwareCloneResult.traceEntries)
                                 addAll(refreshed.traceEntries)
                                 clockSample?.first?.let { addAll(it.traceEntries) }
+                                addAll(syncTraceEntries)
                             },
-                        clockPhaseErrorMillis = clockAnchor?.phaseErrorMillis,
+                        clockPhaseErrorMillis = finalPhaseErrorMillis,
                         clockReferenceTime = clockAnchor?.referenceTime,
                         possibleNewDeviceReasons = possibleNewDeviceReasons,
                     )
@@ -610,6 +624,15 @@ object AndroidSessionController {
             deviceTimeOffset != null -> JvmTimeSupport.formatTruncatedCompactTimestamp(systemNow.plus(requireNotNull(deviceTimeOffset)))
             else -> latestSessionViewState?.state?.snapshot?.settings?.currentTimeCompact
         }
+    }
+
+    private fun settingsWithDisplayedDeviceTimeIfNeededLocked(settings: DeviceSettings): DeviceSettings {
+        if (JvmTimeSupport.normalizeCurrentTimeCompactForDisplay(settings.currentTimeCompact) != null) {
+            return settings
+        }
+        val displayedDeviceTimeCompact = displayedDeviceTimeCompactLocked(LocalDateTime.now())
+            ?: return settings
+        return settings.copy(currentTimeCompact = displayedDeviceTimeCompact)
     }
 
     private fun markScheduleDerivedDataPendingLocked() {
@@ -766,6 +789,7 @@ object AndroidSessionController {
         command: String,
         state: DeviceSessionState,
         transport: DeviceTransport,
+        requireConfirmation: Boolean = true,
     ): DeviceLoadInterventionResult? {
         if (!command.equals("EVT", ignoreCase = true)) {
             return null
@@ -776,7 +800,9 @@ object AndroidSessionController {
                 "$eventSummary\n\n" +
                 "A running event may let the SignalSlinger sleep between transmissions and miss commands. " +
                 "When you tap OK, SerialSlinger will send GO 0 to pause the event, then continue loading data."
-        waitForEventPauseDismissal(message)
+        if (requireConfirmation) {
+            waitForEventPauseDismissal(message)
+        }
         val sentAtMs = System.currentTimeMillis()
         transport.sendCommands(listOf("GO 0"))
         val responseLines = transport.readAvailableLines()
@@ -785,7 +811,11 @@ object AndroidSessionController {
             title = "event-state",
             lines = listOf(
                 "SignalSlinger reported an event in progress: $eventSummary",
-                "User dismissed warning; sent GO 0 before continuing.",
+                if (requireConfirmation) {
+                    "User dismissed warning; sent GO 0 before continuing."
+                } else {
+                    "Automation sent GO 0 before continuing."
+                },
             ),
         )
         return DeviceLoadInterventionResult(
@@ -926,7 +956,14 @@ object AndroidSessionController {
                     val initialLoad = DeviceSessionController.connectAndLoad(
                         transport = transport,
                         onReportReceived = ::markSignalSlingerReadInFlight,
-                        afterCommand = ::pauseRunningEventAfterEvtIfNeeded,
+                        afterCommand = { command, state, activeTransport ->
+                            pauseRunningEventAfterEvtIfNeeded(
+                                command = command,
+                                state = state,
+                                transport = activeTransport,
+                                requireConfirmation = source != "adb",
+                            )
+                        },
                     )
                     require(hasSignalSlingerReportLine(initialLoad.linesReceived)) {
                         "No SignalSlinger response was received."
@@ -2929,6 +2966,8 @@ object AndroidSessionController {
                 source = source,
                 success = commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = result.getOrNull()?.let(::buildSyncTraceEntries).orEmpty(),
+                warnOnMissingTimelyReplies = !commandSucceeded,
             )
             notifyListeners()
             onComplete?.let { callback ->
@@ -3241,6 +3280,7 @@ object AndroidSessionController {
 
         thread(name = "serialslinger-android-start-time-submit") {
             var resolvedTarget: AndroidConnectionTarget? = null
+            var submittedStartTimeCompact: String? = null
             val result =
                 try {
                     val normalizedRequestedFinishTime =
@@ -3251,8 +3291,11 @@ object AndroidSessionController {
                                 JvmTimeSupport.parseOptionalCompactTimestamp(requestedFinishInput)
                                     ?: error("Finish Time must not be blank.")
                             }
+                    val scheduleBaseSettings = synchronized(this) {
+                        settingsWithDisplayedDeviceTimeIfNeededLocked(snapshot.settings)
+                    }
                     val editRequest = ScheduleSubmitSupport.absoluteStartEdit(
-                        currentSettings = snapshot.settings,
+                        currentSettings = scheduleBaseSettings,
                         normalizedStartTime = normalizedStartTime,
                         requestedFinishTimeCompact = normalizedRequestedFinishTime,
                         defaultEventLengthMinutes = if (normalizedRequestedFinishTime == null) {
@@ -3262,6 +3305,7 @@ object AndroidSessionController {
                         },
                         preserveDaysToRun = preserveDaysToRun,
                     )
+                    submittedStartTimeCompact = editRequest.startTimeCompact
 
                     if (
                         editRequest.startTimeCompact == snapshot.settings.startTimeCompact &&
@@ -3322,7 +3366,20 @@ object AndroidSessionController {
                         applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
                         timeWorkflowNotice = scheduleImpact.noticeText
                         clearScheduleDerivedDataPendingLocked()
-                        latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
+                        val adjustmentLines =
+                            buildList {
+                                val submittedStart = submittedStartTimeCompact
+                                if (submittedStart != null && submittedStart != normalizedStartTime) {
+                                    add(
+                                        "Start Time adjusted from " +
+                                            "${JvmTimeSupport.formatCompactTimestamp(normalizedStartTime)} to " +
+                                            "${JvmTimeSupport.formatCompactTimestamp(submittedStart)} " +
+                                            "to match SignalSlinger 5-minute start boundaries.",
+                                    )
+                                }
+                                addAll(scheduleImpact.summaryLines)
+                            }
+                        latestSubmitSummary = renderSubmitSummary(submitResult, adjustmentLines)
                         latestProbeSummary =
                             if (wasNoOp) {
                                 "Latest load remains available above. Start Time already matched the requested value."
@@ -3437,8 +3494,11 @@ object AndroidSessionController {
             var resolvedTarget: AndroidConnectionTarget? = null
             val result =
                 runCatching {
+                    val scheduleBaseSettings = synchronized(this) {
+                        settingsWithDisplayedDeviceTimeIfNeededLocked(snapshot.settings)
+                    }
                     val editRequest = ScheduleSubmitSupport.absoluteFinishEdit(
-                        currentSettings = snapshot.settings,
+                        currentSettings = scheduleBaseSettings,
                         normalizedFinishTime = normalizedFinishTime,
                         preserveDaysToRun = preserveDaysToRun,
                     )
@@ -4582,20 +4642,6 @@ object AndroidSessionController {
             if (previousSnapshot.settings.copy(currentTimeCompact = null) != loadedSnapshot.settings.copy(currentTimeCompact = null)) {
                 add("device settings changed other than Device Time")
             }
-            if (
-                previousSnapshot.status.copy(
-                    eventStartsInSummary = null,
-                    eventDurationSummary = null,
-                    lastCommunicationError = null,
-                ) != loadedSnapshot.status.copy(
-                    eventStartsInSummary = null,
-                    eventDurationSummary = null,
-                    lastCommunicationError = null,
-                )
-            ) {
-                add("device data changed")
-            }
-
             val previousClockValid = previousSnapshot.hasValidWallClockTime()
             val loadedClockValid = loadedSnapshot.hasValidWallClockTime()
             if (previousClockValid != loadedClockValid) {
@@ -4777,13 +4823,22 @@ object AndroidSessionController {
                 missingMessage = "SignalSlinger is no longer connected.",
             ) { target, transport ->
                 resolvedTarget = target
-                val sentAtMs = System.currentTimeMillis()
-                transport.sendCommands(commands)
-                val responseLines = transport.readAvailableLines()
-                val receivedAtMs = System.currentTimeMillis()
-                val deviceError = responseLines.firstOrNull { it.contains("* Err:") }
-                if (deviceError != null) {
-                    throw IllegalStateException(deviceError.removePrefix("* ").trim())
+                val responseLines = mutableListOf<String>()
+                val commandTraceEntries = mutableListOf<SerialTraceEntry>()
+                commands.forEach { command ->
+                    val sentAtMs = System.currentTimeMillis()
+                    transport.sendCommands(listOf(command))
+                    commandTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+                    val commandResponseLines = transport.readAvailableLines()
+                    val receivedAtMs = System.currentTimeMillis()
+                    responseLines += commandResponseLines
+                    commandTraceEntries += commandResponseLines.map { line ->
+                        SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+                    }
+                    val deviceError = commandResponseLines.firstOrNull { it.contains("* Err:") }
+                    if (deviceError != null) {
+                        throw IllegalStateException(deviceError.removePrefix("* ").trim())
+                    }
                 }
                 var nextState = sessionState
                 if (responseLines.isNotEmpty()) {
@@ -4803,8 +4858,7 @@ object AndroidSessionController {
                     reloadResult = reloadResult,
                     traceEntries =
                         buildList {
-                            addAll(commands.map { command -> SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command) })
-                            addAll(responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) })
+                            addAll(commandTraceEntries)
                             addAll(reloadResult.traceEntries)
                         },
                 )
@@ -4843,6 +4897,7 @@ object AndroidSessionController {
                 source = source,
                 success = result.isSuccess,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = result.getOrNull()?.traceEntries ?: emptyList(),
             )
             notifyListeners()
             onComplete?.let { callback ->

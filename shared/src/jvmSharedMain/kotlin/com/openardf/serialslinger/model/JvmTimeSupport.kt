@@ -98,6 +98,7 @@ object JvmTimeSupport {
     fun resolveStartTimeForChange(
         startTimeCompact: String?,
         currentTimeCompact: String?,
+        stepMinutes: Int = 5,
     ): String? {
         val current = requireValidTimestampForWrite("Device Time", currentTimeCompact)
             ?: error("Set Device Time first before changing Start Time.")
@@ -105,7 +106,7 @@ object JvmTimeSupport {
         require(!start.isBefore(current)) {
             startTimeBeforeDeviceTimeValidationMessage
         }
-        return formatCompactTimestamp(start)
+        return formatCompactTimestamp(roundUpToMinuteBoundary(start, stepMinutes))
     }
 
     fun startTimeBeforeDeviceTimeMessage(): String {
@@ -125,7 +126,7 @@ object JvmTimeSupport {
                 wasAdjustedToMinimum = false,
             )
         val minimumStart = minimumStartTimeBoundary(formatCompactTimestamp(current), stepMinutes = stepMinutes)
-        val normalized = if (start.isBefore(minimumStart)) minimumStart else start
+        val normalized = if (start.isBefore(minimumStart)) minimumStart else roundUpToMinuteBoundary(start, stepMinutes)
         return NormalizedStartTimeSelection(
             startTimeCompact = formatCompactTimestamp(normalized),
             wasAdjustedToMinimum = start.isBefore(minimumStart),
@@ -211,6 +212,22 @@ object JvmTimeSupport {
             minimum = minimum.plusMinutes((stepMinutes - remainder).toLong())
         }
         return minimum
+    }
+
+    fun roundUpToMinuteBoundary(
+        value: LocalDateTime,
+        stepMinutes: Int = 5,
+    ): LocalDateTime {
+        require(stepMinutes > 0) { "stepMinutes must be positive." }
+        var rounded = truncateToMinute(value)
+        if (value.second > 0 || value.nano > 0) {
+            rounded = rounded.plusMinutes(1)
+        }
+        val remainder = rounded.minute % stepMinutes
+        if (remainder != 0) {
+            rounded = rounded.plusMinutes((stepMinutes - remainder).toLong())
+        }
+        return rounded
     }
 
     fun minimumFinishTimeBoundary(

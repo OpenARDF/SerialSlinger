@@ -7,6 +7,7 @@ import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
 class DesktopSmokeCliTest {
@@ -60,6 +61,29 @@ class DesktopSmokeCliTest {
         assertEquals(3_580_000L, updated.beaconFrequencyHz.editedValue)
         assertEquals(false, updated.transmissionsEnabled.editedValue)
         assertEquals(ExternalBatteryControlMode.CHARGE_ONLY, updated.externalBatteryControlMode.editedValue)
+    }
+
+    @Test
+    fun rejectsDefaultFrequencyThatConflictsWithSelectedActiveBank() {
+        val editable = EditableDeviceSettings.fromDeviceSettings(sampleSettings())
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            applyAssignments(
+                editable,
+                mapOf(
+                    "eventType" to "foxoring",
+                    "foxRole" to "2",
+                    "defaultFrequencyHz" to "3590 kHz",
+                    "mediumFrequencyHz" to "3545 kHz",
+                ),
+            )
+        }
+
+        assertEquals(
+            "`defaultFrequencyHz` conflicts with `mediumFrequencyHz` for Foxoring \"Medium Freq\" Fox. " +
+                "The firmware reports current frequency from the active bank, so set only the bank frequency or use the same value for both.",
+            failure.message,
+        )
     }
 
     private fun sampleSettings(): DeviceSettings {

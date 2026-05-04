@@ -126,13 +126,14 @@ object SignalSlingerProtocolCodec {
         Regex("""^\*.*will not run.*$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*Event start disabled.*$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*No remaining scheduled day window.*$""", RegexOption.IGNORE_CASE),
+        Regex("""^\*\s*Config err\b.*$""", RegexOption.IGNORE_CASE),
+        Regex("""^\*\s*Event interrupted!$""", RegexOption.IGNORE_CASE),
     )
     private val positiveEventStatePatterns = listOf(
         Regex("""^\*\s*Running forever\.$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*User launched\.$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*Time remaining:.*$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*On the air(?: in .*)?\.$""", RegexOption.IGNORE_CASE),
-        Regex("""^\*\s*Event interrupted!$""", RegexOption.IGNORE_CASE),
     )
     private val startsInPattern = Regex("""^\*\s*Starts in:\s*(.+)$""", RegexOption.IGNORE_CASE)
     private val lastsPattern = Regex("""^\*\s*Lasts:\s*(.+)$""", RegexOption.IGNORE_CASE)
@@ -533,12 +534,11 @@ object SignalSlingerProtocolCodec {
     }
 
     private fun encodeBatteryControl(editedSettings: DeviceSettings): String {
-        val modeToken = when (editedSettings.externalBatteryControlMode) {
-            ExternalBatteryControlMode.OFF,
-            null,
-            -> "0"
-            ExternalBatteryControlMode.CHARGE_AND_TRANSMIT -> "1"
-            ExternalBatteryControlMode.CHARGE_ONLY -> "2"
+        val modeToken = when {
+            editedSettings.externalBatteryControlMode == ExternalBatteryControlMode.CHARGE_ONLY ||
+                !editedSettings.transmissionsEnabled -> "2"
+            editedSettings.externalBatteryControlMode == ExternalBatteryControlMode.CHARGE_AND_TRANSMIT -> "1"
+            else -> "0"
         }
 
         return "BAT X $modeToken"

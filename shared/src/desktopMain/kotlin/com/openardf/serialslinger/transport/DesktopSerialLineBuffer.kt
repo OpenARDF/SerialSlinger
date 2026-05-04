@@ -9,6 +9,7 @@ internal class DesktopSerialLineBuffer {
         for (byte in bytes) {
             val ch = byte.toInt().toChar()
             when (ch) {
+                '\u0000' -> Unit
                 '\r' -> {
                     flushPendingLine()
                     lastByteWasCarriageReturn = true
@@ -32,6 +33,8 @@ internal class DesktopSerialLineBuffer {
         completeLines.clear()
         return lines
     }
+
+    fun hasCompletedLines(): Boolean = completeLines.isNotEmpty()
 
     fun clear() {
         pendingText.clear()

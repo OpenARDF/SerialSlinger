@@ -141,7 +141,7 @@ object FrequencySupport {
         return null
     }
 
-    private fun currentBankFromFoxRole(foxRole: FoxRole?): FrequencyBankId? {
+    fun currentBankFromFoxRole(foxRole: FoxRole?): FrequencyBankId? {
         return when (foxRole) {
             FoxRole.BEACON -> FrequencyBankId.BEACON
             FoxRole.CLASSIC_1,

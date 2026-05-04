@@ -162,7 +162,11 @@ class AndroidUsbTransport(
                 )
                 lineBuffer.appendAscii(buffer, bytesRead)
                 lastDataAt = System.currentTimeMillis()
-            } else if (lastDataAt != null && (System.currentTimeMillis() - lastDataAt) >= quietMs) {
+            } else if (
+                lastDataAt != null &&
+                (System.currentTimeMillis() - lastDataAt) >= quietMs &&
+                lineBuffer.hasCompletedLines()
+            ) {
                 break
             } else {
                 Thread.sleep(pollIntervalMs.coerceAtMost(quietMs))

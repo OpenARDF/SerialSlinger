@@ -80,7 +80,11 @@ class AndroidDirectSerialTransport(
             if (bytesRead > 0) {
                 lineBuffer.appendAscii(buffer, bytesRead)
                 lastDataAt = System.currentTimeMillis()
-            } else if (lastDataAt != null && (System.currentTimeMillis() - lastDataAt) >= quietPeriodMs) {
+            } else if (
+                lastDataAt != null &&
+                (System.currentTimeMillis() - lastDataAt) >= quietPeriodMs &&
+                lineBuffer.hasCompletedLines()
+            ) {
                 break
             } else {
                 Thread.sleep(pollIntervalMs)

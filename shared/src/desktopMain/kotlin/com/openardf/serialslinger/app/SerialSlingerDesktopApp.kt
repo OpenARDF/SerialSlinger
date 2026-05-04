@@ -666,6 +666,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             listOf(
                 DesktopLogEntry("Desktop UI launched.", DesktopLogCategory.APP),
                 DesktopLogEntry("SerialSlinger app version ${SerialSlingerAppVersion.value}.", DesktopLogCategory.APP),
+                DesktopLogEntry("Process ID: ${ProcessHandle.current().pid()}.", DesktopLogCategory.APP),
+                DesktopLogEntry("Launch directory: ${System.getProperty("user.dir")}.", DesktopLogCategory.APP),
                 DesktopLogEntry("Current log file: ${sessionLog.currentLogFile()}", DesktopLogCategory.APP),
             ),
         )
@@ -2576,16 +2578,43 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 setBusyProgress(94, 100, "Checking device time")
                 val clockSample = postLoadClockSample(transport, refreshed.state.snapshot)
                 val refreshedWithClock = mergeLoadResults(refreshed, clockSample?.first)
+                val syncResult =
+                    if (clockSample?.second?.phaseErrorMillis?.let(::hasClockPhaseWarning) == true) {
+                        performAlignedTimeSync(
+                            transport = transport,
+                            state = refreshedWithClock.state,
+                            snapshot = requireNotNull(refreshedWithClock.state.snapshot),
+                        )
+                    } else {
+                        null
+                    }
+                val finalRefresh =
+                    syncResult?.let { sync ->
+                        mergeLoadResults(
+                            refreshedWithClock,
+                            DeviceLoadResult(
+                                state = sync.finalAttempt.state,
+                                commandsSent = emptyList(),
+                                linesReceived = emptyList(),
+                                traceEntries = buildSyncTraceEntries(sync),
+                            ),
+                        )
+                    } ?: refreshedWithClock
                 setBusyProgress(100, 100, "Done")
 
-                currentState = refreshedWithClock.state
-                loadedSnapshot = refreshedWithClock.state.snapshot
+                currentState = finalRefresh.state
+                loadedSnapshot = finalRefresh.state.snapshot
 
                 SwingUtilities.invokeLater {
-                    clockSample?.second?.let(::applyClockDisplayAnchor)
+                    if (syncResult != null) {
+                        deviceTimeOffset = Duration.ofMillis(-(syncResult.finalAttempt.phaseErrorMillis ?: 0L))
+                        lastDeviceTimeCheckAtMs = System.currentTimeMillis()
+                    } else {
+                        clockSample?.second?.let(::applyClockDisplayAnchor)
+                    }
                     applySnapshotToForm(
-                        refreshedWithClock.state.snapshot,
-                        recalculateClockOffset = clockSample == null,
+                        finalRefresh.state.snapshot,
+                        recalculateClockOffset = clockSample == null && syncResult == null,
                     )
                     appendFirmwareCloneLog(
                         title = "Clone",
@@ -2595,20 +2624,30 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         refreshResult = refreshedWithClock,
                         comparedFieldKeys = cloneComparedFieldKeys(),
                         checksum = firmwareCloneResult.plan?.checksum,
+                        syncResult = syncResult,
                     )
+                    updateClockPhaseWarning(syncResult?.finalAttempt?.phaseErrorMillis ?: clockSample?.second?.phaseErrorMillis)
                     updateCloneTemplateLabel(
                         cloneTemplateAttachedDeviceStateMessage(),
                         Color(0x9A, 0x67, 0x11),
                     )
                     showConnectionIndicator(
                         ConnectionIndicatorState.CONNECTED,
-                        if (writePlan.changes.isEmpty()) {
+                        if (syncResult?.succeeded == false) {
+                            "Clone completed on ${currentConnectedPortPath.orEmpty()}, but device time sync needs attention."
+                        } else if (writePlan.changes.isEmpty()) {
                             "Clone succeeded. Timed Event Settings already matched ${currentConnectedPortPath.orEmpty()}."
                         } else {
                             "Clone succeeded on ${currentConnectedPortPath.orEmpty()}."
                         },
                     )
-                    setStatus("Clone succeeded.")
+                    setStatus(
+                        if (syncResult?.succeeded == false) {
+                            "Clone completed, but device time sync needs attention."
+                        } else {
+                            "Clone succeeded."
+                        },
+                    )
                 }
                 return@runInBackground
             }
@@ -4723,6 +4762,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         refreshResult: DeviceLoadResult,
         comparedFieldKeys: List<SettingKey>,
         checksum: Long?,
+        syncResult: TimeSyncOperationResult? = null,
     ) {
         val entries = mutableListOf<DesktopLogEntry>()
         entries += DesktopLogEntry(
@@ -4749,6 +4789,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             timestampMs = refreshResult.traceEntries.firstOrNull()?.timestampMs ?: System.currentTimeMillis(),
         )
         entries += traceEntriesToLogEntries(refreshResult.traceEntries, suffix = "(refresh)")
+        syncResult?.let { sync ->
+            entries += DesktopLogEntry(
+                message = "Synchronized device time after clone.",
+                category = DesktopLogCategory.APP,
+                timestampMs = latestTimestamp(refreshResult.traceEntries),
+            )
+            entries += buildSyncLogEntries(sync.attempts, sync.latencySamples)
+        }
         entries += buildWriteSummaryEntries(
             writePlan = writePlan,
             comparedFieldKeys = comparedFieldKeys,
@@ -4974,6 +5022,30 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         attempts: List<SyncAttempt>,
         latencySamples: List<ClockReadSample>,
     ) {
+        appendLog(title, buildSyncLogEntries(attempts, latencySamples))
+    }
+
+    private fun buildSyncTraceEntries(result: TimeSyncOperationResult): List<SerialTraceEntry> {
+        return buildList {
+            result.attempts.forEach { attempt ->
+                addAll(attempt.submitResult.submitTraceEntries)
+                addAll(attempt.submitResult.readbackTraceEntries)
+                attempt.verificationSamples.forEach { sample ->
+                    add(SerialTraceEntry(sample.sentAtMs, SerialTraceDirection.TX, sample.command))
+                    addAll(
+                        sample.responseLines.map { line ->
+                            SerialTraceEntry(sample.receivedAtMs, SerialTraceDirection.RX, line)
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    private fun buildSyncLogEntries(
+        attempts: List<SyncAttempt>,
+        latencySamples: List<ClockReadSample>,
+    ): List<DesktopLogEntry> {
         val entries = mutableListOf<DesktopLogEntry>()
         if (latencySamples.isNotEmpty()) {
             val medianRtt = DesktopInputSupport.medianMillis(latencySamples.map { it.roundTripMillis })
@@ -5009,36 +5081,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 attempt.verificationSamples.lastOrNull()?.receivedAtMs ?: attemptTimestampMs,
             )
         }
-        appendLog(title, entries)
+        return entries
     }
 
     private fun appendDisableEventLog(
-        goCommands: List<String>,
-        goLines: List<String>,
-        finishMirrorCommands: List<String>,
-        finishMirrorLines: List<String>,
-        clockRefreshCommands: List<String>,
-        clockRefreshLines: List<String>,
+        traceEntries: List<SerialTraceEntry>,
     ) {
         val entries = mutableListOf<DesktopLogEntry>()
-        goCommands.forEach { command ->
-            entries += DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL)
-        }
-        goLines.forEach { line ->
-            entries += DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL)
-        }
-        finishMirrorCommands.forEach { command ->
-            entries += DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL)
-        }
-        finishMirrorLines.forEach { line ->
-            entries += DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL)
-        }
-        clockRefreshCommands.forEach { command ->
-            entries += DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL)
-        }
-        clockRefreshLines.forEach { line ->
-            entries += DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL)
-        }
+        entries += traceEntriesToLogEntries(traceEntries)
         entries += DesktopLogEntry(
             "Finish Time was mirrored to Start Time using CLK F =.",
             DesktopLogCategory.APP,
@@ -7040,10 +7090,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val goCommands = listOf("GO 0")
             val currentTotalCommands = 1 + 3 + if (snapshot.capabilities.supportsScheduling) 1 else 0
             var commandsCompleted = 0
+            val traceEntries = mutableListOf<SerialTraceEntry>()
             val goLines = mutableListOf<String>()
             setBusyProgress(commandsCompleted, currentTotalCommands, commandProgressLabel(commandsCompleted, currentTotalCommands))
+            val goSentAtMs = System.currentTimeMillis()
             transport.sendCommands(goCommands)
+            traceEntries += goCommands.map { command ->
+                SerialTraceEntry(goSentAtMs, SerialTraceDirection.TX, command)
+            }
             goLines += transport.readAvailableLines()
+            val goReceivedAtMs = System.currentTimeMillis()
+            traceEntries += goLines.map { line ->
+                SerialTraceEntry(goReceivedAtMs, SerialTraceDirection.RX, line)
+            }
             commandsCompleted += goCommands.size
             setBusyProgress(commandsCompleted, currentTotalCommands, commandProgressLabel(commandsCompleted, currentTotalCommands))
 
@@ -7057,8 +7116,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val finishMirrorCommands = listOf("CLK F =", "CLK F", "EVT")
             val finishMirrorLines = mutableListOf<String>()
             finishMirrorCommands.forEach { command ->
+                val sentAtMs = System.currentTimeMillis()
                 transport.sendCommands(listOf(command))
-                finishMirrorLines += transport.readAvailableLines()
+                traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+                val responseLines = transport.readAvailableLines()
+                val receivedAtMs = System.currentTimeMillis()
+                finishMirrorLines += responseLines
+                traceEntries += responseLines.map { line ->
+                    SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+                }
                 commandsCompleted += 1
                 setBusyProgress(commandsCompleted, currentTotalCommands, commandProgressLabel(commandsCompleted, currentTotalCommands))
             }
@@ -7071,6 +7137,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val clockRefreshAnchor = if (clockRefreshCommands.isNotEmpty()) {
                 val clockSample = readClockSample(transport, command = "CLK")
                 clockRefreshLines += clockSample.responseLines
+                traceEntries += SerialTraceEntry(clockSample.sentAtMs, SerialTraceDirection.TX, clockSample.command)
+                traceEntries += clockSample.responseLines.map { line ->
+                    SerialTraceEntry(clockSample.receivedAtMs, SerialTraceDirection.RX, line)
+                }
                 commandsCompleted += 1
                 setBusyProgress(commandsCompleted, currentTotalCommands, commandProgressLabel(commandsCompleted, currentTotalCommands))
                 if (clockRefreshLines.isNotEmpty()) {
@@ -7105,12 +7175,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     recalculateClockOffset = clockRefreshLines.isEmpty(),
                 )
                 appendDisableEventLog(
-                    goCommands = goCommands,
-                    goLines = goLines,
-                    finishMirrorCommands = finishMirrorCommands,
-                    finishMirrorLines = finishMirrorLines,
-                    clockRefreshCommands = clockRefreshCommands,
-                    clockRefreshLines = clockRefreshLines,
+                    traceEntries = traceEntries,
                 )
                 setStatus("Event disabled.")
             }

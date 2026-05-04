@@ -392,6 +392,31 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                     pendingResult.finish()
                 }
             }
+            ACTION_RAW_COMMAND -> {
+                val command = intent.getStringExtra(EXTRA_RAW_COMMAND)
+                if (command == null) {
+                    resultCode = resultCanceled
+                    resultData = "Missing required extra: command"
+                    return
+                }
+
+                val pendingResult = goAsync()
+                AndroidSessionController.runRawCommand(
+                    context = context,
+                    commandInput = command,
+                    requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
+                    source = "adb",
+                ) { result ->
+                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
+                    pendingResult.resultData =
+                        if (result.isSuccess) {
+                            AndroidSessionController.debugStateSummary()
+                        } else {
+                            result.exceptionOrNull()?.message ?: "Unknown raw command failure"
+                        }
+                    pendingResult.finish()
+                }
+            }
             ACTION_CLONE -> {
                 AndroidSessionController.runCloneTimedEventSettings(
                     context = context,
@@ -452,6 +477,7 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val ACTION_SET_START_TIME = "com.SerialSlinger.openardf.DEBUG_SET_START_TIME"
         const val ACTION_SET_FINISH_TIME = "com.SerialSlinger.openardf.DEBUG_SET_FINISH_TIME"
         const val ACTION_SET_DAYS_TO_RUN = "com.SerialSlinger.openardf.DEBUG_SET_DAYS_TO_RUN"
+        const val ACTION_RAW_COMMAND = "com.SerialSlinger.openardf.DEBUG_RAW_COMMAND"
         const val ACTION_CLONE = "com.SerialSlinger.openardf.DEBUG_CLONE"
         const val ACTION_CLONE_WAIT = "com.SerialSlinger.openardf.DEBUG_CLONE_WAIT"
 
@@ -469,5 +495,6 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val EXTRA_START_TIME = "start_time"
         const val EXTRA_FINISH_TIME = "finish_time"
         const val EXTRA_DAYS_TO_RUN = "days_to_run"
+        const val EXTRA_RAW_COMMAND = "command"
     }
 }
