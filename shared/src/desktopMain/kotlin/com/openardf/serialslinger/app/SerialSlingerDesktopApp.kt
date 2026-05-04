@@ -210,6 +210,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val cloneAccentColor = Color(0x1E, 0x40, 0xAF)
     private val cloneAccentBorderColor = Color(0x93, 0xC5, 0xFD)
     private val cloneAccentBackground = Color(0xEF, 0xF6, 0xFF)
+    private val cloneSessionAccentColor = Color(0xB9, 0x1C, 0x1C)
+    private val cloneSessionRolloverColor = Color(0xDC, 0x26, 0x26)
     private val applyAccentColor = Color(0x16, 0x65, 0x34)
     private val applyAccentRolloverColor = Color(0x15, 0x80, 0x3D)
     private val unreadFieldForeground = Color(0x6B, 0x72, 0x80)
@@ -218,7 +220,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val portModel = DefaultComboBoxModel<SignalSlingerPortProbe>()
     private val portComboBox = JComboBox(portModel)
     private val autoDetectButton = JButton("Find Device")
-    private val submitButton = createAccentButton("Clone")
+    private var cloneSessionTemplateLocked: Boolean = false
+    private val submitButton = createAccentButton(
+        title = "Clone",
+        accentColorProvider = ::cloneButtonAccentColor,
+        rolloverColorProvider = ::cloneButtonRolloverColor,
+    )
     private val applyButton = createAccentButton(
         title = "Apply",
         accentColor = applyAccentColor,
@@ -1127,11 +1134,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         title: String,
         accentColor: Color = cloneAccentColor,
         rolloverColor: Color = accentColor,
+        accentColorProvider: (() -> Color)? = null,
+        rolloverColorProvider: (() -> Color)? = null,
     ): JButton {
         return object : JButton(title) {
             override fun paintComponent(graphics: Graphics) {
                 val graphics2d = graphics.create() as Graphics2D
                 try {
+                    val activeAccentColor = accentColorProvider?.invoke() ?: accentColor
+                    val activeRolloverColor = rolloverColorProvider?.invoke() ?: rolloverColor
                     graphics2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                     val referenceInsets = autoDetectButton.border.getBorderInsets(autoDetectButton)
                     val topInset = referenceInsets.top.coerceAtLeast(2)
@@ -1140,9 +1151,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     val fillHeight = (height - topInset - bottomInset).coerceAtLeast(10)
                     val fillColor = when {
                         !isEnabled -> Color(0xD1, 0xD5, 0xDB)
-                        model.isPressed -> accentColor.darker()
-                        model.isRollover -> rolloverColor
-                        else -> accentColor
+                        model.isPressed -> activeAccentColor.darker()
+                        model.isRollover -> activeRolloverColor
+                        else -> activeAccentColor
                     }
                     graphics2d.color = fillColor
                     graphics2d.fillRoundRect(1, fillY, width - 2, fillHeight, 12, 12)
@@ -1155,13 +1166,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             override fun paintBorder(graphics: Graphics) {
                 val graphics2d = graphics.create() as Graphics2D
                 try {
+                    val activeAccentColor = accentColorProvider?.invoke() ?: accentColor
                     graphics2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                     val referenceInsets = autoDetectButton.border.getBorderInsets(autoDetectButton)
                     val topInset = referenceInsets.top.coerceAtLeast(2)
                     val bottomInset = referenceInsets.bottom.coerceAtLeast(2)
                     val borderY = topInset
                     val borderHeight = (height - topInset - bottomInset).coerceAtLeast(10)
-                    graphics2d.color = if (isEnabled) accentColor.darker() else Color(0x9C, 0xA3, 0xAF)
+                    graphics2d.color = if (isEnabled) activeAccentColor.darker() else Color(0x9C, 0xA3, 0xAF)
                     graphics2d.drawRoundRect(1, borderY, width - 3, borderHeight - 1, 12, 12)
                 } finally {
                     graphics2d.dispose()
@@ -1175,6 +1187,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             isFocusPainted = false
             isRolloverEnabled = true
         }
+    }
+
+    private fun cloneButtonAccentColor(): Color {
+        return if (cloneSessionTemplateLocked) cloneSessionAccentColor else cloneAccentColor
+    }
+
+    private fun cloneButtonRolloverColor(): Color {
+        return if (cloneSessionTemplateLocked) cloneSessionRolloverColor else cloneAccentColor
+    }
+
+    private fun setCloneSessionTemplateLocked(locked: Boolean) {
+        if (cloneSessionTemplateLocked == locked) {
+            return
+        }
+        cloneSessionTemplateLocked = locked
+        submitButton.repaint()
     }
 
     private fun buildCurrentTimeRow(): JPanel {
@@ -2541,6 +2569,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             cloneTemplateCloningInProgressMessage(),
             Color(0x9A, 0x67, 0x11),
         )
+        setCloneSessionTemplateLocked(true)
 
         runInBackground("Cloning Timed Event Settings...") {
             val targetRefresh = DeviceSessionController.refreshFromDevice(
@@ -2726,6 +2755,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
         }
 
+        setCloneSessionTemplateLocked(false)
         runInBackground("Reloading clone template from attached device...") {
             val refreshedConnection = loadPort(portPath).copy(
                 loadLogTitle = "Clone Template Reload",
@@ -2828,6 +2858,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val writePlan = WritePlanner.create(baseSettings, validatedSettings, forceWriteKeys = forceWriteKeys)
         if (writePlan.changes.isEmpty()) {
             return
+        }
+        if (updatesTimedEventTemplate) {
+            setCloneSessionTemplateLocked(false)
         }
 
         showConnectionIndicator(
@@ -3863,6 +3896,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 },
             )
 
+            setCloneSessionTemplateLocked(false)
             showConnectionIndicator(
                 ConnectionIndicatorState.SEARCHING,
                 "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
@@ -4247,6 +4281,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         val description = "Disable Event"
         val commands = ScheduleSubmitSupport.disableEventCommands()
+        setCloneSessionTemplateLocked(false)
         showConnectionIndicator(
             ConnectionIndicatorState.SEARCHING,
             "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
@@ -4359,6 +4394,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             preservedDaysToRun = preservedDaysToRun,
         )
 
+        setCloneSessionTemplateLocked(false)
         showConnectionIndicator(
             ConnectionIndicatorState.SEARCHING,
             "Applying $description on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
@@ -6464,6 +6500,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentConnectedPortPath = connection.portPath
         loadedSnapshot = connection.result.state.snapshot
         consecutiveDeviceTimeCheckNoResponseCount = 0
+        setCloneSessionTemplateLocked(false)
         connection.result.state.snapshot?.settings?.let { loadedSettings ->
             if (cloneTemplateSettings == null) {
                 rememberCloneTemplateFrom(loadedSettings)
@@ -7086,6 +7123,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
+        setCloneSessionTemplateLocked(false)
         runInBackground("Disabling event...") {
             val goCommands = listOf("GO 0")
             val currentTotalCommands = 1 + 3 + if (snapshot.capabilities.supportsScheduling) 1 else 0

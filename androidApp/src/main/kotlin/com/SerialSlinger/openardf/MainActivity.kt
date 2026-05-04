@@ -598,8 +598,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun requestSignalSlingerReload() {
-        cloneTemplateLocked = false
-        AndroidSessionController.allowCloneTemplateTimedEventEdits()
+        clearCloneSessionTemplateLock()
         autoDetectSearchingForHeader = true
         AndroidSessionController.recordStatus("Searching for SignalSlinger...", isError = true)
         scheduleAutoDetect(
@@ -5971,7 +5970,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun headerCloneButton(uiState: AndroidUiState): Button =
         Button(this).apply {
             text = "Clone"
-            setBackgroundColor(Color.parseColor("#1E40AF"))
+            setBackgroundColor(cloneButtonColor(uiState))
             setTextColor(Color.WHITE)
             isEnabled = uiState.canClone
             alpha = if (uiState.canClone) 1f else 0.55f
@@ -5999,6 +5998,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             context = applicationContext,
                             requestedDeviceName = uiState.latestLoadedDeviceName,
                         )
+                        clearCloneSessionTemplateLock()
                     },
                     220L,
                 )
@@ -6012,6 +6012,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 requestedDeviceName = latestLoadedDeviceName,
             )
         }.apply {
+            setBackgroundColor(cloneButtonColor())
+            setTextColor(Color.WHITE)
             contentDescription = "Clone timed event settings to attached SignalSlinger"
             installLongPressGesture(this, allowShortTap = true) {
                 animateFeedback(this, null, playSound = true)
@@ -6021,18 +6023,30 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             context = applicationContext,
                             requestedDeviceName = latestLoadedDeviceName,
                         )
+                        clearCloneSessionTemplateLock()
                     },
                     220L,
                 )
             }
         }
 
+    private fun cloneButtonColor(uiState: AndroidUiState = AndroidSessionController.snapshotUiState()): Int {
+        return if (cloneTemplateLocked || uiState.cloneTemplateTimedEventEditsLocked) {
+            Color.parseColor("#B91C1C")
+        } else {
+            Color.parseColor("#1E40AF")
+        }
+    }
+
+    private fun clearCloneSessionTemplateLock() {
+        cloneTemplateLocked = false
+        AndroidSessionController.allowCloneTemplateTimedEventEdits()
+    }
+
     private fun maybeRunCloneWithClockWarning(
         uiState: AndroidUiState,
         requestedDeviceName: String?,
     ) {
-        cloneTemplateLocked = true
-        AndroidSessionController.lockCloneTemplateTimedEventEdits()
         if (!uiState.hasClockPhaseWarning) {
             runCloneWithStatusModal(requestedDeviceName)
             return
@@ -6121,6 +6135,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun runCloneWithStatusModal(requestedDeviceName: String?) {
+        cloneTemplateLocked = true
+        AndroidSessionController.lockCloneTemplateTimedEventEdits()
         val padding = (20 * resources.displayMetrics.density).toInt()
         val spacing = (12 * resources.displayMetrics.density).toInt()
         var userDismissed = false

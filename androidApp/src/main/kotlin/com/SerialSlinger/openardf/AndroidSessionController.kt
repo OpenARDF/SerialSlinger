@@ -81,6 +81,7 @@ data class AndroidUiState(
     val clockPhaseErrorMillis: Long?,
     val hasClockPhaseWarning: Boolean,
     val canClone: Boolean,
+    val cloneTemplateTimedEventEditsLocked: Boolean,
     val temperatureLoggingEnabled: Boolean,
 )
 
@@ -302,6 +303,7 @@ object AndroidSessionController {
                 clockPhaseErrorMillis = currentClockSkewMillisLocked(),
                 hasClockPhaseWarning = hasClockPhaseWarningLocked(),
                 canClone = canCloneLocked(),
+                cloneTemplateTimedEventEditsLocked = cloneTemplateTimedEventEditsLocked,
                 temperatureLoggingEnabled = temperatureLoggingEnabled,
             )
         }
@@ -319,12 +321,14 @@ object AndroidSessionController {
         synchronized(this) {
             cloneTemplateTimedEventEditsLocked = true
         }
+        notifyListeners()
     }
 
     fun allowCloneTemplateTimedEventEdits() {
         synchronized(this) {
             cloneTemplateTimedEventEditsLocked = false
         }
+        notifyListeners()
     }
 
     fun consumeTimelyReplyWarning(): String? {
@@ -1163,6 +1167,7 @@ object AndroidSessionController {
                         traceEntries = loadResult.traceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    cloneTemplateTimedEventEditsLocked = false
                     loadedSnapshot?.let(::rememberCloneTemplateFrom)
                     applySnapshotDrafts(loadedSnapshot)
                     clockAnchor?.let { anchor ->
