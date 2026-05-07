@@ -1,6 +1,7 @@
 package com.openardf.serialslinger.app
 
 import com.openardf.serialslinger.model.ConnectionState
+import com.openardf.serialslinger.model.ChampionshipSettingsSupport
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.EditableDeviceSettings
@@ -403,6 +404,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private lateinit var scheduleTimeAbsoluteMenuItem: JRadioButtonMenuItem
     private lateinit var scheduleTimeRelativeMenuItem: JRadioButtonMenuItem
     private lateinit var defaultEventLengthMenuItem: JMenuItem
+    private lateinit var championshipSettingsMenuItem: JMenuItem
     private lateinit var advancedModeMenuItem: JMenuItem
     private lateinit var temperatureLogsMenuItem: JMenuItem
     private lateinit var temperatureLogMenuItem: JCheckBoxMenuItem
@@ -798,6 +800,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         },
                     )
                     addSeparator()
+                    championshipSettingsMenuItem = JMenuItem("Set Events to Championships Settings").apply {
+                        isEnabled = false
+                        addActionListener { applyChampionshipSettingsFromMenu() }
+                    }
+                    add(championshipSettingsMenuItem)
                     add(
                         JMenuItem("About SerialSlinger").apply {
                             addActionListener { showAboutDialog() }
@@ -3118,6 +3125,133 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun applyChampionshipSettingsFromMenu() {
+        if (updatingForm || backgroundWorkInProgress) {
+            return
+        }
+        val transport = currentTransport ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        val state = currentState ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        val settings = loadedSnapshot?.settings ?: run {
+            JOptionPane.showMessageDialog(this, "Load Timed Event Settings first.")
+            return
+        }
+        if (!ChampionshipSettingsSupport.canOfferChampionshipSettings(settings)) {
+            return
+        }
+
+        val continueChoice = JOptionPane.showOptionDialog(
+            this,
+            "Set all event speed settings to those used in most championships competitions?",
+            "Championships Speed Settings",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+            null,
+            arrayOf("Cancel", "Continue"),
+            "Continue",
+        )
+        if (continueChoice != 1) {
+            setStatus("Championships speed settings cancelled.")
+            return
+        }
+
+        if (ChampionshipSettingsSupport.shouldWarnAboutFrequencies(settings)) {
+            JOptionPane.showMessageDialog(
+                this,
+                "The current frequency settings do not adhere to championships rules for all events.",
+                "Frequency Settings Warning",
+                JOptionPane.WARNING_MESSAGE,
+            )
+        }
+
+        val sortFrequencies =
+            if (ChampionshipSettingsSupport.frequencySortRequired(settings)) {
+                val sortChoice = JOptionPane.showOptionDialog(
+                    this,
+                    "Sort frequencies from lowest to highest?",
+                    "Sort Frequencies",
+                    JOptionPane.DEFAULT_OPTION,
+                    JOptionPane.QUESTION_MESSAGE,
+                    null,
+                    arrayOf("Sort", "Leave Unchanged"),
+                    "Sort",
+                )
+                sortChoice == 0
+            } else {
+                false
+            }
+
+        val plan = ChampionshipSettingsSupport.buildCommandPlan(settings, sortFrequencies)
+        setCloneSessionTemplateLocked(false)
+        showConnectionIndicator(
+            ConnectionIndicatorState.SEARCHING,
+            "Applying championships settings on ${currentConnectedPortPath.orEmpty()} and waiting for confirmation...",
+        )
+        runInBackground("Applying championships settings...") {
+            setBusyProgress(0, 100, "Sending championships settings")
+            val sentAtMs = System.currentTimeMillis()
+            transport.sendCommands(plan.commands)
+            val responseLines = transport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
+            extractDeviceError(responseLines)?.let { error ->
+                throw IllegalStateException(error)
+            }
+
+            val updatedState = if (responseLines.isNotEmpty()) {
+                DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+            } else {
+                state
+            }
+
+            val refreshed = DeviceSessionController.refreshFromDevice(
+                updatedState,
+                transport,
+                startEditing = true,
+                progress = { completed, total ->
+                    setBusyProgressRange(20, 95, completed, total, commandProgressLabel(completed, total))
+                },
+            )
+            setBusyProgress(97, 100, "Checking device time")
+            val refreshClockSample = postLoadClockSample(transport, refreshed.state.snapshot)
+            setBusyProgress(100, 100, "Done")
+            val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
+            currentState = refreshedWithClock.state
+            loadedSnapshot = refreshedWithClock.state.snapshot
+            refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+
+            SwingUtilities.invokeLater {
+                refreshClockSample?.second?.let(::applyClockDisplayAnchor)
+                applySnapshotToForm(
+                    refreshedWithClock.state.snapshot,
+                    recalculateClockOffset = refreshClockSample == null,
+                )
+                updateCloneTemplateLabel(
+                    "Clone template updated from current device.",
+                    Color(0x0B, 0x3D, 0x91),
+                )
+                appendRelativeScheduleLog(
+                    title = "Apply Championships Settings",
+                    commands = plan.commands,
+                    sentAtMs = sentAtMs,
+                    responseLines = responseLines,
+                    receivedAtMs = receivedAtMs,
+                    refreshResult = refreshedWithClock,
+                    reloadMessage = "Reloaded settings after championships settings change.",
+                )
+                showConnectionIndicator(
+                    ConnectionIndicatorState.CONNECTED,
+                    "Applied championships settings on ${currentConnectedPortPath.orEmpty()}.",
+                )
+                setStatus("Applied championships settings.")
+            }
+        }
+    }
+
     private fun applyStartTimeChange() {
         if (isScheduleInteractionSuppressed()) {
             return
@@ -4467,6 +4601,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         responseLines: List<String>,
         receivedAtMs: Long,
         refreshResult: DeviceLoadResult,
+        reloadMessage: String = "Reloaded settings after relative schedule change.",
     ) {
         appendLog(title, buildList {
             commands.forEach { command ->
@@ -4486,7 +4621,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             add(
                 DesktopLogEntry(
-                    message = "Reloaded settings after relative schedule change.",
+                    message = reloadMessage,
                     category = DesktopLogCategory.APP,
                 ),
             )
@@ -5394,6 +5529,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK &&
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED
+        if (::championshipSettingsMenuItem.isInitialized) {
+            championshipSettingsMenuItem.isEnabled =
+                writableEnabled &&
+                    ChampionshipSettingsSupport.canOfferChampionshipSettings(loadedSnapshot?.settings)
+        }
     }
 
     private fun updateThermalShutdownThresholdEditability(editable: Boolean) {
