@@ -723,6 +723,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         .setTitle("Choose Event Type")
                         .setSingleChoiceItems(labels, eventTypeOptions.indexOf(currentTimedEventType).coerceAtLeast(0)) { dialog, which ->
                             val chosenEventType = eventTypeOptions[which]
+                            AndroidSessionController.logUserAction("Selected Event Type: ${formatEventTypeLabel(chosenEventType)}.")
                             refreshTimedEventTypeSelection(chosenEventType)
                             if (chosenEventType != timedEventSettings.eventType) {
                                 runEventTypeSubmitOrPreview(chosenEventType, currentFoxRole)
@@ -744,6 +745,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     .setTitle("Choose Fox Role")
                     .setSingleChoiceItems(labels, foxRoleOptions.indexOf(currentFoxRole).coerceAtLeast(0)) { dialog, which ->
                         val chosenFoxRole = foxRoleOptions[which]
+                        AndroidSessionController.logUserAction("Selected Fox Role: ${chosenFoxRole.uiLabel}.")
                         (dialog as? AlertDialog)?.listView?.setItemChecked(which, true)
                         refreshDeviceFoxRoleSelection(chosenFoxRole)
                         val dismissAndSubmit = {
@@ -3705,7 +3707,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 append(BuildConfig.PROJECT_URL)
                 setSpan(URLSpan(BuildConfig.PROJECT_URL), linkStart, length, 0)
                 append("\n")
-                append("License: ${BuildConfig.LICENSE_LABEL}")
+                append("License: ")
+                val licenseLinkStart = length
+                append(BuildConfig.LICENSE_LABEL)
+                setSpan(URLSpan(BuildConfig.LICENSE_URL), licenseLinkStart, length, 0)
             }
         val aboutView =
             TextView(this).apply {
@@ -4656,6 +4661,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         safeWindow.callback =
             UserActionLoggingWindowCallback(
                 trackedWindow = safeWindow,
+                title = title,
                 delegate = originalCallback,
             )
         loggedWindows[safeWindow] = true
@@ -4663,6 +4669,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun logWindowUserAction(
         targetWindow: Window,
+        title: String,
         event: MotionEvent,
     ) {
         val targetView =
@@ -4672,7 +4679,24 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 rawY = event.rawY.toInt(),
             ) ?: return
         val description = resolveAndroidUserActionDescription(targetView) ?: return
+        if (title.hasExplicitSelectionLogging() && targetView.hasAdapterViewAncestor()) {
+            return
+        }
         AndroidSessionController.logUserAction(description)
+    }
+
+    private fun String.hasExplicitSelectionLogging(): Boolean =
+        this == "Choose Event Type" || this == "Choose Fox Role"
+
+    private fun View.hasAdapterViewAncestor(): Boolean {
+        var current: View? = this
+        while (current != null) {
+            if (current is AdapterView<*>) {
+                return true
+            }
+            current = current.parent as? View
+        }
+        return false
     }
 
     private fun findTouchedClickableView(
@@ -4746,11 +4770,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private inner class UserActionLoggingWindowCallback(
         private val trackedWindow: Window,
+        private val title: String,
         private val delegate: Window.Callback,
     ) : Window.Callback by delegate {
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
             if (event.actionMasked == MotionEvent.ACTION_UP) {
-                logWindowUserAction(trackedWindow, event)
+                logWindowUserAction(trackedWindow, title, event)
             }
             return delegate.dispatchTouchEvent(event)
         }

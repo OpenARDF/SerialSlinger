@@ -251,6 +251,7 @@ object AndroidSessionController {
     private var nextEventPauseRequestId: Long = 1L
     private var temperatureLoggingEnabled: Boolean = false
     private var temperatureLoggingThread: Thread? = null
+    private val transportLock = Any()
 
     fun initialize(context: Context) {
         synchronized(this) {
@@ -4328,13 +4329,15 @@ object AndroidSessionController {
                 allowUsbAutoDetect = allowUsbAutoDetect,
             ) ?: return Result.failure(IllegalStateException(missingMessage))
 
-        return try {
-            resolvedTransport.transport.connect()
-            Result.success(block(resolvedTransport.target, resolvedTransport.transport))
-        } catch (error: Throwable) {
-            Result.failure(error)
-        } finally {
-            resolvedTransport.transport.disconnect()
+        return synchronized(transportLock) {
+            try {
+                resolvedTransport.transport.connect()
+                Result.success(block(resolvedTransport.target, resolvedTransport.transport))
+            } catch (error: Throwable) {
+                Result.failure(error)
+            } finally {
+                resolvedTransport.transport.disconnect()
+            }
         }
     }
 

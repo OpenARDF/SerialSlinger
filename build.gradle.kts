@@ -19,6 +19,7 @@ val serialSlingerVendor = "OpenARDF"
 val serialSlingerDescription = "Desktop configuration tool for SignalSlinger devices."
 val serialSlingerProjectUrl = "https://github.com/OpenARDF/SerialSlinger"
 val serialSlingerLicenseLabel = "MIT License"
+val serialSlingerLicenseUrl = "https://opensource.org/license/mit"
 val serialSlingerBuildDateUtc = java.time.Instant.now().toString()
 
 version = serialSlingerPackageVersion
@@ -30,4 +31,5 @@ extra["serialSlingerVendor"] = serialSlingerVendor
 extra["serialSlingerDescription"] = serialSlingerDescription
 extra["serialSlingerProjectUrl"] = serialSlingerProjectUrl
 extra["serialSlingerLicenseLabel"] = serialSlingerLicenseLabel
+extra["serialSlingerLicenseUrl"] = serialSlingerLicenseUrl
 extra["serialSlingerBuildDateUtc"] = serialSlingerBuildDateUtc

@@ -879,7 +879,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     append("<div>Build Date (UTC): ${SerialSlingerVersion.buildDateUtc}</div>")
                     append("<div>Platform: Desktop</div>")
                     append("<div>Project: <a href='${SerialSlingerVersion.projectUrl}'>${SerialSlingerVersion.projectUrl}</a></div>")
-                    append("<div>License: ${SerialSlingerVersion.licenseLabel}</div>")
+                    append("<div>License: <a href='${SerialSlingerVersion.licenseUrl}'>${SerialSlingerVersion.licenseLabel}</a></div>")
                     append("</body></html>")
                 },
             ).apply {
@@ -1361,11 +1361,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         eventTypeCombo.addActionListener {
             if (!updatingForm) {
+                (eventTypeCombo.selectedItem as? EventType)?.let { eventType ->
+                    appendUserActionLog("Selected Event Type: ${formatEventTypeLabel(eventType)}.")
+                }
                 applyEventTypeChange()
             }
         }
         foxRoleCombo.addActionListener {
             if (!updatingForm) {
+                (foxRoleCombo.selectedItem as? FoxRole)?.let { foxRole ->
+                    appendUserActionLog("Selected Fox Role: ${foxRole.uiLabel}.")
+                }
                 applyFoxRoleChange()
             }
         }
@@ -5378,6 +5384,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         return false
     }
+
+    private fun formatEventTypeLabel(eventType: EventType): String =
+        eventType.name.lowercase().replaceFirstChar { it.uppercase() }
 
     private fun runInBackground(
         status: String,

@@ -17,6 +17,7 @@ val desktopPackageVendor = rootProject.extra["serialSlingerVendor"].toString()
 val desktopPackageDescription = rootProject.extra["serialSlingerDescription"].toString()
 val desktopProjectUrl = rootProject.extra["serialSlingerProjectUrl"].toString()
 val desktopLicenseLabel = rootProject.extra["serialSlingerLicenseLabel"].toString()
+val desktopLicenseUrl = rootProject.extra["serialSlingerLicenseUrl"].toString()
 val desktopBuildDateUtc = rootProject.extra["serialSlingerBuildDateUtc"].toString()
 val generatedDesktopVersionDir = layout.buildDirectory.dir("generated/source/desktopVersion/desktopMain/kotlin")
 
@@ -83,6 +84,7 @@ val generateDesktopVersionSource = tasks.register("generateDesktopVersionSource"
     inputs.property("desktopPackageVersion", desktopPackageVersion)
     inputs.property("desktopProjectUrl", desktopProjectUrl)
     inputs.property("desktopLicenseLabel", desktopLicenseLabel)
+    inputs.property("desktopLicenseUrl", desktopLicenseUrl)
     inputs.property("desktopBuildDateUtc", desktopBuildDateUtc)
     outputs.dir(generatedDesktopVersionDir)
 
@@ -100,6 +102,7 @@ val generateDesktopVersionSource = tasks.register("generateDesktopVersionSource"
                 const val buildDateUtc = "$desktopBuildDateUtc"
                 const val projectUrl = "$desktopProjectUrl"
                 const val licenseLabel = "$desktopLicenseLabel"
+                const val licenseUrl = "$desktopLicenseUrl"
             }
             """.trimIndent(),
         )
