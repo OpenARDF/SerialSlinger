@@ -12,6 +12,7 @@ import android.util.Log
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.EditableDeviceSettings
+import com.openardf.serialslinger.model.ChampionshipSettingsSupport
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.EventProfileSupport
@@ -124,6 +125,14 @@ private data class TimeSyncOperationResult(
 )
 
 private data class RelativeScheduleSubmitResult(
+    val state: DeviceSessionState,
+    val commandsSent: List<String>,
+    val responseLines: List<String>,
+    val reloadResult: DeviceLoadResult,
+    val traceEntries: List<SerialTraceEntry>,
+)
+
+private data class ChampionshipSettingsSubmitResult(
     val state: DeviceSessionState,
     val commandsSent: List<String>,
     val responseLines: List<String>,
@@ -1897,6 +1906,142 @@ object AndroidSessionController {
             notifyListeners()
             onComplete?.let { callback ->
                 mainHandler.post { callback(result) }
+            }
+        }
+    }
+
+    fun runChampionshipSettingsSubmit(
+        context: Context,
+        sortFrequencies: Boolean,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
+    ) {
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+        val snapshot = sessionState?.snapshot
+        val settings = snapshot?.settings
+        if (sessionState == null || snapshot == null || settings == null) {
+            val error = IllegalStateException("Load Timed Event Settings before applying championships settings.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "Championships settings failed."
+                statusIsError = true
+            }
+            emitCommandLog("championship-settings", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(Result.failure(error)) }
+            }
+            return
+        }
+        if (!ChampionshipSettingsSupport.canOfferChampionshipSettings(settings)) {
+            val error = IllegalStateException("Championships settings are already applied.")
+            synchronized(this) {
+                latestSubmitSummary = error.message.orEmpty()
+                statusText = error.message.orEmpty()
+                statusIsError = false
+            }
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(Result.failure(error)) }
+            }
+            return
+        }
+
+        val commandPlan = ChampionshipSettingsSupport.buildCommandPlan(settings, sortFrequencies)
+        synchronized(this) {
+            latestSubmitSummary = "Submitting championships settings..."
+            statusText = "Submitting championships settings..."
+            statusIsError = false
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-championship-settings-submit") {
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                val responseLines = mutableListOf<String>()
+                val commandTraceEntries = mutableListOf<SerialTraceEntry>()
+                commandPlan.commands.forEach { command ->
+                    val sentAtMs = System.currentTimeMillis()
+                    transport.sendCommands(listOf(command))
+                    commandTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+                    val commandResponseLines = transport.readAvailableLines()
+                    val receivedAtMs = System.currentTimeMillis()
+                    responseLines += commandResponseLines
+                    commandTraceEntries += commandResponseLines.map { line ->
+                        SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+                    }
+                    val deviceError = commandResponseLines.firstOrNull { it.contains("* Err:") }
+                    if (deviceError != null) {
+                        throw IllegalStateException(deviceError.removePrefix("* ").trim())
+                    }
+                }
+                var nextState = sessionState
+                if (responseLines.isNotEmpty()) {
+                    nextState = DeviceSessionWorkflow.ingestReportLines(nextState, responseLines)
+                }
+                val reloadResult = DeviceSessionController.refreshFromDevice(nextState, transport, startEditing = true)
+                val refreshedState =
+                    reloadResult.state.copy(
+                        editableSettings = reloadResult.state.snapshot?.let { refreshedSnapshot ->
+                            EditableDeviceSettings.fromDeviceSettings(refreshedSnapshot.settings)
+                        },
+                    )
+                ChampionshipSettingsSubmitResult(
+                    state = refreshedState,
+                    commandsSent = commandPlan.commands,
+                    responseLines = responseLines,
+                    reloadResult = reloadResult,
+                    traceEntries = buildList {
+                        addAll(commandTraceEntries)
+                        addAll(reloadResult.traceEntries)
+                    },
+                )
+            }
+
+            synchronized(this) {
+                if (result.isSuccess) {
+                    val submitResult = result.getOrThrow()
+                    latestSessionViewState = AndroidSessionViewState(
+                        state = submitResult.state,
+                        traceEntries = submitResult.traceEntries,
+                    )
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
+                    applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
+                    latestSubmitSummary = renderChampionshipSettingsSubmitSummary(submitResult)
+                    latestProbeSummary = "Latest load remains available above. Championships settings completed."
+                    statusText = "Championships settings updated and reloaded."
+                    statusIsError = false
+                } else {
+                    latestSubmitSummary = buildString {
+                        appendLine("Submit failed.")
+                        append(result.exceptionOrNull()?.message ?: "Unknown error")
+                    }.trim()
+                    statusText = "Championships settings failed."
+                    statusIsError = true
+                }
+            }
+
+            emitCommandLog(
+                command = "championship-settings",
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = result.getOrNull()?.traceEntries.orEmpty(),
+            )
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post {
+                    callback(result.fold(onSuccess = { Result.success(it.reloadResult) }, onFailure = { Result.failure(it) }))
+                }
             }
         }
     }
@@ -4570,6 +4715,19 @@ object AndroidSessionController {
                     appendLine(line)
                 }
             }
+        }.trim()
+    }
+
+    private fun renderChampionshipSettingsSubmitSummary(result: ChampionshipSettingsSubmitResult): String {
+        return buildString {
+            appendLine("Championships settings submitted.")
+            appendLine("Commands sent: ${result.commandsSent.size}")
+            result.commandsSent.forEach { command ->
+                appendLine("TX $command")
+            }
+            appendLine("Immediate response lines: ${result.responseLines.size}")
+            appendLine("Reload commands sent: ${result.reloadResult.commandsSent.size}")
+            appendLine("Reload response lines: ${result.reloadResult.linesReceived.size}")
         }.trim()
     }
 

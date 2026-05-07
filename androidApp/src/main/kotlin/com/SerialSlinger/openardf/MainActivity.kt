@@ -59,6 +59,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.openardf.serialslinger.model.DeviceCapabilities
+import com.openardf.serialslinger.model.ChampionshipSettingsSupport
 import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.DeviceStatus
@@ -1228,6 +1229,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         timedEventCard.addView(startTimeRow)
         startTimeLabelView?.alpha = if (schedulingFieldsEditable) 1f else 0.55f
+        startTimeLabelView?.forwardTapsToPicker(startTimeField, enabled = schedulingFieldsEditable)
+        startTimeRow.forwardTapsToPicker(startTimeField, enabled = schedulingFieldsEditable)
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
             absoluteStartField =
                 readOnlyField(
@@ -1380,6 +1383,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         finishTimeLabelView?.apply {
             alpha = if (finishTimeEditable) 1f else 0.55f
         }
+        finishTimeLabelView?.forwardTapsToPicker(finishTimeField, enabled = finishTimeEditable)
+        finishTimeRow.forwardTapsToPicker(finishTimeField, enabled = finishTimeEditable)
         if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) {
             absoluteFinishField =
                 readOnlyField(
@@ -2131,6 +2136,22 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 setOnDismissListener { timelyReplyWarningDialogOpen = false }
                 showLogged("SignalSlinger Reply Warning")
             }
+    }
+
+    private fun View.forwardTapsToPicker(
+        picker: View,
+        enabled: Boolean,
+    ) {
+        if (!enabled) {
+            setOnClickListener(null)
+            isClickable = false
+            return
+        }
+        isClickable = true
+        setOnClickListener {
+            picker.performClick()
+        }
+        installTapOnlyClick()
     }
 
     private fun installTimedEventSettingsPickerOpenGuard(view: View) {
@@ -3331,20 +3352,41 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun showSettingsDialog() {
         val appVersionLabel = appVersionLabel()
-        val labels =
-            arrayOf(
-                "Frequency Units (${if (frequencyDisplayUnit == AndroidFrequencyDisplayUnit.MHZ) "MHz" else "kHz"})",
-                "Temperature Units (${if (temperatureDisplayUnit == AndroidTemperatureDisplayUnit.CELSIUS) "Celsius" else "Fahrenheit"})",
-                "Device Time Setting (${if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) "Manual" else "Automatic"})",
-                "Schedule Time Setting (${if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"})",
-                "Default Event Length (${formatDefaultEventLength(defaultEventLengthMinutes)})",
-                "${if (systemTimeVisible) "Hide" else "Show"} System Time",
-                "${if (deviceDataVisible) "Hide" else "Show"} Device Data",
-                "About (Ver $appVersionLabel)",
-            )
+        val championshipSettingsEnabled =
+            ChampionshipSettingsSupport.canOfferChampionshipSettings(displayedTimedEventSettings)
+        val labels = listOf(
+            "Frequency Units (${if (frequencyDisplayUnit == AndroidFrequencyDisplayUnit.MHZ) "MHz" else "kHz"})",
+            "Temperature Units (${if (temperatureDisplayUnit == AndroidTemperatureDisplayUnit.CELSIUS) "Celsius" else "Fahrenheit"})",
+            "Device Time Setting (${if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) "Manual" else "Automatic"})",
+            "Schedule Time Setting (${if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"})",
+            "Default Event Length (${formatDefaultEventLength(defaultEventLengthMinutes)})",
+            "${if (systemTimeVisible) "Hide" else "Show"} System Time",
+            "${if (deviceDataVisible) "Hide" else "Show"} Device Data",
+            "Set Events to Championships Settings",
+            "About (Ver $appVersionLabel)",
+        )
+        val enabledRows = labels.indices.map { index ->
+            index != 7 || championshipSettingsEnabled
+        }
+        val adapter =
+            object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
+                override fun areAllItemsEnabled(): Boolean = false
+
+                override fun isEnabled(position: Int): Boolean {
+                    return enabledRows.getOrElse(position) { true }
+                }
+
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                    val view = super.getView(position, convertView, parent)
+                    (view as? TextView)?.setTextColor(
+                        if (isEnabled(position)) Color.BLACK else Color.GRAY,
+                    )
+                    return view
+                }
+            }
         AlertDialog.Builder(this)
             .setTitle("Settings")
-            .setItems(labels) { dialog, which ->
+            .setAdapter(adapter) { dialog, which ->
                 when (which) {
                     0 -> showFrequencySettingsDialog()
                     1 -> showTemperatureSettingsDialog()
@@ -3353,12 +3395,68 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     4 -> showDefaultEventLengthDialog()
                     5 -> setSystemTimeVisible(!systemTimeVisible)
                     6 -> setDeviceDataVisible(!deviceDataVisible)
-                    7 -> showAboutDialog()
+                    7 -> showChampionshipSettingsConfirmation()
+                    8 -> showAboutDialog()
                 }
                 dialog.dismiss()
             }
             .setNegativeButton("Close", null)
             .showLogged("Settings")
+    }
+
+    private fun showChampionshipSettingsConfirmation() {
+        val settings = displayedTimedEventSettings ?: return
+        if (!ChampionshipSettingsSupport.canOfferChampionshipSettings(settings)) {
+            return
+        }
+        AlertDialog.Builder(this)
+            .setMessage("Set all event speed settings to those used in most championships competitions?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Continue") { _, _ ->
+                showChampionshipFrequencyWarningIfNeeded(settings)
+            }
+            .showLogged("Championships Speed Settings")
+    }
+
+    private fun showChampionshipFrequencyWarningIfNeeded(settings: DeviceSettings) {
+        if (ChampionshipSettingsSupport.shouldWarnAboutFrequencies(settings)) {
+            AlertDialog.Builder(this)
+                .setMessage("The current frequency settings do not adhere to championships rules for all events.")
+                .setPositiveButton("OK") { _, _ ->
+                    showChampionshipFrequencySortIfNeeded(settings)
+                }
+                .showLogged("Frequency Settings Warning")
+        } else {
+            showChampionshipFrequencySortIfNeeded(settings)
+        }
+    }
+
+    private fun showChampionshipFrequencySortIfNeeded(settings: DeviceSettings) {
+        if (!ChampionshipSettingsSupport.frequencySortRequired(settings)) {
+            AndroidSessionController.runChampionshipSettingsSubmit(
+                context = this,
+                sortFrequencies = false,
+                source = "settings-menu",
+            )
+            return
+        }
+        AlertDialog.Builder(this)
+            .setMessage("Sort frequencies from lowest to highest?")
+            .setPositiveButton("Sort") { _, _ ->
+                AndroidSessionController.runChampionshipSettingsSubmit(
+                    context = this,
+                    sortFrequencies = true,
+                    source = "settings-menu",
+                )
+            }
+            .setNegativeButton("Leave Unchanged") { _, _ ->
+                AndroidSessionController.runChampionshipSettingsSubmit(
+                    context = this,
+                    sortFrequencies = false,
+                    source = "settings-menu",
+                )
+            }
+            .showLogged("Sort Frequencies")
     }
 
     private fun showFrequencySettingsDialog() {
