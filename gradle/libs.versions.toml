@@ -1,5 +1,5 @@
 [versions]
-android-gradle-plugin = "9.2.0"
+android-gradle-plugin = "9.2.1"
 kotlin = "2.3.20"
 jserialcomm = "2.11.4"
 usb-serial-for-android = "3.10.0"
