@@ -64,16 +64,20 @@ It:
 
 The intended release flow is:
 
-1. run `npm run jdeploy:release-preflight`
-2. review platform parity:
+1. align the shared release label in `build.gradle.kts`, `package.json`, and `package-lock.json`
+2. increment Android `versionCode` in `androidApp/build.gradle.kts` before applying the shared release label to an Android build
+3. run `npm run jdeploy:release-preflight`
+4. review platform parity:
    - ask whether any Android app changes in the release should also be carried into the desktop app
    - ask whether any desktop app changes in the release should also be carried into the Android app
    - either carry the needed changes across or explicitly record why no cross-platform change is needed
-3. run the automated Android tablet regression: `./scripts/android-regression.sh --serial <adb-serial>`
-4. run the desktop app regression series on macOS with a real attached SignalSlinger
-5. merge the desired release state to `main`
-6. create and push a tag like `v1.0.93`
-7. let the GitHub Actions workflow publish the release artifacts
+5. run the automated Android tablet regression: `./scripts/android-regression.sh --serial <adb-serial>`
+6. run the desktop app regression series on macOS with a real attached SignalSlinger
+7. merge the desired release state to `main`
+8. create and push a tag like `v1.0.93`
+9. let the GitHub Actions workflow publish the release artifacts
+
+Keep desktop and Android releases in sync by default. Do not run a separate Android-only release flow with different versioning, tests, or parity checks unless that difference is explicitly requested for the release.
 
 Do not push a normal public release tag until both real-device regression passes have completed:
 
@@ -145,3 +149,5 @@ Useful commands:
 - `./gradlew :androidApp:bundleRelease`
 
 If signing inputs are present, `bundleRelease` produces a signed release bundle. If they are absent, Gradle still builds the release bundle, but it will not be configured with the local upload key.
+
+For normal releases, use the same shared release flow above before building or uploading an Android bundle. That means the shared release label and Android `versionCode` move together, platform parity is reviewed, and the Android tablet regression remains part of the release gate. Only diverge from the jDeploy release procedure when a release is intentionally scoped to Android and that exception is recorded.
