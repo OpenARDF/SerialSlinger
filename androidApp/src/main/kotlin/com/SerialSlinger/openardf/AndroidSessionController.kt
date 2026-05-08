@@ -5487,7 +5487,16 @@ object AndroidSessionController {
             }
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result.map { }) }
+                mainHandler.post {
+                    callback(
+                        result.fold(
+                            onSuccess = { Result.success(Unit) },
+                            onFailure = { failure ->
+                                Result.failure(IllegalStateException(friendlyUpdateFailureMessage(failure), failure))
+                            },
+                        ),
+                    )
+                }
             }
         }
     }
@@ -5614,6 +5623,10 @@ object AndroidSessionController {
                 details.contains("did not enter update mode", ignoreCase = true) ||
                 details.contains("did not respond in update mode", ignoreCase = true) ->
                 "The update was interrupted or SignalSlinger did not restart as expected.\n\nReconnect the device and try again.\n\n$details"
+            details.contains("USB connection was interrupted", ignoreCase = true) ||
+                details.contains("Error writing", ignoreCase = true) ||
+                details.contains("rc=-1", ignoreCase = true) ->
+                "The USB connection was interrupted during the update.\n\nReconnect SignalSlinger and try Recovery Update.\n\n$details"
             else -> details
         }
     }

@@ -287,6 +287,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 device?.deviceName?.let { "deviceName=$it" } ?: "deviceName=<unknown>",
                             ),
                         )
+                        if (firmwareUpdateActive()) {
+                            AndroidSessionController.recordStatus("USB reconnected. Continuing SignalSlinger update...", isError = false)
+                            return
+                        }
                         AndroidSessionController.recordStatus("Loading SignalSlinger...", isError = false)
                         scheduleAutoDetect(delayMs = AUTO_DETECT_ATTACH_DELAY_MS)
                     }
@@ -299,6 +303,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 device?.deviceName?.let { "deviceName=$it" } ?: "deviceName=<unknown>",
                             ),
                         )
+                        if (firmwareUpdateActive()) {
+                            AndroidSessionController.recordStatus(
+                                "USB connection interrupted. Reconnect SignalSlinger to continue or recover the update.",
+                                isError = true,
+                            )
+                            return
+                        }
                         device?.deviceName?.let { deviceName ->
                             if (pendingAutoPermissionDeviceName == deviceName) {
                                 pendingAutoPermissionDeviceName = null
@@ -457,6 +468,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         attempt: Int = 0,
         forceReload: Boolean = false,
     ) {
+        if (firmwareUpdateActive()) {
+            return
+        }
         val shouldShowSearch = forceReload || AndroidSessionController.snapshotUiState().sessionViewState == null
         if (shouldShowSearch && !autoDetectSearchingForHeader) {
             autoDetectSearchingForHeader = true
@@ -480,6 +494,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         attempt: Int,
         forceReload: Boolean = false,
     ) {
+        if (firmwareUpdateActive()) {
+            autoDetectSearchingForHeader = false
+            return
+        }
         val usbDevices = AndroidUsbTransport.connectedDevices(usbManager)
         val supportedDevices = usbDevices.filter { it.supportedSerialDriver }
         val permittedSupportedDevices = supportedDevices.filter { it.hasPermission }
@@ -611,6 +629,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun requestSignalSlingerReload() {
+        if (firmwareUpdateActive()) {
+            AndroidSessionController.recordStatus("SignalSlinger update is already in progress.", isError = false)
+            return
+        }
         clearCloneSessionTemplateLock()
         autoDetectSearchingForHeader = true
         AndroidSessionController.recordStatus("Searching for SignalSlinger...", isError = true)
@@ -637,6 +659,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     ): AndroidUsbDeviceDescriptor? {
         return candidates.firstOrNull { it.deviceName == newlyDiscoveredDeviceName && predicate(it) }
             ?: candidates.firstOrNull(predicate)
+    }
+
+    private fun firmwareUpdateActive(): Boolean {
+        return AndroidSessionController.snapshotUiState().firmwareUpdateProgress != null
     }
 
     private fun renderContent() {
@@ -4328,14 +4354,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     modeGroup.findViewById<RadioButton>(modeGroup.checkedRadioButtonId)?.tag as? Int ?: 0
                 when (selectedMode) {
                     1 -> {
-                        chooseSignalSlingerHardwareOverrideBoard { overrideBoard ->
+                        chooseSignalSlingerHardwareOverrideBoard("Hardware Override") { overrideBoard ->
                             chooseSignalSlingerUpdateSource { requestedVersion ->
                                 startAndroidSignalSlingerUpdate(overrideBoard, recoverAlreadyWaiting = false, requestedVersion = requestedVersion)
                             }
                         }
                     }
                     2 -> {
-                        chooseSignalSlingerHardwareOverrideBoard { overrideBoard ->
+                        chooseSignalSlingerHardwareOverrideBoard("Recovery Update") { overrideBoard ->
                             chooseSignalSlingerUpdateSource { requestedVersion ->
                                 startAndroidSignalSlingerUpdate(overrideBoard, recoverAlreadyWaiting = true, requestedVersion = requestedVersion)
                             }
@@ -4352,12 +4378,33 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             .showLogged("Update SignalSlinger")
     }
 
-    private fun chooseSignalSlingerHardwareOverrideBoard(onSelected: (String) -> Unit) {
+    private fun chooseSignalSlingerHardwareOverrideBoard(
+        modeLabel: String,
+        onSelected: (String) -> Unit,
+    ) {
         val options = arrayOf("HW-3.5", "HW-3.4")
         AlertDialog.Builder(this)
             .setTitle("Update SignalSlinger")
             .setItems(options) { _, which ->
-                onSelected(options[which])
+                confirmSignalSlingerHardwareOverrideBoard(modeLabel, options[which], onSelected)
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update SignalSlinger")
+    }
+
+    private fun confirmSignalSlingerHardwareOverrideBoard(
+        modeLabel: String,
+        board: String,
+        onConfirmed: (String) -> Unit,
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle("Update SignalSlinger")
+            .setMessage(
+                "$modeLabel will install the update for physical hardware $board.\n\n" +
+                    "Only continue if the connected SignalSlinger board is actually $board.",
+            )
+            .setPositiveButton("Use $board") { _, _ ->
+                onConfirmed(board)
             }
             .setNegativeButton("Cancel", null)
             .showLogged("Update SignalSlinger")

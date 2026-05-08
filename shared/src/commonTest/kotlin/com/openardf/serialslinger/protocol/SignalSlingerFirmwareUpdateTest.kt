@@ -300,7 +300,7 @@ class SignalSlingerFirmwareUpdateTest {
             hexText = hex,
         )
 
-        assertEquals(listOf(9_600, 115_200, 9_600, 115_200, 9_600), transport.connectedBauds)
+        assertEquals(listOf(9_600, 115_200, 115_200, 9_600, 115_200, 9_600), transport.connectedBauds)
         assertEquals(listOf("**\r", "INF\r", "UPD\r"), transport.asciiWrites.take(3))
         assertTrue("RST\n" in transport.asciiWrites)
         assertTrue("R" in transport.asciiWrites)
@@ -440,7 +440,12 @@ class SignalSlingerFirmwareUpdateTest {
                         emptyList()
                     }
                     "U" -> if (resetSent) listOf("BOOT") else emptyList()
-                    "?" -> listOf("SignalSlinger BL0.11 proto=1 app=0x4000 page=512 flash=131072 baud=115200 boot=32 cmds=U,R,?,E,W,C")
+                    "?" ->
+                        if (resetSent) {
+                            listOf("SignalSlinger BL0.11 proto=1 app=0x4000 page=512 flash=131072 baud=115200 boot=32 cmds=U,R,?,E,W,C")
+                        } else {
+                            emptyList()
+                        }
                     "R" -> {
                         runSent = true
                         emptyList()

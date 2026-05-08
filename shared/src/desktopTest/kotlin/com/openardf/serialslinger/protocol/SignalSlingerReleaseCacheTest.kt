@@ -89,6 +89,62 @@ class SignalSlingerReleaseCacheTest {
     }
 
     @Test
+    fun overrideAllowsSameVersionResidentReleaseWhenDownloadFails() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        try {
+            root.resolve("HW-3.4/2.0.2").apply {
+                mkdirs()
+                resolve("SignalSlinger-Release-Info-v2.0.2-HW-3.4.json").writeText(manifest(version = "2.0.2", board = "HW-3.4"))
+            }
+
+            val selection = SignalSlingerReleaseCache(
+                rootDirectory = root,
+                downloadBytes = { error("network unavailable") },
+            ).selectLatestForUpdate(
+                hardwareBuild = "3.5",
+                currentFirmwareVersion = "2.0.2",
+                overrideBoard = "HW-3.4",
+            )
+
+            assertEquals(SignalSlingerReleaseSelectionSource.RESIDENT, selection.source)
+            assertEquals("2.0.2", selection.release.version)
+            assertEquals("HW-3.4", selection.release.board)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun overrideAllowsSameVersionDownloadedRelease() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        val latestApi = URI("https://api.github.test/releases/latest")
+        val zipUrl = "https://github.com/OpenARDF/SignalSlinger/releases/download/v2.0.2/SignalSlinger-Release-Files-v2.0.2-HW-3.4.zip"
+        try {
+            val selection = SignalSlingerReleaseCache(
+                rootDirectory = root,
+                repositoryApiUrl = latestApi,
+                downloadBytes = { uri ->
+                    when (uri) {
+                        latestApi -> """{"browser_download_url":"$zipUrl"}""".encodeToByteArray()
+                        URI(zipUrl) -> releaseZip(version = "2.0.2", board = "HW-3.4")
+                        else -> error("unexpected URI $uri")
+                    }
+                },
+            ).selectLatestForUpdate(
+                hardwareBuild = "3.5",
+                currentFirmwareVersion = "2.0.2",
+                overrideBoard = "HW-3.4",
+            )
+
+            assertEquals(SignalSlingerReleaseSelectionSource.DOWNLOADED, selection.source)
+            assertEquals("2.0.2", selection.release.version)
+            assertEquals("HW-3.4", selection.release.board)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun latestDownloadReplacesOlderResidentForSameBoardOnly() {
         val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
         val latestApi = URI("https://api.github.test/releases/latest")

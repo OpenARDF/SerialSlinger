@@ -4,6 +4,7 @@ private const val DefaultAppStartAddress = 0x4000
 private const val DefaultFlashBytes = 0x20000
 private const val DefaultPageBytes = 512
 private const val MaxTransferAttempts = 2
+private const val UpdateModeReconnectSettleMs = 350L
 
 private fun Int.toHex16(): String = "0x" + toString(16).uppercase().padStart(4, '0')
 
@@ -599,9 +600,8 @@ object SignalSlingerFirmwareUpdate {
             val acknowledgedUpdate = appLines.any { it.contains("Bootloader update") }
             transport.disconnect()
 
-            transport.connect(release.serialSlinger.updateBaud)
             progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0, "Waiting for SignalSlinger update mode"))
-            waitForBootloaderIdentity(transport, release)?.let { return it }
+            connectUpdateModeAndWaitForIdentity(transport, release, progress)?.let { return it }
             transport.disconnect()
 
             if (!acknowledgedUpdate) {
@@ -623,10 +623,50 @@ object SignalSlingerFirmwareUpdate {
             }
         }
 
-        transport.connect(release.serialSlinger.updateBaud)
         progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0, "Waiting for SignalSlinger update mode"))
-        waitForBootloaderIdentity(transport, release)?.let { return it }
+        connectUpdateModeAndWaitForIdentity(transport, release, progress)?.let { return it }
         error("SignalSlinger did not enter update mode.")
+    }
+
+    private fun connectUpdateModeAndWaitForIdentity(
+        transport: SignalSlingerFirmwareUpdateTransport,
+        release: SignalSlingerReleaseInfo,
+        progress: (SignalSlingerFirmwareUpdateProgress) -> Unit,
+    ): SignalSlingerBootloaderIdentity? {
+        var lastFailure: Throwable? = null
+        repeat(2) { attempt ->
+            try {
+                transport.disconnect()
+            } catch (_: Throwable) {
+            }
+            try {
+                Thread.sleep(UpdateModeReconnectSettleMs)
+                transport.connect(release.serialSlinger.updateBaud)
+                waitForBootloaderIdentity(transport, release)?.let { return it }
+                if (attempt == 0) {
+                    progress(
+                        SignalSlingerFirmwareUpdateProgress(
+                            "Preparing update",
+                            0,
+                            0,
+                            "Retrying update connection after SignalSlinger did not respond.",
+                        ),
+                    )
+                }
+            } catch (failure: Throwable) {
+                lastFailure = failure
+                progress(
+                    SignalSlingerFirmwareUpdateProgress(
+                        "Preparing update",
+                        0,
+                        0,
+                        "Retrying update connection after communication failed: ${failure.message.orEmpty()}",
+                    ),
+                )
+            }
+        }
+        lastFailure?.let { throw it }
+        return null
     }
 
     private fun readSupportedAppInfo(
@@ -662,6 +702,14 @@ object SignalSlingerFirmwareUpdate {
         release: SignalSlingerReleaseInfo,
     ): SignalSlingerBootloaderIdentity? {
         repeat(12) {
+            transport.writeAscii("?")
+            val queryLines = transport.readLines(500)
+            queryLines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return it }
+            if (queryLines.any { it.trim() == "BOOT" }) {
+                transport.writeAscii("?")
+                val infoLines = transport.readLines(500)
+                infoLines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return it }
+            }
             transport.writeAscii(release.serialSlinger.bootloaderEntryCommand)
             val lines = transport.readLines(250)
             lines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return it }

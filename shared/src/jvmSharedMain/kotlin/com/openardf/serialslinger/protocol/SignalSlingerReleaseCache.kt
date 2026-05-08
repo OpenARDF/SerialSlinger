@@ -46,10 +46,11 @@ class SignalSlingerReleaseCache(
         require(requestedHardware.isNotBlank()) {
             "Load the attached SignalSlinger before checking updates so SerialSlinger can choose the correct hardware package."
         }
+        val allowSameVersionReinstall = overrideBoard != null
         val resident = latestResidentForHardware(requestedHardware)
         val residentIsNewer =
             resident != null &&
-                SignalSlingerFirmwareUpdate.compareVersionStrings(resident.release.version, currentFirmwareVersion) > 0
+                SignalSlingerFirmwareUpdate.compareVersionStrings(resident.release.version, currentFirmwareVersion) >= if (allowSameVersionReinstall) 0 else 1
 
         val latest =
             try {
@@ -77,7 +78,8 @@ class SignalSlingerReleaseCache(
                 )
             }
 
-        if (SignalSlingerFirmwareUpdate.compareVersionStrings(latest.release.version, currentFirmwareVersion) <= 0) {
+        val latestVersionComparison = SignalSlingerFirmwareUpdate.compareVersionStrings(latest.release.version, currentFirmwareVersion)
+        if (latestVersionComparison < 0 || (latestVersionComparison == 0 && !allowSameVersionReinstall)) {
             if (residentIsNewer) {
                 return SignalSlingerReleaseSelection(
                     residentRelease = resident,
