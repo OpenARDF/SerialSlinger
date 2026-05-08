@@ -5547,6 +5547,14 @@ object AndroidSessionController {
                 delegate.connect(baudRate)
             }
 
+            override fun reconfigureBaudRate(baudRate: Int): Boolean {
+                val changed = delegate.reconfigureBaudRate(baudRate)
+                if (changed) {
+                    log("Switching update connection to $baudRate baud.")
+                }
+                return changed
+            }
+
             override fun disconnect() {
                 delegate.disconnect()
             }

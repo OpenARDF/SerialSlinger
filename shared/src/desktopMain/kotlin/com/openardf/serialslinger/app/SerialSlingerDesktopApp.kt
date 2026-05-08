@@ -5416,6 +5416,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 delegate.connect(baudRate)
             }
 
+            override fun reconfigureBaudRate(baudRate: Int): Boolean {
+                log("Switching update connection to $baudRate baud.")
+                return delegate.reconfigureBaudRate(baudRate)
+            }
+
             override fun disconnect() {
                 delegate.disconnect()
             }

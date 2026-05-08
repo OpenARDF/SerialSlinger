@@ -32,6 +32,19 @@ class SignalSlingerFirmwareUpdateTest {
     }
 
     @Test
+    fun parsesReleaseManifestWithTwoKilobyteBootArea() {
+        val manifest = SignalSlingerFirmwareUpdate.parseReleaseInfo(
+            sampleManifest(
+                updateBytes = sampleHex(appStartAddress = 0x2000).encodeToByteArray(),
+                appStartAddress = 0x2000,
+            ),
+        )
+
+        assertEquals(0x2000, manifest.update.startAddress)
+        assertEquals(0x2000, manifest.serialSlinger.appStartAddress)
+    }
+
+    @Test
     fun gatesBootloaderUpdateSupportAtFirmwareTwoDotZeroDotZero() {
         assertEquals(false, SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(null))
         assertEquals(false, SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(""))
@@ -185,6 +198,30 @@ class SignalSlingerFirmwareUpdateTest {
     }
 
     @Test
+    fun usesManifestAppStartForTwoKilobyteBootAreaHexBounds() {
+        val accepted = SignalSlingerFirmwareUpdate.parseIntelHexPages(
+            intelHex(
+                0x2000 to byteArrayOf(0x01, 0x02),
+                0x2200 to byteArrayOf(0x03),
+            ),
+            appStartAddress = 0x2000,
+        )
+
+        assertEquals(listOf(0x2000, 0x2200), accepted.map { it.address })
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            SignalSlingerFirmwareUpdate.parseIntelHexPages(
+                intelHex(
+                    0x1FFF to byteArrayOf(0x12),
+                    0x2000 to byteArrayOf(0x34),
+                ),
+                appStartAddress = 0x2000,
+            )
+        }
+        assertTrue(error.message.orEmpty().contains("0x00001FFF"))
+    }
+
+    @Test
     fun parsesExtendedSegmentAddressRecords() {
         val hex = listOf(
             record(0x4000, 0x00, byteArrayOf(0x01)),
@@ -230,6 +267,37 @@ class SignalSlingerFirmwareUpdateTest {
     }
 
     @Test
+    fun buildsPagePlanWithTwoKilobyteResetVectorPageWrittenLast() {
+        val pages = SignalSlingerFirmwareUpdate.parseIntelHexPages(
+            intelHex(
+                0x2000 to byteArrayOf(0x01, 0x02),
+                0x2200 to byteArrayOf(0x03),
+                0x2400 to byteArrayOf(0x04),
+            ),
+            appStartAddress = 0x2000,
+        )
+
+        val plan = SignalSlingerFirmwareUpdate.buildUpdatePlan(pages, appStartAddress = 0x2000)
+
+        assertEquals(listOf(0x2000, 0x2200, 0x2400), pages.map { it.address })
+        assertEquals(
+            listOf(
+                SignalSlingerFirmwareOperationKind.ERASE to 0x2000,
+                SignalSlingerFirmwareOperationKind.ERASE to 0x2200,
+                SignalSlingerFirmwareOperationKind.WRITE to 0x2200,
+                SignalSlingerFirmwareOperationKind.CRC to 0x2200,
+                SignalSlingerFirmwareOperationKind.ERASE to 0x2400,
+                SignalSlingerFirmwareOperationKind.WRITE to 0x2400,
+                SignalSlingerFirmwareOperationKind.CRC to 0x2400,
+                SignalSlingerFirmwareOperationKind.WRITE to 0x2000,
+                SignalSlingerFirmwareOperationKind.CRC to 0x2000,
+                SignalSlingerFirmwareOperationKind.RUN to null,
+            ),
+            plan.operations.map { it.kind to it.address },
+        )
+    }
+
+    @Test
     fun constructsCrcProtectedFramesWithLittleEndianFields() {
         assertEquals(
             "45 00 40 00 00 9E 3E",
@@ -244,6 +312,16 @@ class SignalSlingerFirmwareUpdateTest {
         assertEquals(519, write.size)
         assertEquals("57 00 40 00 00", write.take(5).toByteArray().toHex())
         assertEquals("FF FF FF FF AF F3", write.takeLast(6).toByteArray().toHex())
+    }
+
+    @Test
+    fun constructsFramesForTwoKilobyteAppStart() {
+        assertEquals("00 20 00 00", SignalSlingerFirmwareUpdate.eraseFrame(0x2000).sliceArray(1..4).toHex())
+        assertEquals("00 20 00 00", SignalSlingerFirmwareUpdate.pageCrcFrame(0x2000).sliceArray(1..4).toHex())
+        assertEquals(
+            "57 00 20 00 00",
+            SignalSlingerFirmwareUpdate.writeFrame(0x2000, ByteArray(512) { 0xFF.toByte() }).take(5).toByteArray().toHex(),
+        )
     }
 
     @Test
@@ -301,11 +379,64 @@ class SignalSlingerFirmwareUpdateTest {
         )
 
         assertEquals(listOf(9_600, 115_200, 115_200, 115_200, 115_200, 9_600, 115_200, 9_600), transport.connectedBauds)
-        assertEquals(listOf("**\r", "INF\r", "UPD\r"), transport.asciiWrites.take(3))
+        assertEquals(listOf("**\r", "VER\r", "INF\r", "UPD\r"), transport.asciiWrites.take(4))
         assertTrue("RST\n" in transport.asciiWrites)
         assertTrue("R" in transport.asciiWrites)
         assertEquals("INF\r", transport.asciiWrites.last())
         assertEquals(listOf('E', 'W', 'C'), transport.binaryWrites.map { it[0].toInt().toChar() })
+    }
+
+    @Test
+    fun prefersOpenPortBaudSwitchAfterUpdAcknowledgement() {
+        val hex = sampleHex()
+        val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(sampleManifest(hex.encodeToByteArray()))
+        val transport = FakeUpdateTransport(
+            hex = hex,
+            acknowledgeUpd = true,
+            supportOpenPortBaudSwitch = true,
+        )
+
+        SignalSlingerFirmwareUpdate.performUpdate(
+            transport = transport,
+            release = release,
+            hexText = hex,
+        )
+
+        assertEquals(listOf(9_600, 9_600), transport.connectedBauds)
+        assertEquals(listOf(115_200), transport.reconfiguredBauds)
+        assertTrue("RST\n" !in transport.asciiWrites)
+        assertTrue("R" in transport.asciiWrites)
+        assertEquals(listOf('E', 'W', 'C'), transport.binaryWrites.map { it[0].toInt().toChar() })
+    }
+
+    @Test
+    fun performsUpdateWithTwoKilobyteBootAreaRelease() {
+        val hex = sampleHex(appStartAddress = 0x2000)
+        val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(
+            sampleManifest(
+                updateBytes = hex.encodeToByteArray(),
+                appStartAddress = 0x2000,
+            ),
+        )
+        val transport = FakeUpdateTransport(
+            hex = hex,
+            appStartAddress = 0x2000,
+            acknowledgeUpd = true,
+            supportOpenPortBaudSwitch = true,
+        )
+
+        SignalSlingerFirmwareUpdate.performUpdate(
+            transport = transport,
+            release = release,
+            hexText = hex,
+        )
+
+        assertEquals(0x2000, release.serialSlinger.appStartAddress)
+        assertEquals('E', transport.binaryWrites.first()[0].toInt().toChar())
+        assertEquals("00 20 00 00", transport.binaryWrites.first().sliceArray(1..4).toHex())
+        assertEquals('C', transport.binaryWrites.last()[0].toInt().toChar())
+        assertEquals("00 20 00 00", transport.binaryWrites.last().sliceArray(1..4).toHex())
+        assertTrue("R" in transport.asciiWrites)
     }
 
     @Test
@@ -328,7 +459,11 @@ class SignalSlingerFirmwareUpdateTest {
         assertEquals(9_600, transport.connectedBauds.last())
     }
 
-    private fun sampleManifest(updateBytes: ByteArray): String {
+    private fun sampleManifest(
+        updateBytes: ByteArray,
+        appStartAddress: Int = 0x4000,
+    ): String {
+        val startAddress = "0x" + appStartAddress.toString(16).uppercase()
         return """
             {
               "format": "signalslinger-release-info-v1",
@@ -339,7 +474,7 @@ class SignalSlingerFirmwareUpdateTest {
               "gitCommit": "abcdef",
               "update": {
                 "fileName": "SignalSlinger-Update-v2.0.0-HW-3.5.hex",
-                "startAddress": "0x4000",
+                "startAddress": "$startAddress",
                 "bytesInImage": 4
               },
               "serialSlinger": {
@@ -351,7 +486,7 @@ class SignalSlingerFirmwareUpdateTest {
                 "pageBytes": 512,
                 "protocolVersion": 1,
                 "bootloaderVersion": "BL0.11",
-                "appStartAddress": "0x4000",
+                "appStartAddress": "$startAddress",
                 "flashBytes": 131072
               },
               "files": [
@@ -367,7 +502,7 @@ class SignalSlingerFirmwareUpdateTest {
         """.trimIndent()
     }
 
-    private fun sampleHex(): String = intelHex(0x4000 to byteArrayOf(0x01, 0x02, 0x03, 0x04))
+    private fun sampleHex(appStartAddress: Int = 0x4000): String = intelHex(appStartAddress to byteArrayOf(0x01, 0x02, 0x03, 0x04))
 
     private fun sha256ForSampleHex(): String {
         return "1d9878e560beae019c8f407190e576b5c61c7ad9ab2a55a38ee5f1d97e1bfef6"
@@ -405,18 +540,32 @@ class SignalSlingerFirmwareUpdateTest {
 
     private class FakeUpdateTransport(
         hex: String,
+        private val appStartAddress: Int = 0x4000,
         private val respondToPostRunInfo: Boolean = true,
+        private val acknowledgeUpd: Boolean = false,
+        private val supportOpenPortBaudSwitch: Boolean = false,
     ) : SignalSlingerFirmwareUpdateTransport {
         val connectedBauds = mutableListOf<Int>()
+        val reconfiguredBauds = mutableListOf<Int>()
         val asciiWrites = mutableListOf<String>()
         val binaryWrites = mutableListOf<ByteArray>()
-        private val pages = SignalSlingerFirmwareUpdate.parseIntelHexPages(hex)
+        private val pages = SignalSlingerFirmwareUpdate.parseIntelHexPages(hex, appStartAddress = appStartAddress)
         private var pendingLines = emptyList<String>()
         private var resetSent = false
+        private var updateMode = false
         private var runSent = false
 
         override fun connect(baudRate: Int) {
             connectedBauds += baudRate
+        }
+
+        override fun reconfigureBaudRate(baudRate: Int): Boolean {
+            if (!supportOpenPortBaudSwitch) {
+                return false
+            }
+            reconfiguredBauds += baudRate
+            updateMode = true
+            return true
         }
 
         override fun disconnect() {
@@ -432,17 +581,23 @@ class SignalSlingerFirmwareUpdateTest {
                         } else {
                             listOf(
                                 "* INF product=SignalSlinger update=UPD",
-                                "* INF sw=2.0.0 hw=3.5 app=0x4000 baud=115200",
+                                "* INF sw=2.0.0 hw=3.5 app=${appStartAddress.toString(16).uppercase().padStart(4, '0').let { "0x$it" }} baud=115200",
                             )
+                        }
+                    "UPD\r" ->
+                        if (acknowledgeUpd) {
+                            listOf("* Bootloader update mode")
+                        } else {
+                            emptyList()
                         }
                     "RST\n" -> {
                         resetSent = true
                         emptyList()
                     }
-                    "U" -> if (resetSent) listOf("BOOT") else emptyList()
+                    "U" -> if (resetSent || updateMode) listOf("BOOT") else emptyList()
                     "?" ->
-                        if (resetSent) {
-                            listOf("SignalSlinger BL0.11 proto=1 app=0x4000 page=512 flash=131072 baud=115200 boot=32 cmds=U,R,?,E,W,C")
+                        if (resetSent || updateMode) {
+                            listOf("SignalSlinger BL0.11 proto=1 app=${appStartAddress.toString(16).uppercase().padStart(4, '0').let { "0x$it" }} page=512 flash=131072 baud=115200 boot=32 cmds=U,R,?,E,W,C")
                         } else {
                             emptyList()
                         }

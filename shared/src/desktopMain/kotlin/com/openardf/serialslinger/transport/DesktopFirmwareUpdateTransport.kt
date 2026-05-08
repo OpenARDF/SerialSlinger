@@ -15,17 +15,18 @@ class DesktopFirmwareUpdateTransport(
         disconnect()
         lineBuffer.clear()
         val port = SerialPort.getCommPort(portDescriptor)
-        port.setComPortParameters(
-            baudRate,
-            8,
-            SerialPort.ONE_STOP_BIT,
-            SerialPort.NO_PARITY,
-        )
+        configurePort(port, baudRate)
         port.setComPortTimeouts(SerialPort.TIMEOUT_NONBLOCKING, 0, 0)
         require(port.openPort()) {
             "Failed to open serial port `$portDescriptor` for update (error code ${port.lastErrorCode})."
         }
         serialPort = port
+    }
+
+    override fun reconfigureBaudRate(baudRate: Int): Boolean {
+        val port = serialPort ?: return false
+        lineBuffer.clear()
+        return configurePort(port, baudRate)
     }
 
     override fun disconnect() {
@@ -75,4 +76,15 @@ class DesktopFirmwareUpdateTransport(
 
         return lineBuffer.drainCompletedLines()
     }
+
+    private fun configurePort(
+        port: SerialPort,
+        baudRate: Int,
+    ): Boolean =
+        port.setComPortParameters(
+            baudRate,
+            8,
+            SerialPort.ONE_STOP_BIT,
+            SerialPort.NO_PARITY,
+        )
 }

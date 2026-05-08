@@ -194,6 +194,8 @@ data class SignalSlingerFirmwareUpdateProgress(
 interface SignalSlingerFirmwareUpdateTransport {
     fun connect(baudRate: Int)
 
+    fun reconfigureBaudRate(baudRate: Int): Boolean = false
+
     fun disconnect()
 
     fun writeAscii(text: String)
@@ -597,9 +599,13 @@ object SignalSlingerFirmwareUpdate {
                 return alreadyInUpdate
             }
             val acknowledgedUpdate = appLines.any { it.contains("Bootloader update") }
-            transport.disconnect()
 
             progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0, "Waiting for SignalSlinger update mode"))
+            if (transport.reconfigureBaudRate(release.serialSlinger.updateBaud)) {
+                waitForBootloaderIdentity(transport, release)?.let { return it }
+            }
+            transport.disconnect()
+
             connectUpdateModeAndWaitForIdentity(transport, release, progress)?.let { return it }
             transport.disconnect()
 
@@ -688,6 +694,8 @@ object SignalSlingerFirmwareUpdate {
             transport.readLines(600)
             transport.writeAscii("**\r")
             allLines += transport.readLines(250)
+            transport.writeAscii("VER\r")
+            allLines += transport.readLines(1_200)
             transport.writeAscii("${release.serialSlinger.appInfoCommand}\r")
             allLines += transport.readLines(1_200)
             allLines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return AppInfoReadResult(identity = it) }
@@ -796,8 +804,11 @@ object SignalSlingerFirmwareUpdate {
         require(release.serialSlinger.pageBytes == DefaultPageBytes) {
             "Update package page size ${release.serialSlinger.pageBytes} is not supported by this SerialSlinger build."
         }
-        require(release.serialSlinger.appStartAddress >= DefaultAppStartAddress) {
-            "Update package app address ${release.serialSlinger.appStartAddress.toHex32()} is below the supported app flash range."
+        require(release.serialSlinger.appStartAddress > 0 && release.serialSlinger.appStartAddress < release.serialSlinger.flashBytes) {
+            "Update package app address ${release.serialSlinger.appStartAddress.toHex32()} is outside the supported flash range."
+        }
+        require(release.serialSlinger.appStartAddress % release.serialSlinger.pageBytes == 0) {
+            "Update package app address ${release.serialSlinger.appStartAddress.toHex32()} is not page-aligned."
         }
         require(release.serialSlinger.flashBytes <= DefaultFlashBytes) {
             "Update package flash size ${release.serialSlinger.flashBytes} is larger than supported."
