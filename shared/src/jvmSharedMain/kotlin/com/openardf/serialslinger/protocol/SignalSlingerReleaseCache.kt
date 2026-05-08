@@ -34,6 +34,7 @@ class SignalSlingerReleaseCache(
     private val rootDirectory: File,
     private val repositoryApiUrl: URI = URI("https://api.github.com/repos/OpenARDF/SignalSlinger/releases/latest"),
     private val repositoryReleasesApiUrl: URI = URI("https://api.github.com/repos/OpenARDF/SignalSlinger/releases?per_page=20"),
+    private val downloadBytes: (URI) -> ByteArray = ::downloadHttpsBytes,
 ) {
     fun selectLatestForUpdate(
         hardwareBuild: String,
@@ -210,7 +211,7 @@ class SignalSlingerReleaseCache(
         require(uri.scheme == "https" && uri.host == "github.com") {
             "SignalSlinger release asset URL is not trusted."
         }
-        val zipBytes = readHttpsBytes(uri)
+        val zipBytes = readBytes(uri)
         rootDirectory.parentFile?.mkdirs()
         val stagingDir = Files.createTempDirectory(rootDirectory.toPath().parent ?: rootDirectory.toPath(), "serialslinger-update-")
         extractZipSafely(zipBytes, stagingDir.toFile())
@@ -283,23 +284,28 @@ class SignalSlingerReleaseCache(
         }
     }
 
-    private fun readHttpsText(uri: URI): String = readHttpsBytes(uri).decodeToString()
+    private fun readHttpsText(uri: URI): String = readBytes(uri).decodeToString()
 
-    private fun readHttpsBytes(uri: URI): ByteArray {
+    private fun readBytes(uri: URI): ByteArray {
         require(uri.scheme == "https") { "Only HTTPS downloads are supported." }
-        val connection = uri.toURL().openConnection() as HttpURLConnection
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 30_000
-        connection.instanceFollowRedirects = true
-        connection.setRequestProperty("Accept", "application/vnd.github+json, application/octet-stream")
-        connection.setRequestProperty("User-Agent", "SerialSlinger")
-        return try {
-            require(connection.responseCode in 200..299) {
-                "Download failed with HTTP ${connection.responseCode}."
-            }
-            connection.inputStream.use { it.readBytes() }
-        } finally {
-            connection.disconnect()
+        return downloadBytes(uri)
+    }
+}
+
+private fun downloadHttpsBytes(uri: URI): ByteArray {
+    require(uri.scheme == "https") { "Only HTTPS downloads are supported." }
+    val connection = uri.toURL().openConnection() as HttpURLConnection
+    connection.connectTimeout = 10_000
+    connection.readTimeout = 30_000
+    connection.instanceFollowRedirects = true
+    connection.setRequestProperty("Accept", "application/vnd.github+json, application/octet-stream")
+    connection.setRequestProperty("User-Agent", "SerialSlinger")
+    return try {
+        require(connection.responseCode in 200..299) {
+            "Download failed with HTTP ${connection.responseCode}."
         }
+        connection.inputStream.use { it.readBytes() }
+    } finally {
+        connection.disconnect()
     }
 }

@@ -1,9 +1,15 @@
 package com.openardf.serialslinger.protocol
 
 import java.nio.file.Files
+import java.net.URI
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class SignalSlingerReleaseCacheTest {
     @Test
@@ -27,6 +33,96 @@ class SignalSlingerReleaseCacheTest {
 
             assertEquals("2.1.0", resident.release.version)
             assertEquals("HW-3.5", resident.release.board)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun fallsBackToNewerResidentReleaseWhenDownloadFails() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        try {
+            root.resolve("HW-3.4/2.0.2").apply {
+                mkdirs()
+                resolve("SignalSlinger-Release-Info-v2.0.2-HW-3.4.json").writeText(manifest(version = "2.0.2", board = "HW-3.4"))
+            }
+
+            val selection = SignalSlingerReleaseCache(
+                rootDirectory = root,
+                downloadBytes = { error("network unavailable") },
+            ).selectLatestForUpdate(
+                hardwareBuild = "3.4",
+                currentFirmwareVersion = "2.0.1",
+            )
+
+            assertEquals(SignalSlingerReleaseSelectionSource.RESIDENT, selection.source)
+            assertEquals("2.0.2", selection.release.version)
+            assertNotNull(selection.downloadFailure)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun doesNotOfferResidentReleaseThatIsNotNewer() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        try {
+            root.resolve("HW-3.4/2.0.2").apply {
+                mkdirs()
+                resolve("SignalSlinger-Release-Info-v2.0.2-HW-3.4.json").writeText(manifest(version = "2.0.2", board = "HW-3.4"))
+            }
+
+            val error = assertFailsWith<IllegalStateException> {
+                SignalSlingerReleaseCache(
+                    rootDirectory = root,
+                    downloadBytes = { error("network unavailable") },
+                ).selectLatestForUpdate(
+                    hardwareBuild = "3.4",
+                    currentFirmwareVersion = "2.0.2",
+                )
+            }
+
+            assertTrue(error.message.orEmpty().contains("not newer"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun latestDownloadReplacesOlderResidentForSameBoardOnly() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        val latestApi = URI("https://api.github.test/releases/latest")
+        val zipUrl = "https://github.com/OpenARDF/SignalSlinger/releases/download/v2.0.2/SignalSlinger-Release-Files-v2.0.2-HW-3.4.zip"
+        try {
+            root.resolve("HW-3.4/2.0.1").apply {
+                mkdirs()
+                resolve("SignalSlinger-Release-Info-v2.0.1-HW-3.4.json").writeText(manifest(version = "2.0.1", board = "HW-3.4"))
+            }
+            root.resolve("HW-3.5/2.0.1").apply {
+                mkdirs()
+                resolve("SignalSlinger-Release-Info-v2.0.1-HW-3.5.json").writeText(manifest(version = "2.0.1", board = "HW-3.5"))
+            }
+
+            val selection = SignalSlingerReleaseCache(
+                rootDirectory = root,
+                repositoryApiUrl = latestApi,
+                downloadBytes = { uri ->
+                    when (uri) {
+                        latestApi -> """{"browser_download_url":"$zipUrl"}""".encodeToByteArray()
+                        URI(zipUrl) -> releaseZip(version = "2.0.2", board = "HW-3.4")
+                        else -> error("unexpected URI $uri")
+                    }
+                },
+            ).selectLatestForUpdate(
+                hardwareBuild = "3.4",
+                currentFirmwareVersion = "2.0.1",
+            )
+
+            assertEquals(SignalSlingerReleaseSelectionSource.DOWNLOADED, selection.source)
+            assertEquals("2.0.2", selection.release.version)
+            assertNull(root.resolve("HW-3.4/2.0.1/SignalSlinger-Release-Info-v2.0.1-HW-3.4.json").takeIf { it.exists() })
+            assertTrue(root.resolve("HW-3.4/2.0.2/SignalSlinger-Release-Info-v2.0.2-HW-3.4.json").isFile)
+            assertTrue(root.resolve("HW-3.5/2.0.1/SignalSlinger-Release-Info-v2.0.1-HW-3.5.json").isFile)
         } finally {
             root.deleteRecursively()
         }
@@ -68,5 +164,18 @@ class SignalSlingerReleaseCacheTest {
               ]
             }
         """.trimIndent()
+    }
+
+    private fun releaseZip(
+        version: String,
+        board: String,
+    ): ByteArray {
+        val output = java.io.ByteArrayOutputStream()
+        ZipOutputStream(output).use { zip ->
+            zip.putNextEntry(ZipEntry("SignalSlinger-Release-Info-v$version-$board.json"))
+            zip.write(manifest(version = version, board = board).encodeToByteArray())
+            zip.closeEntry()
+        }
+        return output.toByteArray()
     }
 }

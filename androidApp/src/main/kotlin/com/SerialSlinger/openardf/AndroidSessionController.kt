@@ -5365,8 +5365,13 @@ object AndroidSessionController {
                     }
                 val hardwareBuild = snapshot?.info?.hardwareBuild?.trim().orEmpty()
                 val firmwareVersion = snapshot?.info?.softwareVersion?.trim().orEmpty()
+                val updateBlockedByActiveRead = !recoverAlreadyWaiting && (signalSlingerReadInFlight || probeInFlight)
+                if (recoverAlreadyWaiting) {
+                    probeInFlight = false
+                    signalSlingerReadInFlight = false
+                }
                 when {
-                    signalSlingerReadInFlight || probeInFlight -> Result.failure(IllegalStateException("SignalSlinger is busy. Try the update again after the current operation finishes."))
+                    updateBlockedByActiveRead -> Result.failure(IllegalStateException("SignalSlinger is busy. Try the update again after the current operation finishes."))
                     recoverAlreadyWaiting && overrideBoard == null -> Result.failure(IllegalStateException("Select the physical SignalSlinger hardware before starting Recovery Update."))
                     recoverAlreadyWaiting && target !is AndroidConnectionTarget.Usb && recoveryUsbDeviceName == null -> Result.failure(IllegalStateException("Connect SignalSlinger to the USB port before starting Recovery Update."))
                     !recoverAlreadyWaiting && snapshot == null -> Result.failure(IllegalStateException("Load the attached SignalSlinger before starting an update."))
