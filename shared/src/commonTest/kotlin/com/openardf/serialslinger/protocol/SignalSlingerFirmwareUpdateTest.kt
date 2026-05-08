@@ -25,7 +25,7 @@ class SignalSlingerFirmwareUpdateTest {
         assertEquals("U", manifest.serialSlinger.bootloaderEntryCommand)
         assertEquals(512, manifest.serialSlinger.pageBytes)
         assertEquals(1, manifest.serialSlinger.protocolVersion)
-        assertEquals("BL0.10", manifest.serialSlinger.bootloaderVersion)
+        assertEquals("BL0.11", manifest.serialSlinger.bootloaderVersion)
         assertEquals(0x4000, manifest.serialSlinger.appStartAddress)
         assertEquals(131_072, manifest.serialSlinger.flashBytes)
         assertEquals(manifest.update.fileName, manifest.updateFile().fileName)
@@ -69,6 +69,7 @@ class SignalSlingerFirmwareUpdateTest {
             listOf(
                 "startup text",
                 "SignalSlINF* INF product=SignalSlinger update=UPD",
+                "> INF* INF product=SignalSlinger update=UPD",
                 "* INF sw=2.0.0 hw=3.5 app=0x4000 baud=115200",
             ),
         )
@@ -97,6 +98,46 @@ class SignalSlingerFirmwareUpdateTest {
 
         val error = assertFailsWith<IllegalArgumentException> {
             info.validateForRelease(release)
+        }
+        assertTrue(error.message.orEmpty().contains("does not match package board"))
+    }
+
+    @Test
+    fun canAllowAppInfoHardwareMismatchForOverrideUpdates() {
+        val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(sampleManifest(sampleHex().encodeToByteArray()))
+        val info = SignalSlingerAppInfo(
+            product = "SignalSlinger",
+            softwareVersion = "2.0.0",
+            hardwareBuild = "3.4",
+            appStartAddress = 0x4000,
+            updateBaud = 115_200,
+            appUpdateCommand = "UPD",
+        )
+
+        info.validateForRelease(release, requireHardwareMatch = false)
+    }
+
+    @Test
+    fun matchesHardwareBoardAliases() {
+        assertTrue(SignalSlingerFirmwareUpdate.hardwareMatchesBoard("3.4", "HW-3.4"))
+        assertTrue(SignalSlingerFirmwareUpdate.hardwareMatchesBoard("HW-3.4", "HW-3.4"))
+        assertTrue(SignalSlingerFirmwareUpdate.hardwareMatchesBoard("Board-3.4", "HW-3.4"))
+    }
+
+    @Test
+    fun postUpdateConfirmationStillRequiresPackageHardware() {
+        val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(sampleManifest(sampleHex().encodeToByteArray()))
+        val info = SignalSlingerAppInfo(
+            product = "SignalSlinger",
+            softwareVersion = "2.0.0",
+            hardwareBuild = "3.4",
+            appStartAddress = 0x4000,
+            updateBaud = 115_200,
+            appUpdateCommand = "UPD",
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            info.validateUpdatedForRelease(release)
         }
         assertTrue(error.message.orEmpty().contains("does not match package board"))
     }
@@ -267,6 +308,26 @@ class SignalSlingerFirmwareUpdateTest {
         assertEquals(listOf('E', 'W', 'C'), transport.binaryWrites.map { it[0].toInt().toChar() })
     }
 
+    @Test
+    fun doesNotRetryUpdateModeAfterRunCommand() {
+        val hex = sampleHex()
+        val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(sampleManifest(hex.encodeToByteArray()))
+        val transport = FakeUpdateTransport(hex, respondToPostRunInfo = false)
+
+        val failure = assertFailsWith<IllegalStateException> {
+            SignalSlingerFirmwareUpdate.performUpdate(
+                transport = transport,
+                release = release,
+                hexText = hex,
+            )
+        }
+
+        assertTrue(failure.message.orEmpty().contains("could not confirm the updated firmware after restart"))
+        assertEquals("R", transport.asciiWrites.last { it == "R" })
+        assertEquals(0, transport.asciiWrites.dropWhile { it != "R" }.count { it == "U" })
+        assertEquals(9_600, transport.connectedBauds.last())
+    }
+
     private fun sampleManifest(updateBytes: ByteArray): String {
         return """
             {
@@ -289,7 +350,7 @@ class SignalSlingerFirmwareUpdateTest {
                 "bootloaderEntryCommand": "U",
                 "pageBytes": 512,
                 "protocolVersion": 1,
-                "bootloaderVersion": "BL0.10",
+                "bootloaderVersion": "BL0.11",
                 "appStartAddress": "0x4000",
                 "flashBytes": 131072
               },
@@ -344,6 +405,7 @@ class SignalSlingerFirmwareUpdateTest {
 
     private class FakeUpdateTransport(
         hex: String,
+        private val respondToPostRunInfo: Boolean = true,
     ) : SignalSlingerFirmwareUpdateTransport {
         val connectedBauds = mutableListOf<Int>()
         val asciiWrites = mutableListOf<String>()
@@ -351,6 +413,7 @@ class SignalSlingerFirmwareUpdateTest {
         private val pages = SignalSlingerFirmwareUpdate.parseIntelHexPages(hex)
         private var pendingLines = emptyList<String>()
         private var resetSent = false
+        private var runSent = false
 
         override fun connect(baudRate: Int) {
             connectedBauds += baudRate
@@ -363,16 +426,25 @@ class SignalSlingerFirmwareUpdateTest {
             asciiWrites += text
             pendingLines =
                 when (text) {
-                    "INF\r" -> listOf(
-                        "* INF product=SignalSlinger update=UPD",
-                        "* INF sw=2.0.0 hw=3.5 app=0x4000 baud=115200",
-                    )
+                    "INF\r" ->
+                        if (runSent && !respondToPostRunInfo) {
+                            emptyList()
+                        } else {
+                            listOf(
+                                "* INF product=SignalSlinger update=UPD",
+                                "* INF sw=2.0.0 hw=3.5 app=0x4000 baud=115200",
+                            )
+                        }
                     "RST\n" -> {
                         resetSent = true
                         emptyList()
                     }
                     "U" -> if (resetSent) listOf("BOOT") else emptyList()
-                    "?" -> listOf("SignalSlinger BL0.10 proto=1 app=0x4000 page=512 flash=131072 baud=115200 boot=32 cmds=U,R,?,E,W,C")
+                    "?" -> listOf("SignalSlinger BL0.11 proto=1 app=0x4000 page=512 flash=131072 baud=115200 boot=32 cmds=U,R,?,E,W,C")
+                    "R" -> {
+                        runSent = true
+                        emptyList()
+                    }
                     else -> emptyList()
                 }
         }

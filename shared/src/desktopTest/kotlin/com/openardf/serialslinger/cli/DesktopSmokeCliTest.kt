@@ -60,6 +60,17 @@ class DesktopSmokeCliTest {
         assertEquals("/dev/tty.usbserial", update.port)
         assertEquals("/tmp/release.json", update.manifestPath)
         assertEquals(true, update.recoverAlreadyWaiting)
+        assertEquals(false, update.allowAppHardwareMismatch)
+    }
+
+    @Test
+    fun parsesUpdateHardwareMismatchOverride() {
+        val command = DesktopSmokeCliParser.parse(
+            arrayOf("update", "/dev/tty.usbserial", "/tmp/release.json", "--allow-hardware-mismatch"),
+        )
+
+        val update = assertIs<DesktopSmokeCommand.Update>(command)
+        assertEquals(true, update.allowAppHardwareMismatch)
     }
 
     @Test

@@ -51,6 +51,7 @@ sealed interface DesktopSmokeCommand {
         val port: String,
         val manifestPath: String,
         val recoverAlreadyWaiting: Boolean,
+        val allowAppHardwareMismatch: Boolean,
     ) : DesktopSmokeCommand
 }
 
@@ -101,6 +102,7 @@ object DesktopSmokeCliParser {
                     port = args[1],
                     manifestPath = args[2],
                     recoverAlreadyWaiting = args.drop(3).any { it == "--already-waiting" },
+                    allowAppHardwareMismatch = args.drop(3).any { it == "--allow-hardware-mismatch" },
                 )
             }
             else -> null
@@ -131,7 +133,12 @@ fun main(args: Array<String>) {
             command.updateBaud,
             command.resetAppFirst,
         )
-        is DesktopSmokeCommand.Update -> runUpdate(command.port, command.manifestPath, command.recoverAlreadyWaiting)
+        is DesktopSmokeCommand.Update -> runUpdate(
+            command.port,
+            command.manifestPath,
+            command.recoverAlreadyWaiting,
+            command.allowAppHardwareMismatch,
+        )
         null -> printUsage()
     }
 }
@@ -319,6 +326,7 @@ private fun runUpdate(
     port: String,
     manifestPath: String,
     recoverAlreadyWaiting: Boolean,
+    allowAppHardwareMismatch: Boolean,
 ) {
     val manifestFile = Path.of(manifestPath)
     val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(Files.readString(manifestFile))
@@ -333,6 +341,7 @@ private fun runUpdate(
             release = release,
             hexText = hexBytes.decodeToString(),
             recoverAlreadyWaiting = recoverAlreadyWaiting,
+            allowAppHardwareMismatch = allowAppHardwareMismatch,
             progress = { progress ->
                 println(
                     buildString {

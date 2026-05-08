@@ -64,9 +64,6 @@ data class SignalSlingerBootloaderIdentity(
 ) {
     fun validateForRelease(release: SignalSlingerReleaseInfo) {
         require(product.startsWith("SignalSlinger")) { "Update device did not identify as SignalSlinger." }
-        require(bootloaderVersion == release.serialSlinger.bootloaderVersion) {
-            "Update bootloader mismatch: device $bootloaderVersion, package ${release.serialSlinger.bootloaderVersion}."
-        }
         require(protocolVersion == release.serialSlinger.protocolVersion) {
             "Update protocol mismatch: device proto=$protocolVersion, package proto=${release.serialSlinger.protocolVersion}."
         }
@@ -99,15 +96,21 @@ data class SignalSlingerAppInfo(
     val updateBaud: Int? = null,
     val appUpdateCommand: String? = null,
 ) {
-    fun validateForRelease(release: SignalSlingerReleaseInfo) {
+    fun validateForRelease(
+        release: SignalSlingerReleaseInfo,
+        requireHardwareMatch: Boolean = true,
+    ) {
         require(SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(softwareVersion)) {
             "Connected SignalSlinger firmware ${softwareVersion.orEmpty().ifBlank { "unknown" }} does not support firmware updates. Firmware 2.0.0 or newer is required."
         }
         require(product == release.product) {
             "Connected device product `${product.orEmpty()}` does not match package product `${release.product}`."
         }
-        require(hardwareMatchesBoard(hardwareBuild, release.board) && release.update.fileName.contains(release.board)) {
-            "Connected hardware ${hardwareBuild.orEmpty().ifBlank { "unknown" }} does not match package board `${release.board}`."
+        require(!requireHardwareMatch || hardwareMatchesBoard(hardwareBuild, release.board)) {
+            "Connected firmware build ${hardwareBuild.orEmpty().ifBlank { "unknown" }} does not match package board `${release.board}`."
+        }
+        require(release.update.fileName.contains(release.board)) {
+            "Update file `${release.update.fileName}` does not identify package board `${release.board}`."
         }
         require(appStartAddress == release.serialSlinger.appStartAddress) {
             "Connected app start ${appStartAddress?.toHex32() ?: "unknown"} does not match package app ${release.serialSlinger.appStartAddress.toHex32()}."
@@ -213,6 +216,27 @@ object SignalSlingerFirmwareUpdate {
         val patch = match.groupValues[3].takeIf(String::isNotEmpty)?.toInt() ?: 0
         return compareVersion(major, minor, patch, 2, 0, 0) >= 0
     }
+
+    fun compareVersionStrings(
+        first: String?,
+        second: String?,
+    ): Int {
+        val firstParts = parseVersionParts(first)
+        val secondParts = parseVersionParts(second)
+        return compareVersion(
+            firstParts[0],
+            firstParts[1],
+            firstParts[2],
+            secondParts[0],
+            secondParts[1],
+            secondParts[2],
+        )
+    }
+
+    fun hardwareMatchesBoard(
+        hardwareBuild: String?,
+        board: String,
+    ): Boolean = hardwareBuildMatchesBoard(hardwareBuild, board)
 
     fun parseReleaseInfo(jsonText: String): SignalSlingerReleaseInfo {
         val root = JsonValue.parse(jsonText.trimStart('\uFEFF')).asObject()
@@ -388,8 +412,9 @@ object SignalSlingerFirmwareUpdate {
     fun parseAppInfo(lines: List<String>): SignalSlingerAppInfo? {
         val fields = mutableMapOf<String, String>()
         lines.forEach { line ->
-            val match = appInfoPattern.find(line.trim()) ?: return@forEach
-            parseKeyValueFields(match.groupValues[1]).forEach { (key, value) -> fields[key] = value }
+            appInfoPattern.findAll(line.trim()).forEach { match ->
+                parseKeyValueFields(match.groupValues[1]).forEach { (key, value) -> fields[key] = value }
+            }
         }
         if (fields.isNotEmpty()) {
             return SignalSlingerAppInfo(
@@ -416,6 +441,7 @@ object SignalSlingerFirmwareUpdate {
         release: SignalSlingerReleaseInfo,
         hexText: String,
         recoverAlreadyWaiting: Boolean = false,
+        allowAppHardwareMismatch: Boolean = false,
         progress: (SignalSlingerFirmwareUpdateProgress) -> Unit = {},
     ) {
         progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0))
@@ -440,16 +466,18 @@ object SignalSlingerFirmwareUpdate {
                 transport = transport,
                 release = release,
                 recoverAlreadyWaiting = recoverAlreadyWaiting,
+                allowAppHardwareMismatch = allowAppHardwareMismatch,
                 progress = progress,
             )
         identity.validateForRelease(release)
 
         var lastFailure: Throwable? = null
+        var transferCompleted = false
         for (attempt in 1..MaxTransferAttempts) {
             try {
                 transferPlan(transport, plan, progress)
-                confirmUpdatedApp(transport, release, progress)
-                return
+                transferCompleted = true
+                break
             } catch (failure: Throwable) {
                 lastFailure = failure
                 if (attempt >= MaxTransferAttempts) {
@@ -472,7 +500,10 @@ object SignalSlingerFirmwareUpdate {
                     ?: error("SignalSlinger did not respond in update mode after retry.")
             }
         }
-        throw lastFailure ?: IllegalStateException("SignalSlinger update failed.")
+        if (!transferCompleted) {
+            throw lastFailure ?: IllegalStateException("SignalSlinger update failed.")
+        }
+        confirmUpdatedApp(transport, release, progress)
     }
 
     private fun transferPlan(
@@ -525,20 +556,31 @@ object SignalSlingerFirmwareUpdate {
         progress: (SignalSlingerFirmwareUpdateProgress) -> Unit,
     ) {
         progress(SignalSlingerFirmwareUpdateProgress("Restarting SignalSlinger", 0, 0, "Checking SignalSlinger after restart"))
-        try {
-            transport.disconnect()
-        } catch (_: Throwable) {
+        var lastFailure: Throwable? = null
+        runCatching { transport.readLines(2_000) }
+        repeat(8) {
+            try {
+                transport.disconnect()
+            } catch (_: Throwable) {
+            }
+            transport.connect(release.serialSlinger.appBaud)
+            val appInfo = readSupportedAppInfo(transport, release)
+                ?: error("SignalSlinger update was sent, but SerialSlinger could not confirm the updated firmware after restart.")
+            try {
+                appInfo.validateUpdatedForRelease(release)
+                return
+            } catch (failure: Throwable) {
+                lastFailure = failure
+            }
         }
-        transport.connect(release.serialSlinger.appBaud)
-        val appInfo = readSupportedAppInfo(transport, release)
-            ?: error("SignalSlinger update was sent, but SerialSlinger could not confirm the updated firmware after restart.")
-        appInfo.validateUpdatedForRelease(release)
+        throw lastFailure ?: IllegalStateException("SignalSlinger update was sent, but SerialSlinger could not confirm the updated firmware after restart.")
     }
 
     private fun enterUpdateMode(
         transport: SignalSlingerFirmwareUpdateTransport,
         release: SignalSlingerReleaseInfo,
         recoverAlreadyWaiting: Boolean,
+        allowAppHardwareMismatch: Boolean,
         progress: (SignalSlingerFirmwareUpdateProgress) -> Unit,
     ): SignalSlingerBootloaderIdentity {
         if (!recoverAlreadyWaiting) {
@@ -547,7 +589,7 @@ object SignalSlingerFirmwareUpdate {
             infoResult.identity?.let { return it }
             val appInfo = infoResult.appInfo
                 ?: error("SerialSlinger could not confirm SignalSlinger firmware update support.")
-            appInfo.validateForRelease(release)
+            appInfo.validateForRelease(release, requireHardwareMatch = !allowAppHardwareMismatch)
             transport.writeAscii("${release.serialSlinger.appUpdateCommand}\r")
             val appLines = transport.readLines(300)
             val alreadyInUpdate = appLines.firstNotNullOfOrNull(::parseIdentityLine)
@@ -817,18 +859,35 @@ object SignalSlingerFirmwareUpdate {
 private fun hardwareMatchesBoard(
     hardwareBuild: String?,
     board: String,
+): Boolean = hardwareBuildMatchesBoard(hardwareBuild, board)
+
+private fun hardwareBuildMatchesBoard(
+    hardwareBuild: String?,
+    board: String,
 ): Boolean {
-    val hardwareToken = normalizeBoardToken(hardwareBuild ?: return false)
-    val boardToken = normalizeBoardToken(
-        board
-            .removePrefix("Board-")
-            .removePrefix("HW-"),
-    )
+    val hardwareToken = normalizeHardwareBoardToken(hardwareBuild ?: return false)
+    val boardToken = normalizeHardwareBoardToken(board)
     return hardwareToken.isNotEmpty() && hardwareToken == boardToken
 }
 
+private fun normalizeHardwareBoardToken(text: String): String =
+    normalizeBoardToken(
+        text
+            .removePrefix("Board-")
+            .removePrefix("HW-"),
+    )
+
 private fun normalizeBoardToken(text: String): String {
     return text.lowercase().filter { it.isLetterOrDigit() }
+}
+
+private fun parseVersionParts(version: String?): IntArray {
+    val match = version?.let(Regex("""^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?.*$""")::matchEntire)
+    return intArrayOf(
+        match?.groupValues?.get(1)?.toIntOrNull() ?: 0,
+        match?.groupValues?.get(2)?.takeIf(String::isNotEmpty)?.toIntOrNull() ?: 0,
+        match?.groupValues?.get(3)?.takeIf(String::isNotEmpty)?.toIntOrNull() ?: 0,
+    )
 }
 
 private sealed class JsonValue {
