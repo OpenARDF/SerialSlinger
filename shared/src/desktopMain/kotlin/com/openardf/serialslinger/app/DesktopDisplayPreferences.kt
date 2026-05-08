@@ -31,6 +31,7 @@ data class DesktopDisplayPreferences(
     val scheduleTimeInputMode: ScheduleTimeInputMode = ScheduleTimeInputMode.ABSOLUTE,
     val defaultEventLengthMinutes: Int = 6 * 60,
     val advancedModeEnabled: Boolean = false,
+    val automaticFirmwareUpdatesEnabled: Boolean = false,
 )
 
 interface DesktopDisplayPreferencesStore {
@@ -49,6 +50,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
     private const val keyScheduleTimeInputMode = "scheduleTimeInputMode"
     private const val keyDefaultEventLengthMinutes = "defaultEventLengthMinutes"
     private const val keyAdvancedModeEnabled = "advancedModeEnabled"
+    private const val keyAutomaticFirmwareUpdatesEnabled = "automaticFirmwareUpdatesEnabled"
     private val preferences: Preferences = Preferences.userRoot().node(nodePath)
 
     override fun load(): DesktopDisplayPreferences {
@@ -73,6 +75,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
             ),
             defaultEventLengthMinutes = preferences.getInt(keyDefaultEventLengthMinutes, 6 * 60).coerceIn(10, 24 * 60),
             advancedModeEnabled = preferences.getBoolean(keyAdvancedModeEnabled, false),
+            automaticFirmwareUpdatesEnabled = preferences.getBoolean(keyAutomaticFirmwareUpdatesEnabled, false),
         )
     }
 
@@ -85,6 +88,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
         this.preferences.put(keyScheduleTimeInputMode, preferences.scheduleTimeInputMode.name)
         this.preferences.putInt(keyDefaultEventLengthMinutes, preferences.defaultEventLengthMinutes.coerceIn(10, 24 * 60))
         this.preferences.putBoolean(keyAdvancedModeEnabled, preferences.advancedModeEnabled)
+        this.preferences.putBoolean(keyAutomaticFirmwareUpdatesEnabled, preferences.automaticFirmwareUpdatesEnabled)
         this.preferences.flush()
     }
 

@@ -38,6 +38,31 @@ class DesktopSmokeCliTest {
     }
 
     @Test
+    fun parsesUpdateProbeCommand() {
+        val command = DesktopSmokeCliParser.parse(
+            arrayOf("update-probe", "/dev/tty.usbserial", "--already-waiting", "--update-baud=9600"),
+        )
+
+        val updateProbe = assertIs<DesktopSmokeCommand.UpdateProbe>(command)
+        assertEquals("/dev/tty.usbserial", updateProbe.port)
+        assertEquals(true, updateProbe.recoverAlreadyWaiting)
+        assertEquals(9_600, updateProbe.updateBaud)
+        assertEquals(false, updateProbe.resetAppFirst)
+    }
+
+    @Test
+    fun parsesUpdateCommand() {
+        val command = DesktopSmokeCliParser.parse(
+            arrayOf("update", "/dev/tty.usbserial", "/tmp/release.json", "--already-waiting"),
+        )
+
+        val update = assertIs<DesktopSmokeCommand.Update>(command)
+        assertEquals("/dev/tty.usbserial", update.port)
+        assertEquals("/tmp/release.json", update.manifestPath)
+        assertEquals(true, update.recoverAlreadyWaiting)
+    }
+
+    @Test
     fun appliesAssignmentsToEditableSettings() {
         val editable = EditableDeviceSettings.fromDeviceSettings(sampleSettings())
 

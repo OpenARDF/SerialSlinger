@@ -28,6 +28,8 @@ import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
+import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
+import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
@@ -38,6 +40,7 @@ import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.session.SettingVerification
 import com.openardf.serialslinger.transport.DesktopSerialPortInfo
+import com.openardf.serialslinger.transport.DesktopFirmwareUpdateTransport
 import com.openardf.serialslinger.transport.DesktopSerialTransport
 import java.awt.AWTEvent
 import java.awt.Desktop
@@ -65,6 +68,7 @@ import java.awt.event.FocusEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
+import java.net.HttpURLConnection
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
@@ -75,6 +79,7 @@ import java.time.ZoneId
 import java.util.Calendar
 import java.util.Date
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.zip.ZipInputStream
 import javax.imageio.ImageIO
 import javax.swing.border.Border
 import javax.swing.AbstractButton
@@ -94,6 +99,7 @@ import javax.swing.JDialog
 import javax.swing.JFrame
 import javax.swing.JList
 import javax.swing.JLabel
+import javax.swing.JFileChooser
 import javax.swing.JOptionPane
 import javax.swing.JMenu
 import javax.swing.JMenuBar
@@ -120,6 +126,7 @@ import javax.swing.SpinnerDateModel
 import javax.swing.border.TitledBorder
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
+import javax.swing.filechooser.FileNameExtensionFilter
 
 fun main() {
     System.setProperty("apple.laf.useScreenMenuBar", shouldUseMacScreenMenuBar().toString())
@@ -395,6 +402,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val sessionLog = DesktopSessionLog()
     private lateinit var showLogMenuItem: JCheckBoxMenuItem
     private lateinit var showRawSerialMenuItem: JCheckBoxMenuItem
+    private lateinit var automaticFirmwareUpdatesMenuItem: JCheckBoxMenuItem
     private lateinit var frequencyKhzMenuItem: JRadioButtonMenuItem
     private lateinit var frequencyMhzMenuItem: JRadioButtonMenuItem
     private lateinit var temperatureCMenuItem: JRadioButtonMenuItem
@@ -832,6 +840,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                             addActionListener { copyCurrentLogToClipboard() }
                         },
                     )
+                    add(
+                        JMenuItem("Update SignalSlinger...").apply {
+                            addActionListener { chooseSignalSlingerUpdatePackage() }
+                        },
+                    )
+                    automaticFirmwareUpdatesMenuItem = JCheckBoxMenuItem(
+                        "Automatic SignalSlinger Firmware Updates",
+                        displayPreferences.automaticFirmwareUpdatesEnabled,
+                    ).apply {
+                        addActionListener { setAutomaticFirmwareUpdatesEnabled(isSelected) }
+                    }
+                    add(automaticFirmwareUpdatesMenuItem)
                     addSeparator()
                     add(
                         JMenuItem("Clear Current Log...").apply {
@@ -4979,6 +4999,412 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             ),
         )
         appendLog(title, entries)
+    }
+
+    private fun chooseSignalSlingerUpdatePackage() {
+        val portPath = currentConnectedPortPath ?: selectedProbe()?.portInfo?.systemPortPath
+        if (portPath.isNullOrBlank()) {
+            JOptionPane.showMessageDialog(this, "Connect SignalSlinger to the USB port before starting an update.")
+            return
+        }
+
+        val modeChoice = JOptionPane.showOptionDialog(
+            this,
+            "Choose the update mode.\n\nUse recovery only when SignalSlinger is already waiting for an update.",
+            "Update SignalSlinger",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            arrayOf("Update Connected Device", "Recovery Update", "Cancel"),
+            "Update Connected Device",
+        )
+        if (modeChoice == 2 || modeChoice == JOptionPane.CLOSED_OPTION) {
+            return
+        }
+        val recoverAlreadyWaiting = modeChoice == 1
+        if (!recoverAlreadyWaiting && !confirmLoadedFirmwareSupportsUpdate()) {
+            return
+        }
+
+        val sourceChoice = JOptionPane.showOptionDialog(
+            this,
+            "Choose the update package.",
+            "Update SignalSlinger",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            arrayOf("Choose Local File", "Download Latest", "Cancel"),
+            "Choose Local File",
+        )
+        if (sourceChoice == 2 || sourceChoice == JOptionPane.CLOSED_OPTION) {
+            return
+        }
+        if (sourceChoice == 1) {
+            updateSignalSlingerFromLatestGitHubRelease(
+                portPath = portPath,
+                recoverAlreadyWaiting = recoverAlreadyWaiting,
+            )
+        } else {
+            val chooser = JFileChooser().apply {
+                dialogTitle = "Update SignalSlinger"
+                fileSelectionMode = JFileChooser.FILES_ONLY
+                fileFilter = FileNameExtensionFilter("SignalSlinger release info (*.json)", "json")
+            }
+            if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+                return
+            }
+            updateSignalSlingerFromReleaseInfo(
+                portPath = portPath,
+                manifestFile = chooser.selectedFile,
+                recoverAlreadyWaiting = recoverAlreadyWaiting,
+            )
+        }
+    }
+
+    private fun confirmLoadedFirmwareSupportsUpdate(): Boolean {
+        val version = loadedSnapshot?.info?.softwareVersion?.trim().orEmpty()
+        if (SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(version)) {
+            return true
+        }
+
+        val message =
+            if (version.isBlank()) {
+                "Load the attached SignalSlinger before starting an update so SerialSlinger can confirm firmware update support."
+            } else {
+                "The attached SignalSlinger is running firmware $version.\n\nFirmware updates require SignalSlinger firmware 2.0.0 or newer."
+            }
+        JOptionPane.showMessageDialog(this, message, "Update SignalSlinger", JOptionPane.WARNING_MESSAGE)
+        setStatus(
+            if (version.isBlank()) {
+                "Update not started; load the attached SignalSlinger first."
+            } else {
+                "Update not started; attached firmware $version does not support firmware updates."
+            },
+        )
+        return false
+    }
+
+    private fun setAutomaticFirmwareUpdatesEnabled(enabled: Boolean) {
+        if (displayPreferences.automaticFirmwareUpdatesEnabled == enabled) {
+            return
+        }
+        displayPreferences = displayPreferences.copy(automaticFirmwareUpdatesEnabled = enabled)
+        persistDisplayPreferences()
+        if (::automaticFirmwareUpdatesMenuItem.isInitialized) {
+            automaticFirmwareUpdatesMenuItem.isSelected = enabled
+        }
+        setStatus(
+            if (enabled) {
+                "Automatic SignalSlinger firmware updates enabled."
+            } else {
+                "Automatic SignalSlinger firmware updates disabled."
+            },
+        )
+    }
+
+    private fun updateSignalSlingerFromReleaseInfo(
+        portPath: String,
+        manifestFile: File,
+        recoverAlreadyWaiting: Boolean,
+    ) {
+        runInBackground("Preparing update...", showBusyDialog = true) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                performSignalSlingerUpdate(
+                    portPath = portPath,
+                    manifestFile = manifestFile,
+                    recoverAlreadyWaiting = recoverAlreadyWaiting,
+                    logEntries = logEntries,
+                )
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Update SignalSlinger", logEntries)
+                }
+                throw IllegalStateException(friendlyUpdateFailureMessage(exception), exception)
+            }
+        }
+    }
+
+    private fun updateSignalSlingerFromLatestGitHubRelease(
+        portPath: String,
+        recoverAlreadyWaiting: Boolean,
+    ) {
+        runInBackground("Preparing update...", showBusyDialog = true) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                val hardwareBuild = loadedSnapshot?.info?.hardwareBuild?.trim().orEmpty()
+                require(hardwareBuild.isNotBlank()) {
+                    "Load the attached SignalSlinger before downloading an update so SerialSlinger can choose the correct hardware package."
+                }
+                val manifestFile = downloadLatestSignalSlingerReleasePackage(
+                    hardwareBuild = hardwareBuild,
+                    logEntries = logEntries,
+                )
+                performSignalSlingerUpdate(
+                    portPath = portPath,
+                    manifestFile = manifestFile,
+                    recoverAlreadyWaiting = recoverAlreadyWaiting,
+                    logEntries = logEntries,
+                )
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Update SignalSlinger", logEntries)
+                }
+                throw IllegalStateException(friendlyUpdateFailureMessage(exception), exception)
+            }
+        }
+    }
+
+    private fun performSignalSlingerUpdate(
+        portPath: String,
+        manifestFile: File,
+        recoverAlreadyWaiting: Boolean,
+        logEntries: MutableList<DesktopLogEntry>,
+    ) {
+        fun log(message: String, category: DesktopLogCategory = DesktopLogCategory.APP) {
+            logEntries += DesktopLogEntry(message, category)
+        }
+
+        log("Preparing SignalSlinger update from ${manifestFile.name}.")
+        val manifest = SignalSlingerFirmwareUpdate.parseReleaseInfo(Files.readString(manifestFile.toPath()))
+        val updateFile = manifest.updateFile()
+        val hexFile = manifestFile.parentFile.resolve(updateFile.fileName)
+        require(hexFile.isFile) {
+            "The update file `${updateFile.fileName}` was not found next to `${manifestFile.name}`."
+        }
+        val hexBytes = Files.readAllBytes(hexFile.toPath())
+        setBusyProgress(5, 100, "Checking file")
+        SignalSlingerFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
+        val hexText = hexBytes.decodeToString()
+        log("Checked update file ${updateFile.fileName} (${hexBytes.size} bytes).")
+
+        try {
+            currentTransport?.disconnect()
+        } catch (_: Exception) {
+        }
+        currentTransport = null
+        currentConnectedPortPath = null
+
+        val delegate = DesktopFirmwareUpdateTransport(portPath)
+        val updateTransport = loggingFirmwareUpdateTransport(delegate, logEntries)
+        try {
+            SignalSlingerFirmwareUpdate.performUpdate(
+                transport = updateTransport,
+                release = manifest,
+                hexText = hexText,
+                recoverAlreadyWaiting = recoverAlreadyWaiting,
+                progress = { progress ->
+                    val total = progress.totalPages.coerceAtLeast(1)
+                    val completed = progress.completedPages.coerceIn(0, total)
+                    val percent = when (progress.stage) {
+                        "Preparing update" -> 10
+                        "Verifying update" -> 20 + (completed * 70 / total)
+                        "Sending update" -> 20 + (completed * 70 / total)
+                        "Restarting SignalSlinger" -> 95
+                        else -> 10
+                    }
+                    progress.detail?.let { detail -> log(detail) }
+                    setBusyProgress(percent, 100, progress.stage)
+                },
+            )
+        } finally {
+            updateTransport.disconnect()
+        }
+
+        log("SignalSlinger update completed: ${manifest.product} ${manifest.version} ${manifest.board}.")
+        SwingUtilities.invokeLater {
+            appendLog("Update SignalSlinger", logEntries)
+            clearFormForUnread()
+            setStatus("SignalSlinger update completed.")
+            JOptionPane.showMessageDialog(this, "SignalSlinger update completed.")
+        }
+    }
+
+    private fun downloadLatestSignalSlingerReleasePackage(
+        hardwareBuild: String,
+        logEntries: MutableList<DesktopLogEntry>,
+    ): File {
+        fun log(message: String) {
+            logEntries += DesktopLogEntry(message, DesktopLogCategory.APP)
+        }
+
+        setBusyProgress(2, 100, "Checking file")
+        val apiUrl = URI("https://api.github.com/repos/OpenARDF/SignalSlinger/releases/latest")
+        log("Checking latest SignalSlinger release on GitHub.")
+        val releaseJson = readHttpsText(apiUrl)
+        val assetUrls = Regex(""""browser_download_url"\s*:\s*"([^"]+)"""")
+            .findAll(releaseJson)
+            .map { it.groupValues[1] }
+            .filter { it.startsWith("https://github.com/OpenARDF/SignalSlinger/releases/download/") }
+            .toList()
+        val hardwareToken = hardwareBuild.filter { it.isLetterOrDigit() }
+        val zipUrl = assetUrls.firstOrNull { url ->
+            url.endsWith(".zip") &&
+                url.contains("Release-Files") &&
+                (hardwareToken.isBlank() || url.filter { it.isLetterOrDigit() }.contains(hardwareToken, ignoreCase = true))
+        } ?: error("No SignalSlinger release package was found on GitHub for hardware ${hardwareBuild.ifBlank { "unknown" }}.")
+
+        val uri = URI(zipUrl)
+        require(uri.scheme == "https" && uri.host == "github.com") {
+            "SignalSlinger release asset URL is not trusted."
+        }
+        log("Downloading ${uri.path.substringAfterLast('/')}.")
+        setBusyProgress(4, 100, "Checking file")
+        val zipBytes = readHttpsBytes(uri)
+        val tempDir = Files.createTempDirectory("serialslinger-signalslinger-update-")
+        ZipInputStream(zipBytes.inputStream()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                val entryName = entry.name
+                require(!entryName.startsWith("/") && !entryName.contains("..")) {
+                    "SignalSlinger release package contains an unsafe file path."
+                }
+                if (!entry.isDirectory) {
+                    val output = tempDir.resolve(entryName).normalize()
+                    require(output.startsWith(tempDir)) {
+                        "SignalSlinger release package contains an unsafe file path."
+                    }
+                    Files.createDirectories(output.parent)
+                    Files.copy(zip, output)
+                }
+                zip.closeEntry()
+            }
+        }
+        val manifest = Files.walk(tempDir).use { paths ->
+            paths
+                .filter { Files.isRegularFile(it) }
+                .filter { it.fileName.toString().startsWith("SignalSlinger-Release-Info-") }
+                .filter { it.fileName.toString().endsWith(".json") }
+                .findFirst()
+                .orElseThrow { IllegalStateException("Downloaded SignalSlinger package did not contain release info.") }
+        }
+        log("Downloaded SignalSlinger release package to ${tempDir.fileName}.")
+        return manifest.toFile()
+    }
+
+    private fun readHttpsText(uri: URI): String {
+        return readHttpsBytes(uri).decodeToString()
+    }
+
+    private fun readHttpsBytes(uri: URI): ByteArray {
+        require(uri.scheme == "https") { "Only HTTPS downloads are supported." }
+        val connection = uri.toURL().openConnection() as HttpURLConnection
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 30_000
+        connection.instanceFollowRedirects = true
+        connection.setRequestProperty("Accept", "application/vnd.github+json, application/octet-stream")
+        connection.setRequestProperty("User-Agent", "SerialSlinger")
+        return try {
+            require(connection.responseCode in 200..299) {
+                "Download failed with HTTP ${connection.responseCode}."
+            }
+            connection.inputStream.use { it.readBytes() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun friendlyUpdateFailureMessage(exception: Exception): String {
+        var cause: Throwable? = exception
+        var details: String? = null
+        while (cause != null && details.isNullOrBlank()) {
+            details = cause.message
+            cause = cause.cause
+        }
+        val failureDetails = details?.takeIf { it.isNotBlank() } ?: exception.toString()
+        return when {
+            failureDetails.contains("does not support firmware updates", ignoreCase = true) ->
+                "This SignalSlinger is too old to update automatically.\n\n$failureDetails"
+            failureDetails.contains("does not match package board", ignoreCase = true) ||
+                failureDetails.contains("correct hardware package", ignoreCase = true) ->
+                "This update file is for different SignalSlinger hardware.\n\n$failureDetails"
+            failureDetails.contains("hash mismatch", ignoreCase = true) ||
+                failureDetails.contains("size mismatch", ignoreCase = true) ->
+                "SerialSlinger could not verify the update file.\n\n$failureDetails"
+            failureDetails.contains("could not confirm the updated firmware", ignoreCase = true) ||
+                failureDetails.contains("did not enter update mode", ignoreCase = true) ||
+                failureDetails.contains("did not respond in update mode", ignoreCase = true) ->
+                "The update was interrupted or SignalSlinger did not restart as expected.\n\nReconnect the device and try Recovery Update.\n\n$failureDetails"
+            else -> "SignalSlinger update failed.\n\n$failureDetails"
+        }
+    }
+
+    private fun loggingFirmwareUpdateTransport(
+        delegate: SignalSlingerFirmwareUpdateTransport,
+        logEntries: MutableList<DesktopLogEntry>,
+    ): SignalSlingerFirmwareUpdateTransport {
+        fun log(message: String) {
+            logEntries += DesktopLogEntry(message, DesktopLogCategory.SERIAL)
+        }
+
+        return object : SignalSlingerFirmwareUpdateTransport {
+            override fun connect(baudRate: Int) {
+                log("Opening update connection at $baudRate baud.")
+                delegate.connect(baudRate)
+            }
+
+            override fun disconnect() {
+                delegate.disconnect()
+            }
+
+            override fun writeAscii(text: String) {
+                log("TX ${text.toLogFragment()}")
+                delegate.writeAscii(text)
+            }
+
+            override fun writeBytes(bytes: ByteArray) {
+                log("TX ${firmwareFrameLogLabel(bytes)}")
+                delegate.writeBytes(bytes)
+            }
+
+            override fun readLines(timeoutMs: Long): List<String> {
+                val lines = delegate.readLines(timeoutMs)
+                lines.forEach { line -> log("RX ${line.toLogFragment()}") }
+                return lines
+            }
+        }
+    }
+
+    private fun firmwareFrameLogLabel(bytes: ByteArray): String {
+        if (bytes.isEmpty()) {
+            return "<empty binary frame>"
+        }
+        val command = bytes[0].toInt().toChar()
+        val address =
+            if (bytes.size >= 5) {
+                (bytes[1].toInt() and 0xFF) or
+                    ((bytes[2].toInt() and 0xFF) shl 8) or
+                    ((bytes[3].toInt() and 0xFF) shl 16) or
+                    ((bytes[4].toInt() and 0xFF) shl 24)
+            } else {
+                null
+            }
+        return buildString {
+            append(command)
+            append(" frame")
+            if (address != null) {
+                append(" addr=0x")
+                append(address.toString(16).uppercase().padStart(8, '0'))
+            }
+            append(" bytes=")
+            append(bytes.size)
+        }
+    }
+
+    private fun String.toLogFragment(): String {
+        return buildString {
+            append('"')
+            this@toLogFragment.forEach { ch ->
+                when (ch) {
+                    '\r' -> append("\\r")
+                    '\n' -> append("\\n")
+                    '\t' -> append("\\t")
+                    in ' '..'~' -> append(ch)
+                    else -> append("\\u").append(ch.code.toString(16).uppercase().padStart(4, '0'))
+                }
+            }
+            append('"')
+        }
     }
 
     private fun appendWriteLog(
