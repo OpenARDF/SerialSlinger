@@ -4,7 +4,7 @@ private const val DefaultAppStartAddress = 0x4000
 private const val DefaultFlashBytes = 0x20000
 private const val DefaultPageBytes = 512
 private const val MaxTransferAttempts = 2
-private const val UpdateModeReconnectSettleMs = 350L
+private const val UpdateModeReconnectSettleMs = 500L
 
 private fun Int.toHex16(): String = "0x" + toString(16).uppercase().padStart(4, '0')
 
@@ -496,8 +496,7 @@ object SignalSlingerFirmwareUpdate {
                     transport.disconnect()
                 } catch (_: Throwable) {
                 }
-                transport.connect(release.serialSlinger.updateBaud)
-                waitForBootloaderIdentity(transport, release)?.validateForRelease(release)
+                connectUpdateModeAndWaitForIdentity(transport, release, progress)?.validateForRelease(release)
                     ?: error("SignalSlinger did not respond in update mode after retry.")
             }
         }
@@ -634,7 +633,7 @@ object SignalSlingerFirmwareUpdate {
         progress: (SignalSlingerFirmwareUpdateProgress) -> Unit,
     ): SignalSlingerBootloaderIdentity? {
         var lastFailure: Throwable? = null
-        repeat(2) { attempt ->
+        repeat(4) { attempt ->
             try {
                 transport.disconnect()
             } catch (_: Throwable) {
@@ -702,18 +701,18 @@ object SignalSlingerFirmwareUpdate {
         release: SignalSlingerReleaseInfo,
     ): SignalSlingerBootloaderIdentity? {
         repeat(12) {
-            transport.writeAscii("?")
-            val queryLines = transport.readLines(500)
-            queryLines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return it }
-            if (queryLines.any { it.trim() == "BOOT" }) {
+            transport.writeAscii(release.serialSlinger.bootloaderEntryCommand)
+            val entryLines = transport.readLines(500)
+            entryLines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return it }
+            if (entryLines.any { it.trim() == "BOOT" }) {
                 transport.writeAscii("?")
                 val infoLines = transport.readLines(500)
                 infoLines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return it }
             }
-            transport.writeAscii(release.serialSlinger.bootloaderEntryCommand)
-            val lines = transport.readLines(250)
-            lines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return it }
-            if (lines.any { it.trim() == "BOOT" }) {
+            transport.writeAscii("?")
+            val queryLines = transport.readLines(500)
+            queryLines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return it }
+            if (queryLines.any { it.trim() == "BOOT" }) {
                 transport.writeAscii("?")
                 val infoLines = transport.readLines(500)
                 infoLines.firstNotNullOfOrNull(::parseIdentityLine)?.let { return it }

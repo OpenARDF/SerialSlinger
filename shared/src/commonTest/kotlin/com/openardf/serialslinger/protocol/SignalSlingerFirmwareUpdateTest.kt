@@ -300,7 +300,7 @@ class SignalSlingerFirmwareUpdateTest {
             hexText = hex,
         )
 
-        assertEquals(listOf(9_600, 115_200, 115_200, 9_600, 115_200, 9_600), transport.connectedBauds)
+        assertEquals(listOf(9_600, 115_200, 115_200, 115_200, 115_200, 9_600, 115_200, 9_600), transport.connectedBauds)
         assertEquals(listOf("**\r", "INF\r", "UPD\r"), transport.asciiWrites.take(3))
         assertTrue("RST\n" in transport.asciiWrites)
         assertTrue("R" in transport.asciiWrites)

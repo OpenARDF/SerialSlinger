@@ -5408,6 +5408,7 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-firmware-update") {
+            val updateLog = mutableListOf<AndroidLogEntry>()
             val result =
                 runCatching {
                     val start = startState.getOrThrow()
@@ -5442,7 +5443,6 @@ object AndroidSessionController {
                     SignalSlingerFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
                     val usbDevice = resolveUsbDevice(usbManager, start.deviceName)
                         ?: error("SignalSlinger is no longer connected.")
-                    val updateLog = mutableListOf<AndroidLogEntry>()
                     updateLog += AndroidLogEntry(selection.message, AndroidLogCategory.APP)
                     selection.downloadFailure?.let { failure ->
                         updateLog += AndroidLogEntry("GitHub update check failed: $failure", AndroidLogCategory.APP)
@@ -5463,9 +5463,15 @@ object AndroidSessionController {
                     } finally {
                         transport.disconnect()
                     }
-                    appendSessionLogEntries("Update SignalSlinger", updateLog)
                     selection.release
                 }
+            if (result.isFailure) {
+                val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
+                updateLog += AndroidLogEntry("Update failed: $message", AndroidLogCategory.APP)
+            }
+            if (updateLog.isNotEmpty()) {
+                appendSessionLogEntries("Update SignalSlinger", updateLog)
+            }
 
             synchronized(this) {
                 signalSlingerReadInFlight = false
