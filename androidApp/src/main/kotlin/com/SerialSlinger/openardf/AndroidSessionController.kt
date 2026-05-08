@@ -39,6 +39,7 @@ import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateProgress
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
+import com.openardf.serialslinger.protocol.SignalSlingerAlreadyCurrentException
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
 import com.openardf.serialslinger.transport.AndroidFirmwareUpdateTransport
@@ -5465,9 +5466,17 @@ object AndroidSessionController {
                     }
                     selection.release
                 }
+            val alreadyCurrent = result.exceptionOrNull()?.isAlreadyCurrentUpdate() == true
             if (result.isFailure) {
                 val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
-                updateLog += AndroidLogEntry("Update failed: $message", AndroidLogCategory.APP)
+                updateLog += AndroidLogEntry(
+                    if (alreadyCurrent) {
+                        "No update needed: $message"
+                    } else {
+                        "Update failed: $message"
+                    },
+                    AndroidLogCategory.APP,
+                )
             }
             if (updateLog.isNotEmpty()) {
                 appendSessionLogEntries("Update SignalSlinger", updateLog)
@@ -5481,6 +5490,12 @@ object AndroidSessionController {
                     latestSubmitSummary = "SignalSlinger update completed: ${release.product} ${release.version} ${release.board}."
                     latestProbeSummary = "Reload SignalSlinger after update."
                     statusText = "SignalSlinger update completed."
+                    statusIsError = false
+                    firmwareUpdateProgress = null
+                } else if (alreadyCurrent) {
+                    val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
+                    latestSubmitSummary = message
+                    statusText = "SignalSlinger is already up to date."
                     statusIsError = false
                     firmwareUpdateProgress = null
                 } else {
@@ -5498,7 +5513,11 @@ object AndroidSessionController {
                         result.fold(
                             onSuccess = { Result.success(Unit) },
                             onFailure = { failure ->
-                                Result.failure(IllegalStateException(friendlyUpdateFailureMessage(failure), failure))
+                                if (failure.isAlreadyCurrentUpdate()) {
+                                    Result.success(Unit)
+                                } else {
+                                    Result.failure(IllegalStateException(friendlyUpdateFailureMessage(failure), failure))
+                                }
                             },
                         ),
                     )
@@ -5643,6 +5662,17 @@ object AndroidSessionController {
                 "The USB connection was interrupted during the update.\n\nReconnect SignalSlinger and try Recovery Update.\n\n$details"
             else -> details
         }
+    }
+
+    private fun Throwable.isAlreadyCurrentUpdate(): Boolean {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is SignalSlingerAlreadyCurrentException) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
     }
 
     private data class UpdateStart(

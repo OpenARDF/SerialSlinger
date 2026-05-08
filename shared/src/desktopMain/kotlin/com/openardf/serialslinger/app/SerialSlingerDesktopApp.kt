@@ -30,6 +30,7 @@ import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
+import com.openardf.serialslinger.protocol.SignalSlingerAlreadyCurrentException
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
 import com.openardf.serialslinger.session.DeviceLoadResult
@@ -5174,6 +5175,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     logEntries = logEntries,
                 )
             } catch (exception: Exception) {
+                if (exception.isAlreadyCurrentUpdate()) {
+                    val message = friendlyUpdateFailureMessage(exception)
+                    logEntries += DesktopLogEntry(message, DesktopLogCategory.APP)
+                    SwingUtilities.invokeLater {
+                        appendLog("Update SignalSlinger", logEntries)
+                        setStatus("SignalSlinger is already up to date.")
+                        JOptionPane.showMessageDialog(this, message)
+                    }
+                    return@runInBackground
+                }
                 SwingUtilities.invokeLater {
                     appendLog("Update SignalSlinger", logEntries)
                 }
@@ -5386,6 +5397,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         val failureDetails = details?.takeIf { it.isNotBlank() } ?: exception.toString()
         return when {
+            exception.isAlreadyCurrentUpdate() -> failureDetails
             failureDetails.contains("does not support firmware updates", ignoreCase = true) ->
                 "This SignalSlinger is too old to update automatically.\n\n$failureDetails"
             failureDetails.contains("does not match package board", ignoreCase = true) ||
@@ -5400,6 +5412,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 "The update was interrupted or SignalSlinger did not restart as expected.\n\nReconnect the device and try Recovery Update.\n\n$failureDetails"
             else -> "SignalSlinger update failed.\n\n$failureDetails"
         }
+    }
+
+    private fun Throwable.isAlreadyCurrentUpdate(): Boolean {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is SignalSlingerAlreadyCurrentException) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
     }
 
     private fun loggingFirmwareUpdateTransport(

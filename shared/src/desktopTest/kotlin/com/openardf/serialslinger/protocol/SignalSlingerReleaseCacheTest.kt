@@ -89,6 +89,35 @@ class SignalSlingerReleaseCacheTest {
     }
 
     @Test
+    fun reportsAlreadyCurrentAsTypedNoOpWhenLatestMatchesConnectedFirmware() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        val latestApi = URI("https://api.github.test/releases/latest")
+        val zipUrl = "https://github.com/OpenARDF/SignalSlinger/releases/download/v2.0.2/SignalSlinger-Release-Files-v2.0.2-HW-3.4.zip"
+        try {
+            val error = assertFailsWith<SignalSlingerAlreadyCurrentException> {
+                SignalSlingerReleaseCache(
+                    rootDirectory = root,
+                    repositoryApiUrl = latestApi,
+                    downloadBytes = { uri ->
+                        when (uri) {
+                            latestApi -> """{"browser_download_url":"$zipUrl"}""".encodeToByteArray()
+                            URI(zipUrl) -> releaseZip(version = "2.0.2", board = "HW-3.4")
+                            else -> error("unexpected URI $uri")
+                        }
+                    },
+                ).selectLatestForUpdate(
+                    hardwareBuild = "3.4",
+                    currentFirmwareVersion = "2.0.2",
+                )
+            }
+
+            assertEquals("The connected SignalSlinger already has firmware 2.0.2.", error.message)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun overrideAllowsSameVersionResidentReleaseWhenDownloadFails() {
         val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
         try {

@@ -30,6 +30,10 @@ data class SignalSlingerReleaseSelection(
         get() = residentRelease.release
 }
 
+class SignalSlingerAlreadyCurrentException(
+    version: String,
+) : IllegalStateException("The connected SignalSlinger already has firmware $version.")
+
 class SignalSlingerReleaseCache(
     private val rootDirectory: File,
     private val repositoryApiUrl: URI = URI("https://api.github.com/repos/OpenARDF/SignalSlinger/releases/latest"),
@@ -87,7 +91,7 @@ class SignalSlingerReleaseCache(
                     message = "Using resident SignalSlinger ${resident.release.version} update for ${resident.release.board}.",
                 )
             }
-            throw IllegalStateException("The connected SignalSlinger already has firmware ${currentFirmwareVersion.orEmpty().ifBlank { latest.release.version }}.")
+            throw SignalSlingerAlreadyCurrentException(currentFirmwareVersion.orEmpty().ifBlank { latest.release.version })
         }
 
         return SignalSlingerReleaseSelection(
