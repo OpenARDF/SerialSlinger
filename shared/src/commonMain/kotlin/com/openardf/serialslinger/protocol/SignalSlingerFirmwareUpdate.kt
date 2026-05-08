@@ -1,6 +1,5 @@
 package com.openardf.serialslinger.protocol
 
-private const val DefaultAppStartAddress = 0x4000
 private const val DefaultFlashBytes = 0x20000
 private const val DefaultPageBytes = 512
 private const val MaxTransferAttempts = 2
@@ -61,6 +60,8 @@ data class SignalSlingerBootloaderIdentity(
     val flashBytes: Int,
     val baud: Int,
     val bootSectionPages: Int?,
+    val writableStartAddress: Int?,
+    val writableEndAddress: Int?,
     val commands: Set<Char>,
 ) {
     fun validateForRelease(release: SignalSlingerReleaseInfo) {
@@ -85,6 +86,19 @@ data class SignalSlingerBootloaderIdentity(
         }
         require(release.serialSlinger.bootloaderEntryCommand.singleOrNull()?.let(commands::contains) != false) {
             "Update device does not support the package bootloader entry command `${release.serialSlinger.bootloaderEntryCommand}`."
+        }
+    }
+
+    fun validateWritableRangeForImage(imageAddresses: Set<Int>) {
+        val start = writableStartAddress
+        val end = writableEndAddress
+        require(start != null && end != null) {
+            "Update device did not report its writable flash range."
+        }
+        val lowestAddress = imageAddresses.minOrNull() ?: return
+        val highestAddress = imageAddresses.maxOrNull() ?: return
+        require(lowestAddress >= start && highestAddress <= end) {
+            "Update image range ${lowestAddress.toHex32()}-${highestAddress.toHex32()} is outside bootloader writable range ${start.toHex32()}-${end.toHex32()}."
         }
     }
 }
@@ -208,6 +222,7 @@ interface SignalSlingerFirmwareUpdateTransport {
 object SignalSlingerFirmwareUpdate {
     private val identityPattern = Regex("""^(SignalSlinger)\s+(\S+)\s+(.*)$""")
     private val crcResponsePattern = Regex("""^OK\s+crc\s+0x([0-9A-Fa-f]{1,8})\s+([0-9A-Fa-f]{1,4})$""")
+    private val writableRangePattern = Regex("""^(0x[0-9A-Fa-f]+|\d+)-(0x[0-9A-Fa-f]+|\d+)$""")
     private val versionNumberPattern = Regex("""^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?.*$""")
     private val appInfoPattern = Regex("""\*\s+INF\s+(.+)$""")
     private val versionPattern = Regex("""^\*\s+SW Ver:\s*(.+?)\s+HW Build:\s*(.+)$""")
@@ -303,7 +318,7 @@ object SignalSlingerFirmwareUpdate {
 
     fun parseIntelHexPages(
         hexText: String,
-        appStartAddress: Int = DefaultAppStartAddress,
+        appStartAddress: Int,
         flashBytes: Int = DefaultFlashBytes,
         pageBytes: Int = DefaultPageBytes,
     ): List<SignalSlingerFirmwarePage> {
@@ -326,7 +341,7 @@ object SignalSlingerFirmwareUpdate {
 
     fun buildUpdatePlan(
         pages: List<SignalSlingerFirmwarePage>,
-        appStartAddress: Int = DefaultAppStartAddress,
+        appStartAddress: Int,
     ): SignalSlingerFirmwarePlan {
         val resetVectorPage = pages.firstOrNull { it.address == appStartAddress }
             ?: error("Update image does not contain the reset-vector page at ${appStartAddress.toHex32()}.")
@@ -391,6 +406,7 @@ object SignalSlingerFirmwareUpdate {
         if (!fields.keys.containsAll(setOf("proto", "app", "page", "flash", "baud", "cmds"))) {
             return null
         }
+        val writableRange = parseWritableRange(fields["write"])
         return SignalSlingerBootloaderIdentity(
             product = match.groupValues[1],
             bootloaderVersion = match.groupValues[2],
@@ -400,6 +416,8 @@ object SignalSlingerFirmwareUpdate {
             flashBytes = fields.requiredIntToken("flash"),
             baud = fields.requiredIntToken("baud"),
             bootSectionPages = fields["boot"]?.toIntOrNull(),
+            writableStartAddress = writableRange?.first,
+            writableEndAddress = writableRange?.last,
             commands = fields.requiredToken("cmds").split(",").mapNotNull { it.singleOrNull() }.toSet(),
         )
     }
@@ -454,6 +472,9 @@ object SignalSlingerFirmwareUpdate {
             appStartAddress = release.serialSlinger.appStartAddress,
             flashBytes = release.serialSlinger.flashBytes,
         )
+        require(image.keys.minOrNull() == release.update.startAddress) {
+            "Update image starts at ${image.keys.minOrNull()?.toHex32() ?: "unknown"} but release metadata says ${release.update.startAddress.toHex32()}."
+        }
         require(image.size == release.update.bytesInImage) {
             "Update image byte count mismatch: manifest says ${release.update.bytesInImage}, HEX contains ${image.size}."
         }
@@ -471,8 +492,9 @@ object SignalSlingerFirmwareUpdate {
                 recoverAlreadyWaiting = recoverAlreadyWaiting,
                 allowAppHardwareMismatch = allowAppHardwareMismatch,
                 progress = progress,
-            )
+        )
         identity.validateForRelease(release)
+        identity.validateWritableRangeForImage(image.keys)
 
         var lastFailure: Throwable? = null
         var transferCompleted = false
@@ -798,6 +820,9 @@ object SignalSlingerFirmwareUpdate {
     }
 
     private fun validateReleaseManifest(release: SignalSlingerReleaseInfo) {
+        require(release.product == "SignalSlinger") {
+            "Update package product `${release.product}` is not supported."
+        }
         require(release.update.startAddress == release.serialSlinger.appStartAddress) {
             "Update package start address ${release.update.startAddress.toHex32()} does not match app address ${release.serialSlinger.appStartAddress.toHex32()}."
         }
@@ -850,6 +875,11 @@ object SignalSlingerFirmwareUpdate {
         } else {
             normalized.toInt()
         }
+    }
+
+    private fun parseWritableRange(text: String?): IntRange? {
+        val match = text?.trim()?.let(writableRangePattern::matchEntire) ?: return null
+        return parseIntLiteral(match.groupValues[1])..parseIntLiteral(match.groupValues[2])
     }
 
     private fun parseKeyValueFields(text: String): Map<String, String> {

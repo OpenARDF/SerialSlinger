@@ -178,7 +178,7 @@ class SignalSlingerFirmwareUpdateTest {
         )
 
         val error = assertFailsWith<IllegalArgumentException> {
-            SignalSlingerFirmwareUpdate.parseIntelHexPages(hex)
+            SignalSlingerFirmwareUpdate.parseIntelHexPages(hex, appStartAddress = 0x4000)
         }
         assertTrue(error.message.orEmpty().contains("outside app flash"))
         assertTrue(error.message.orEmpty().contains("0x00000000"))
@@ -192,7 +192,7 @@ class SignalSlingerFirmwareUpdateTest {
         )
 
         val error = assertFailsWith<IllegalArgumentException> {
-            SignalSlingerFirmwareUpdate.parseIntelHexPages(hex)
+            SignalSlingerFirmwareUpdate.parseIntelHexPages(hex, appStartAddress = 0x4000)
         }
         assertTrue(error.message.orEmpty().contains("0x00020000"))
     }
@@ -230,7 +230,7 @@ class SignalSlingerFirmwareUpdateTest {
             ":00000001FF",
         ).joinToString("\n")
 
-        val pages = SignalSlingerFirmwareUpdate.parseIntelHexPages(hex)
+        val pages = SignalSlingerFirmwareUpdate.parseIntelHexPages(hex, appStartAddress = 0x4000)
 
         assertEquals(listOf(0x4000, 0x10000), pages.map { it.address })
         assertEquals(0x02, pages.last().bytes.first().toInt() and 0xFF)
@@ -244,9 +244,10 @@ class SignalSlingerFirmwareUpdateTest {
                 0x4200 to byteArrayOf(0x03),
                 0x4400 to byteArrayOf(0x04),
             ),
+            appStartAddress = 0x4000,
         )
 
-        val plan = SignalSlingerFirmwareUpdate.buildUpdatePlan(pages)
+        val plan = SignalSlingerFirmwareUpdate.buildUpdatePlan(pages, appStartAddress = 0x4000)
 
         assertEquals(listOf(0x4000, 0x4200, 0x4400), pages.map { it.address })
         assertEquals(
@@ -354,6 +355,57 @@ class SignalSlingerFirmwareUpdateTest {
     }
 
     @Test
+    fun parsesAndValidatesBootloaderWritableRange() {
+        val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(
+            sampleManifest(
+                updateBytes = sampleHex(appStartAddress = 0x2000).encodeToByteArray(),
+                appStartAddress = 0x2000,
+            ),
+        )
+        val identity = assertNotNull(
+            SignalSlingerFirmwareUpdate.parseIdentityLine(
+                "SignalSlinger BL0.12 proto=1 app=0x2000 page=512 flash=131072 baud=115200 boot=16 cmds=U,R,?,E,W,C write=0x2000-0x1FFFF",
+            ),
+        )
+
+        assertEquals("BL0.12", identity.bootloaderVersion)
+        assertEquals(0x2000, identity.appStartAddress)
+        assertEquals(16, identity.bootSectionPages)
+        assertEquals(0x2000, identity.writableStartAddress)
+        assertEquals(0x1FFFF, identity.writableEndAddress)
+        identity.validateForRelease(release)
+        identity.validateWritableRangeForImage(setOf(0x2000, 0x2001, 0x1FFFF))
+    }
+
+    @Test
+    fun rejectsUpdateImageOutsideBootloaderWritableRange() {
+        val identity = assertNotNull(
+            SignalSlingerFirmwareUpdate.parseIdentityLine(
+                "SignalSlinger BL0.12 proto=1 app=0x2000 page=512 flash=131072 baud=115200 boot=16 cmds=U,R,?,E,W,C write=0x3000-0x1FFFF",
+            ),
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            identity.validateWritableRangeForImage(setOf(0x2000, 0x2200))
+        }
+        assertTrue(error.message.orEmpty().contains("outside bootloader writable range"))
+    }
+
+    @Test
+    fun requiresBootloaderWritableRangeBeforeWriting() {
+        val identity = assertNotNull(
+            SignalSlingerFirmwareUpdate.parseIdentityLine(
+                "SignalSlinger BL0.11 proto=1 app=0x2000 page=512 flash=131072 baud=115200 boot=16 cmds=U,R,?,E,W,C",
+            ),
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            identity.validateWritableRangeForImage(setOf(0x2000, 0x2200))
+        }
+        assertTrue(error.message.orEmpty().contains("did not report its writable flash range"))
+    }
+
+    @Test
     fun ignoresNormalAppBannerAsBootloaderIdentity() {
         assertEquals(
             null,
@@ -440,6 +492,76 @@ class SignalSlingerFirmwareUpdateTest {
     }
 
     @Test
+    fun rejectsManifestProductBeforeWriting() {
+        val hex = sampleHex()
+        val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(
+            sampleManifest(
+                updateBytes = hex.encodeToByteArray(),
+                product = "OtherSlinger",
+            ),
+        )
+        val transport = FakeUpdateTransport(hex)
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            SignalSlingerFirmwareUpdate.performUpdate(
+                transport = transport,
+                release = release,
+                hexText = hex,
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("product `OtherSlinger` is not supported"))
+        assertEquals(emptyList(), transport.binaryWrites)
+    }
+
+    @Test
+    fun rejectsHexStartAddressThatDoesNotMatchManifest() {
+        val hex = intelHex(0x4200 to byteArrayOf(0x01, 0x02, 0x03, 0x04))
+        val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(sampleManifest(hex.encodeToByteArray()))
+        val transport = FakeUpdateTransport(hex)
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            SignalSlingerFirmwareUpdate.performUpdate(
+                transport = transport,
+                release = release,
+                hexText = hex,
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("release metadata says 0x00004000"))
+        assertEquals(emptyList(), transport.binaryWrites)
+    }
+
+    @Test
+    fun recoveryModeStillRequiresWritableRangeCompatibility() {
+        val hex = sampleHex(appStartAddress = 0x2000)
+        val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(
+            sampleManifest(
+                updateBytes = hex.encodeToByteArray(),
+                appStartAddress = 0x2000,
+            ),
+        )
+        val transport = FakeUpdateTransport(
+            hex = hex,
+            appStartAddress = 0x2000,
+            writableStartAddress = 0x3000,
+            startInUpdateMode = true,
+        )
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            SignalSlingerFirmwareUpdate.performUpdate(
+                transport = transport,
+                release = release,
+                hexText = hex,
+                recoverAlreadyWaiting = true,
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("outside bootloader writable range"))
+        assertEquals(emptyList(), transport.binaryWrites)
+    }
+
+    @Test
     fun doesNotRetryUpdateModeAfterRunCommand() {
         val hex = sampleHex()
         val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(sampleManifest(hex.encodeToByteArray()))
@@ -462,12 +584,13 @@ class SignalSlingerFirmwareUpdateTest {
     private fun sampleManifest(
         updateBytes: ByteArray,
         appStartAddress: Int = 0x4000,
+        product: String = "SignalSlinger",
     ): String {
         val startAddress = "0x" + appStartAddress.toString(16).uppercase()
         return """
             {
               "format": "signalslinger-release-info-v1",
-              "product": "SignalSlinger",
+              "product": "$product",
               "version": "2.0.0",
               "board": "HW-3.5",
               "generatedUtc": "2026-05-08T00:00:00Z",
@@ -541,18 +664,21 @@ class SignalSlingerFirmwareUpdateTest {
     private class FakeUpdateTransport(
         hex: String,
         private val appStartAddress: Int = 0x4000,
+        private val writableStartAddress: Int = appStartAddress,
+        private val writableEndAddress: Int = 0x1FFFF,
         private val respondToPostRunInfo: Boolean = true,
         private val acknowledgeUpd: Boolean = false,
         private val supportOpenPortBaudSwitch: Boolean = false,
+        private val startInUpdateMode: Boolean = false,
     ) : SignalSlingerFirmwareUpdateTransport {
         val connectedBauds = mutableListOf<Int>()
         val reconfiguredBauds = mutableListOf<Int>()
         val asciiWrites = mutableListOf<String>()
         val binaryWrites = mutableListOf<ByteArray>()
-        private val pages = SignalSlingerFirmwareUpdate.parseIntelHexPages(hex, appStartAddress = appStartAddress)
+        private val pages by lazy { SignalSlingerFirmwareUpdate.parseIntelHexPages(hex, appStartAddress = appStartAddress) }
         private var pendingLines = emptyList<String>()
         private var resetSent = false
-        private var updateMode = false
+        private var updateMode = startInUpdateMode
         private var runSent = false
 
         override fun connect(baudRate: Int) {
@@ -597,7 +723,7 @@ class SignalSlingerFirmwareUpdateTest {
                     "U" -> if (resetSent || updateMode) listOf("BOOT") else emptyList()
                     "?" ->
                         if (resetSent || updateMode) {
-                            listOf("SignalSlinger BL0.11 proto=1 app=${appStartAddress.toString(16).uppercase().padStart(4, '0').let { "0x$it" }} page=512 flash=131072 baud=115200 boot=32 cmds=U,R,?,E,W,C")
+                            listOf("SignalSlinger BL0.12 proto=1 app=${appStartAddress.toString(16).uppercase().padStart(4, '0').let { "0x$it" }} page=512 flash=131072 baud=115200 boot=16 cmds=U,R,?,E,W,C write=${writableStartAddress.toString(16).uppercase().padStart(4, '0').let { "0x$it" }}-${writableEndAddress.toString(16).uppercase().padStart(5, '0').let { "0x$it" }}")
                         } else {
                             emptyList()
                         }
