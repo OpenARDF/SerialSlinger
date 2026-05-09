@@ -214,6 +214,73 @@ class SignalSlingerReleaseCacheTest {
     }
 
     @Test
+    fun prefersResidentReleaseWhenItMatchesLatestGitHubVersion() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        val latestApi = URI("https://api.github.test/releases/latest")
+        val zipUrl = "https://github.com/OpenARDF/SignalSlinger/releases/download/v2.0.2/SignalSlinger-Release-Files-v2.0.2-HW-3.4.zip"
+        try {
+            root.resolve("HW-3.4/2.0.2").apply {
+                mkdirs()
+                resolve("SignalSlinger-Release-Info-v2.0.2-HW-3.4.json").writeText(manifest(version = "2.0.2", board = "HW-3.4"))
+            }
+
+            val selection = SignalSlingerReleaseCache(
+                rootDirectory = root,
+                repositoryApiUrl = latestApi,
+                downloadBytes = { uri ->
+                    when (uri) {
+                        latestApi -> """{"tag_name":"v2.0.2","browser_download_url":"$zipUrl"}""".encodeToByteArray()
+                        URI(zipUrl) -> error("resident package should be used without downloading the same version")
+                        else -> error("unexpected URI $uri")
+                    }
+                },
+            ).selectLatestForUpdate(
+                hardwareBuild = "3.4",
+                currentFirmwareVersion = "2.0.1",
+            )
+
+            assertEquals(SignalSlingerReleaseSelectionSource.RESIDENT, selection.source)
+            assertEquals("2.0.2", selection.release.version)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun canForceLatestDownloadWhenResidentReleaseMatchesLatestGitHubVersion() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        val latestApi = URI("https://api.github.test/releases/latest")
+        val zipUrl = "https://github.com/OpenARDF/SignalSlinger/releases/download/v2.0.2/SignalSlinger-Release-Files-v2.0.2-HW-3.4.zip"
+        try {
+            root.resolve("HW-3.4/2.0.2").apply {
+                mkdirs()
+                resolve("SignalSlinger-Release-Info-v2.0.2-HW-3.4.json").writeText(manifest(version = "2.0.2", board = "HW-3.4"))
+            }
+
+            val selection = SignalSlingerReleaseCache(
+                rootDirectory = root,
+                repositoryApiUrl = latestApi,
+                downloadBytes = { uri ->
+                    when (uri) {
+                        latestApi -> """{"tag_name":"v2.0.2","browser_download_url":"$zipUrl"}""".encodeToByteArray()
+                        URI(zipUrl) -> releaseZip(version = "2.0.2", board = "HW-3.4")
+                        else -> error("unexpected URI $uri")
+                    }
+                },
+            ).selectLatestForUpdate(
+                hardwareBuild = "3.4",
+                currentFirmwareVersion = "2.0.1",
+                preferResidentWhenLatestMatches = false,
+            )
+
+            assertEquals(SignalSlingerReleaseSelectionSource.DOWNLOADED, selection.source)
+            assertEquals("2.0.2", selection.release.version)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun importsLocalReleasePackageIntoResidentCache() {
         val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
         val packageFile = Files.createTempFile("signalslinger-release-package", ".zip").toFile()

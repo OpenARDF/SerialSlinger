@@ -57,6 +57,7 @@ The current Android scaffold is intentionally narrow:
 
 ## Notes To Keep
 
+- SignalSlinger release handling should be capability-based, not version-number-based. Public release numbering may restart or assets may be refreshed under an existing tag, so firmware update and bootloader installation flows must validate package metadata, file hashes, required files, launcher capabilities, and device responses instead of hard-coding release-version thresholds. See [signalslinger-release-handling.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/signalslinger-release-handling.md).
 - `EVT` and `FOX` rereads are intentionally conservative right now. Future cleanup: avoid rereading `FRE 1`/`FRE 2`/`FRE 3`/`FRE B` after event or role changes unless the user explicitly edits a bank or requests a full refresh.
 - Keep desktop and Android feature sets aligned as Android grows. The desktop menu-row areas `View`, `Settings`, and `Tools` should each have Android equivalents over time, even if Android presents them through different navigation patterns and those patterns evolve with user feedback.
 - Revisit Android logging policy before wider release use. Desktop-style always-on logging is acceptable there, but Android should likely keep diagnostics logging off by default in release builds, allow temporary user-enabled logging windows, and prune or auto-delete old logs so tablet storage stays bounded.
@@ -107,3 +108,5 @@ iOS is currently out of scope for direct USB or serial support. If SignalSlinger
 - [first-settings-table.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/first-settings-table.md)
 - [domain-model.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/domain-model.md)
 - [initial-backlog.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/initial-backlog.md)
+- [signalslinger-release-handling.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/signalslinger-release-handling.md)
+- [bootloader-install-tester-setup.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/bootloader-install-tester-setup.md)

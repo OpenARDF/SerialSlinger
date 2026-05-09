@@ -45,6 +45,7 @@ class SignalSlingerReleaseCache(
         currentFirmwareVersion: String?,
         allowResidentFallback: Boolean = true,
         overrideBoard: String? = null,
+        preferResidentWhenLatestMatches: Boolean = true,
     ): SignalSlingerReleaseSelection {
         val requestedHardware = overrideBoard?.substringAfter("HW-", overrideBoard)?.substringAfter("Board-", overrideBoard) ?: hardwareBuild
         require(requestedHardware.isNotBlank()) {
@@ -55,6 +56,25 @@ class SignalSlingerReleaseCache(
         val residentIsNewer =
             resident != null &&
                 SignalSlingerFirmwareUpdate.compareVersionStrings(resident.release.version, currentFirmwareVersion) >= if (allowSameVersionReinstall) 0 else 1
+
+        val latestVersion =
+            try {
+                latestReleaseVersion()
+            } catch (_: Exception) {
+                null
+            }
+        if (
+            preferResidentWhenLatestMatches &&
+            residentIsNewer &&
+            latestVersion != null &&
+            SignalSlingerFirmwareUpdate.compareVersionStrings(resident.release.version, latestVersion) >= 0
+        ) {
+            return SignalSlingerReleaseSelection(
+                residentRelease = resident,
+                source = SignalSlingerReleaseSelectionSource.RESIDENT,
+                message = "Using resident SignalSlinger ${resident.release.version} update for ${resident.release.board}.",
+            )
+        }
 
         val latest =
             try {
@@ -99,6 +119,14 @@ class SignalSlingerReleaseCache(
             source = SignalSlingerReleaseSelectionSource.DOWNLOADED,
             message = "Downloaded SignalSlinger ${latest.release.version} update for ${latest.release.board}.",
         )
+    }
+
+    private fun latestReleaseVersion(): String? {
+        val releaseJson = readHttpsText(repositoryApiUrl)
+        return Regex(""""tag_name"\s*:\s*"v?([^"]+)"""")
+            .find(releaseJson)
+            ?.groupValues
+            ?.get(1)
     }
 
     fun availableGitHubReleaseVersions(): List<String> {

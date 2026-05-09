@@ -87,6 +87,9 @@ import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
 import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
 import com.openardf.serialslinger.model.ThermalShutdownSupport
+import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
+import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
+import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.transport.AndroidUsbDeviceDescriptor
 import com.openardf.serialslinger.transport.AndroidUsbTransport
@@ -99,6 +102,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.WeakHashMap
 import java.util.concurrent.CountDownLatch
+import kotlin.concurrent.thread
 import kotlin.math.abs
 
 @SuppressLint("NewApi")
@@ -165,6 +169,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var systemTimeVisible: Boolean = false
     private var deviceDataVisible: Boolean = true
     private var automaticFirmwareUpdatesEnabled: Boolean = false
+    private var automaticFirmwareUpdateCheckInProgress: Boolean = false
+    private var automaticFirmwareUpdatePromptVisible: Boolean = false
     private var advancedModeEnabled: Boolean = false
     private val autoDetectHandler = Handler(Looper.getMainLooper())
     private val clockDisplayHandler = Handler(Looper.getMainLooper())
@@ -563,6 +569,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             result.exceptionOrNull()?.message?.let { "message=$it" } ?: "message=<none>",
                         ),
                     )
+                    if (result.isSuccess) {
+                        maybeOfferAutomaticSignalSlingerFirmwareUpdate()
+                    }
                     if (result.isFailure && attempt < AUTO_DETECT_MAX_RETRIES) {
                         scheduleAutoDetect(
                             delayMs = AUTO_DETECT_RETRY_DELAY_MS,
@@ -4518,6 +4527,94 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             isError = false,
         )
         renderContent()
+    }
+
+    private fun maybeOfferAutomaticSignalSlingerFirmwareUpdate() {
+        if (!automaticFirmwareUpdatesEnabled ||
+            automaticFirmwareUpdateCheckInProgress ||
+            automaticFirmwareUpdatePromptVisible ||
+            firmwareUpdateActive()
+        ) {
+            return
+        }
+        val uiState = AndroidSessionController.snapshotUiState()
+        val snapshot = uiState.sessionViewState?.state?.snapshot ?: return
+        val hardwareBuild = snapshot.info.hardwareBuild.orEmpty().trim()
+        val firmwareVersion = snapshot.info.softwareVersion.orEmpty().trim()
+        if (hardwareBuild.isBlank() || !SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(firmwareVersion)) {
+            return
+        }
+
+        automaticFirmwareUpdateCheckInProgress = true
+        thread(name = "serialslinger-android-automatic-firmware-update-check", isDaemon = true) {
+            val result = runCatching {
+                SignalSlingerReleaseCache(applicationContext.filesDir.resolve("signalslinger-updates")).selectLatestForUpdate(
+                    hardwareBuild = hardwareBuild,
+                    currentFirmwareVersion = firmwareVersion,
+                )
+            }
+            runOnUiThread {
+                automaticFirmwareUpdateCheckInProgress = false
+                val selection = result.getOrNull() ?: return@runOnUiThread
+                val latestState = AndroidSessionController.snapshotUiState()
+                val latestSnapshot = latestState.sessionViewState?.state?.snapshot ?: return@runOnUiThread
+                if (
+                    latestSnapshot.info.hardwareBuild.orEmpty().trim() != hardwareBuild ||
+                    latestSnapshot.info.softwareVersion.orEmpty().trim() != firmwareVersion ||
+                    firmwareUpdateActive()
+                ) {
+                    return@runOnUiThread
+                }
+                automaticFirmwareUpdatePromptVisible = true
+                val sourceText =
+                    if (selection.source == SignalSlingerReleaseSelectionSource.RESIDENT) {
+                        if (selection.downloadFailure != null) {
+                            "SerialSlinger could not download the latest release, but a resident update is available."
+                        } else {
+                            "SerialSlinger already has this update saved locally."
+                        }
+                    } else {
+                        "SerialSlinger downloaded the latest update."
+                    }
+                AlertDialog.Builder(this)
+                    .setTitle("Update SignalSlinger")
+                    .setMessage(
+                        "$sourceText\n\n" +
+                            "Current firmware: $firmwareVersion\n" +
+                            "Available firmware: ${selection.release.version}\n" +
+                            "Hardware: ${selection.release.board}\n\n" +
+                            "Update SignalSlinger now?",
+                    )
+                    .setPositiveButton("Update") { _, _ ->
+                        automaticFirmwareUpdatePromptVisible = false
+                        startAndroidSignalSlingerAutomaticUpdate()
+                    }
+                    .setNegativeButton("Not Now") { _, _ ->
+                        automaticFirmwareUpdatePromptVisible = false
+                    }
+                    .setOnCancelListener {
+                        automaticFirmwareUpdatePromptVisible = false
+                    }
+                    .showLogged("Update SignalSlinger")
+            }
+        }
+    }
+
+    private fun startAndroidSignalSlingerAutomaticUpdate() {
+        AndroidSessionController.runSignalSlingerFirmwareUpdate(
+            context = applicationContext,
+            overrideBoard = null,
+            recoverAlreadyWaiting = false,
+            requestedVersion = null,
+            confirmResidentFallback = { _, _, _ -> true },
+        ) { result ->
+            result.exceptionOrNull()?.let { error ->
+                showLargeTextDialog("Update SignalSlinger", error.message ?: error.toString())
+            }
+            if (result.isSuccess) {
+                scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
+            }
+        }
     }
 
     private fun temperatureLoggingSupported(uiState: AndroidUiState): Boolean {
