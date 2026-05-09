@@ -496,11 +496,19 @@ object DesktopInputSupport {
     fun formatReportedVersion(
         softwareVersion: String?,
         hardwareBuild: String?,
+        bootloaderVersion: String? = null,
+        bootloaderProtocolVersion: Int? = null,
     ): String {
         return if (softwareVersion.isNullOrBlank() || hardwareBuild.isNullOrBlank()) {
             "Not Available"
         } else {
-            "SW Ver: ${softwareVersion.trim()} HW Build: ${hardwareBuild.trim()}"
+            buildString {
+                append("SW Ver: ${softwareVersion.trim()} HW Build: ${hardwareBuild.trim()}")
+                if (!bootloaderVersion.isNullOrBlank()) {
+                    append(" Bootloader: ${bootloaderVersion.trim()}")
+                    bootloaderProtocolVersion?.let { append(" protocol $it") }
+                }
+            }
         }
     }
 

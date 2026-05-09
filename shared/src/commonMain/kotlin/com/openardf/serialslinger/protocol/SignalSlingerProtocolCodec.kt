@@ -11,6 +11,8 @@ import com.openardf.serialslinger.model.WritePlan
 data class DeviceInfoPatch(
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
+    val bootloaderVersion: String? = null,
+    val bootloaderProtocolVersion: Int? = null,
 )
 
 data class DeviceStatusPatch(
@@ -97,6 +99,7 @@ data class DeviceReportUpdate(
 
 object SignalSlingerProtocolCodec {
     private val versionPattern = Regex("""^\* SW Ver:\s*(.+?)\s+HW Build:\s*(.+)$""")
+    private val bootloaderVersionPattern = Regex("""^\* Bootloader:\s*(\S+)\s+protocol\s+(\S+)$""", RegexOption.IGNORE_CASE)
     private val stationIdPattern = Regex("""^\* ID:\s*(.*)$""")
     private val eventPattern = Regex("""^\* Event:\s*(.+)$""")
     private val foxPattern = Regex("""^\*\s*Fox:\s*(.+)$""")
@@ -150,6 +153,17 @@ object SignalSlingerProtocolCodec {
                 deviceInfoPatch = DeviceInfoPatch(
                     softwareVersion = match.groupValues[1].trim(),
                     hardwareBuild = match.groupValues[2].trim(),
+                ),
+            )
+        }
+
+        bootloaderVersionPattern.matchEntire(trimmed)?.let { match ->
+            val bootloaderVersion = match.groupValues[1].trim().takeUnless { it.equals("unknown", ignoreCase = true) }
+            val bootloaderProtocolVersion = match.groupValues[2].trim().takeUnless { it.equals("unknown", ignoreCase = true) }?.toIntOrNull()
+            return DeviceReportUpdate(
+                deviceInfoPatch = DeviceInfoPatch(
+                    bootloaderVersion = bootloaderVersion,
+                    bootloaderProtocolVersion = bootloaderProtocolVersion,
                 ),
             )
         }

@@ -106,6 +106,8 @@ object DeviceSessionWorkflow {
         val nextInfo = info.copy(
             softwareVersion = update.deviceInfoPatch?.softwareVersion ?: info.softwareVersion,
             hardwareBuild = update.deviceInfoPatch?.hardwareBuild ?: info.hardwareBuild,
+            bootloaderVersion = update.deviceInfoPatch?.bootloaderVersion ?: info.bootloaderVersion,
+            bootloaderProtocolVersion = update.deviceInfoPatch?.bootloaderProtocolVersion ?: info.bootloaderProtocolVersion,
         )
         val firmwareProfile = SignalSlingerFirmwareSupport.resolve(nextInfo.softwareVersion)
 

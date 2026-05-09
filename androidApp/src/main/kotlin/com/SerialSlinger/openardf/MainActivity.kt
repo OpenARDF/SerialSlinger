@@ -1785,6 +1785,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     listOfNotNull(
                         loadedInfo?.softwareVersion?.takeIf { it.isNotBlank() },
                         loadedInfo?.hardwareBuild?.takeIf { it.isNotBlank() }?.let { "HW $it" },
+                        loadedInfo?.bootloaderVersion?.takeIf { it.isNotBlank() }?.let { version ->
+                            loadedInfo.bootloaderProtocolVersion?.let { protocol ->
+                                "Bootloader $version protocol $protocol"
+                            } ?: "Bootloader $version"
+                        },
                     ).joinToString(" / ").ifBlank { "<unknown>" },
                 ),
             ),
@@ -2851,6 +2856,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("Device Info")
             appendLine("Software version: ${info.softwareVersion.orUnknown()}")
             appendLine("Hardware build: ${info.hardwareBuild.orUnknown()}")
+            appendLine("Bootloader version: ${info.bootloaderVersion.orUnknown()}")
+            appendLine("Bootloader protocol: ${info.bootloaderProtocolVersion?.toString().orUnknown()}")
             appendLine("Product name: ${info.productName.orUnknown()}")
             appendLine("Serial port name: ${info.serialPortName.orUnknown()}")
             appendLine()

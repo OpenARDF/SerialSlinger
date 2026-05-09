@@ -150,6 +150,8 @@ data class SignalSlingerAppInfo(
     val appStartAddress: Int? = null,
     val updateBaud: Int? = null,
     val appUpdateCommand: String? = null,
+    val bootloaderVersion: String? = null,
+    val bootloaderProtocolVersion: Int? = null,
 ) {
     fun validateForRelease(
         release: SignalSlingerReleaseInfo,
@@ -505,6 +507,8 @@ object SignalSlingerFirmwareUpdate {
                 appStartAddress = fields["app"]?.let(::parseIntLiteral),
                 updateBaud = fields["baud"]?.toIntOrNull(),
                 appUpdateCommand = fields["update"],
+                bootloaderVersion = fields["bl"]?.takeUnless { it.equals("unknown", ignoreCase = true) },
+                bootloaderProtocolVersion = fields["proto"]?.takeUnless { it.equals("unknown", ignoreCase = true) }?.toIntOrNull(),
             )
         }
         return lines.firstNotNullOfOrNull { line ->

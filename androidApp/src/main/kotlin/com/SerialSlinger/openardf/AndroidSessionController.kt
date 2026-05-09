@@ -238,6 +238,7 @@ object AndroidSessionController {
     private var latestSessionViewState: AndroidSessionViewState? = null
     private var latestLoadedTarget: AndroidConnectionTarget? = null
     private var latestLoadedDeviceName: String? = null
+    private var pendingBootloaderVersion: PendingBootloaderVersion? = null
     private var draftStationId: String? = null
     private var draftEventType: String? = null
     private var draftFoxRole: String? = null
@@ -436,6 +437,7 @@ object AndroidSessionController {
             latestSessionViewState = null
             latestLoadedTarget = null
             latestLoadedDeviceName = null
+            pendingBootloaderVersion = null
             applySnapshotDrafts(null)
             deviceTimeOffset = null
             lastClockPhaseErrorMillis = null
@@ -1188,14 +1190,15 @@ object AndroidSessionController {
                         lastClockPhaseErrorMillis = null
                         cachedManualWriteDelayMillis = null
                     }
+                    val displayedLoadResult = applyPendingBootloaderVersion(loadResult)
                     latestSessionViewState = AndroidSessionViewState(
-                        state = loadResult.state,
-                        traceEntries = loadResult.traceEntries,
+                        state = displayedLoadResult.state,
+                        traceEntries = displayedLoadResult.traceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
                     cloneTemplateTimedEventEditsLocked = false
-                    loadedSnapshot?.let(::rememberCloneTemplateFrom)
-                    applySnapshotDrafts(loadedSnapshot)
+                    displayedLoadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
+                    applySnapshotDrafts(displayedLoadResult.state.snapshot)
                     clockAnchor?.let { anchor ->
                         applyClockDisplayAnchor(
                             currentTimeCompact = anchor.currentTimeCompact,
@@ -4432,6 +4435,32 @@ object AndroidSessionController {
         )
     }
 
+    private fun applyPendingBootloaderVersion(result: DeviceLoadResult): DeviceLoadResult {
+        val pending = pendingBootloaderVersion ?: return result
+        val state = result.state
+        val snapshot = state.snapshot ?: return result
+        val info = snapshot.info
+        val loadedVersion = info.softwareVersion.orEmpty().trim()
+        val loadedHardware = info.hardwareBuild.orEmpty().trim()
+        if (
+            loadedVersion != pending.firmwareVersion ||
+            !SignalSlingerFirmwareUpdate.hardwareMatchesBoard(loadedHardware, pending.board)
+        ) {
+            return result
+        }
+
+        pendingBootloaderVersion = null
+        val updatedSnapshot = snapshot.copy(
+            info = info.copy(
+                bootloaderVersion = info.bootloaderVersion ?: pending.bootloaderVersion,
+                bootloaderProtocolVersion = info.bootloaderProtocolVersion ?: pending.bootloaderProtocolVersion,
+            ),
+        )
+        return result.copy(
+            state = state.copy(snapshot = updatedSnapshot),
+        )
+    }
+
     private fun postLoadClockSample(
         transport: DeviceTransport,
         result: DeviceLoadResult,
@@ -5486,6 +5515,12 @@ object AndroidSessionController {
                 signalSlingerReadInFlight = false
                 if (result.isSuccess) {
                     val release = result.getOrThrow()
+                    pendingBootloaderVersion = PendingBootloaderVersion(
+                        firmwareVersion = release.version,
+                        board = release.board,
+                        bootloaderVersion = release.serialSlinger.bootloaderVersion,
+                        bootloaderProtocolVersion = release.serialSlinger.protocolVersion,
+                    )
                     latestSessionViewState = null
                     latestSubmitSummary = "SignalSlinger update completed: ${release.product} ${release.version} ${release.board}."
                     latestProbeSummary = "Reload SignalSlinger after update."
@@ -5682,6 +5717,13 @@ object AndroidSessionController {
         val overrideBoard: String?,
         val recoverAlreadyWaiting: Boolean,
         val requestedVersion: String?,
+    )
+
+    private data class PendingBootloaderVersion(
+        val firmwareVersion: String,
+        val board: String,
+        val bootloaderVersion: String,
+        val bootloaderProtocolVersion: Int,
     )
 
     private fun effectivePatternText(

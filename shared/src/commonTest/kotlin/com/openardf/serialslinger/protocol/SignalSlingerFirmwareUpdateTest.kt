@@ -105,6 +105,7 @@ class SignalSlingerFirmwareUpdateTest {
                 "SignalSlINF* INF product=SignalSlinger update=UPD",
                 "> INF* INF product=SignalSlinger update=UPD",
                 "* INF sw=2.0.0 hw=3.5 app=0x4000 baud=115200",
+                "* INF bl=BL0.13 proto=1",
             ),
         )
 
@@ -115,7 +116,24 @@ class SignalSlingerFirmwareUpdateTest {
         assertEquals(0x4000, info.appStartAddress)
         assertEquals(115_200, info.updateBaud)
         assertEquals("UPD", info.appUpdateCommand)
+        assertEquals("BL0.13", info.bootloaderVersion)
+        assertEquals(1, info.bootloaderProtocolVersion)
         info.validateForRelease(SignalSlingerFirmwareUpdate.parseReleaseInfo(sampleManifest(sampleHex().encodeToByteArray())))
+    }
+
+    @Test
+    fun treatsUnknownAppInfoBootloaderVersionAsUnavailable() {
+        val info = SignalSlingerFirmwareUpdate.parseAppInfo(
+            listOf(
+                "* INF product=SignalSlinger update=UPD",
+                "* INF sw=2.0.0 hw=3.5 app=0x4000 baud=115200",
+                "* INF bl=unknown proto=unknown",
+            ),
+        )
+
+        assertNotNull(info)
+        assertEquals(null, info.bootloaderVersion)
+        assertEquals(null, info.bootloaderProtocolVersion)
     }
 
     @Test

@@ -72,6 +72,8 @@ data class DeviceInfo(
     val productName: String? = null,
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
+    val bootloaderVersion: String? = null,
+    val bootloaderProtocolVersion: Int? = null,
     val serialPortName: String? = null,
 )
 

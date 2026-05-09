@@ -29,6 +29,7 @@ import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.protocol.SignalSlingerAppInfo
+import com.openardf.serialslinger.protocol.SignalSlingerBootloaderIdentity
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
 import com.openardf.serialslinger.protocol.SignalSlingerAlreadyCurrentException
@@ -4731,6 +4732,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             setInformationalFieldText(versionInfoField, DesktopInputSupport.formatReportedVersion(
                 softwareVersion = snapshot.info.softwareVersion,
                 hardwareBuild = snapshot.info.hardwareBuild,
+                bootloaderVersion = snapshot.info.bootloaderVersion,
+                bootloaderProtocolVersion = snapshot.info.bootloaderProtocolVersion,
             ), unreadPlaceholder = false)
             setInformationalFieldText(internalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.internalBatteryVolts), unreadPlaceholder = false)
             setInformationalFieldText(externalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.externalBatteryVolts), unreadPlaceholder = false)
@@ -5550,22 +5553,68 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             stepName = "Programming",
         )
 
-        if (serialVerification) {
+        val verification = if (serialVerification) {
             val verifiedPort = requireNotNull(port) { "Serial verification requires a serial port." }
             setBusyProgress(94, 100, "Checking installed bootloader")
             verifySignalSlingerWorkshopSetup(verifiedPort, manifest, logEntries)
         } else {
             setBusyProgress(100, 100, "Done")
             log("Skipped serial verification because bare-PCB setup was selected.")
+            null
         }
 
         log("SignalSlinger bootloader installation completed.")
+        val refreshedConnection = if (serialVerification && port != null) {
+            setBusyProgress(96, 100, "Reloading SignalSlinger")
+            runCatching {
+                withWorkshopBootloaderVersion(
+                    connection = loadPort(port),
+                    bootloaderVersion = verification?.bootloaderVersion ?: manifest.serialSlinger.bootloaderVersion,
+                    bootloaderProtocolVersion = verification?.bootloaderProtocolVersion ?: manifest.serialSlinger.protocolVersion,
+                )
+            }.onFailure { failure ->
+                log("SignalSlinger bootloader installation completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}")
+            }.getOrNull()
+        } else {
+            null
+        }
         SwingUtilities.invokeLater {
             appendLog("Install Bootloader", logEntries)
-            clearFormForUnread()
+            if (refreshedConnection != null) {
+                applyLoadedConnection(
+                    refreshedConnection.copy(
+                        loadLogTitle = "Install Bootloader",
+                        loadLogLeadEntries = listOf(
+                            DesktopLogEntry(
+                                "Reloaded SignalSlinger after bootloader installation so the visible device information reflects the installed firmware.",
+                                DesktopLogCategory.APP,
+                            ),
+                        ),
+                    ),
+                )
+            } else {
+                if (verification != null) {
+                    setInformationalFieldText(
+                        versionInfoField,
+                        DesktopInputSupport.formatReportedVersion(
+                            softwareVersion = verification.appInfo.softwareVersion,
+                            hardwareBuild = verification.appInfo.hardwareBuild,
+                            bootloaderVersion = verification.bootloaderVersion,
+                            bootloaderProtocolVersion = verification.bootloaderProtocolVersion,
+                        ),
+                        unreadPlaceholder = false,
+                    )
+                } else {
+                    clearFormForUnread()
+                }
+            }
             setStatus("SignalSlinger bootloader installed.")
             val message = if (serialVerification) {
-                "SignalSlinger bootloader installed."
+                if (refreshedConnection != null) {
+                    "SignalSlinger bootloader installed.\n\nThe displayed device information has been refreshed."
+                } else {
+                    "SignalSlinger bootloader installed.\n\nSerial verification passed, but SerialSlinger could not refresh the displayed device information. Use Reload SignalSlinger Data to refresh it."
+                }
             } else {
                 "SignalSlinger bootloader installed.\n\nProgramming was verified through the programmer. Serial communication was not checked because bare-PCB setup was selected."
             }
@@ -5622,33 +5671,38 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         port: String,
         manifest: SignalSlingerReleaseInfo,
         logEntries: MutableList<DesktopLogEntry>,
-    ) {
+    ): WorkshopSetupVerification {
         logEntries += DesktopLogEntry("Post-setup verification on $port.", DesktopLogCategory.APP)
         val firstAppInfo = readAndValidateWorkshopAppInfo(port, manifest, logEntries)
         logEntries += DesktopLogEntry("Initial app verification passed: sw=${firstAppInfo.softwareVersion}, hw=${firstAppInfo.hardwareBuild}, app=${firstAppInfo.appStartAddress?.let(::formatHex32)}.", DesktopLogCategory.APP)
 
         requestWorkshopBootloaderMode(port, manifest, logEntries)
-        val bootloaderVerified = runCatching {
+        val bootloaderIdentity = runCatching {
             readAndValidateWorkshopBootloaderIdentity(port, manifest, logEntries)
         }.onFailure { failure ->
             logEntries += DesktopLogEntry(
                 "Bootloader serial verification did not complete: ${failure.message ?: failure::class.simpleName}. Checking app identity instead.",
                 DesktopLogCategory.APP,
             )
-        }.isSuccess
+        }.getOrNull()
 
-        if (bootloaderVerified) {
+        if (bootloaderIdentity != null) {
             Thread.sleep(900L)
         }
-        readAndValidateWorkshopAppInfo(port, manifest, logEntries)
+        val finalAppInfo = readAndValidateWorkshopAppInfo(port, manifest, logEntries)
         logEntries += DesktopLogEntry("Post-setup verification passed.", DesktopLogCategory.APP)
+        return WorkshopSetupVerification(
+            appInfo = finalAppInfo,
+            bootloaderVersion = bootloaderIdentity?.bootloaderVersion ?: manifest.serialSlinger.bootloaderVersion,
+            bootloaderProtocolVersion = bootloaderIdentity?.protocolVersion ?: finalAppInfo.bootloaderProtocolVersion ?: manifest.serialSlinger.protocolVersion,
+        )
     }
 
     private fun readAndValidateWorkshopBootloaderIdentity(
         port: String,
         manifest: SignalSlingerReleaseInfo,
         logEntries: MutableList<DesktopLogEntry>,
-    ) {
+    ): SignalSlingerBootloaderIdentity {
         var lastFailure: Throwable? = null
         DesktopSmartPollingPolicy.aliasCandidates(port).forEach { candidatePort ->
             val transport = DesktopFirmwareUpdateTransport(candidatePort)
@@ -5675,7 +5729,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "Installed bootloader write range ends at ${identity.writableEndAddress?.let { formatHex32(it) }}; expected ${formatHex32(expectedWritableEnd)}."
                 }
                 transport.writeAscii("R")
-                return
+                return identity
             } catch (failure: Throwable) {
                 lastFailure = failure
             } finally {
@@ -8064,6 +8118,25 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
     }
 
+    private fun withWorkshopBootloaderVersion(
+        connection: LoadedConnection,
+        bootloaderVersion: String,
+        bootloaderProtocolVersion: Int? = null,
+    ): LoadedConnection {
+        val state = connection.result.state
+        val snapshot = state.snapshot ?: return connection
+        val updatedSnapshot = snapshot.copy(
+            info = snapshot.info.copy(
+                bootloaderVersion = bootloaderVersion,
+                bootloaderProtocolVersion = bootloaderProtocolVersion ?: snapshot.info.bootloaderProtocolVersion,
+            ),
+        )
+        val updatedState = state.copy(snapshot = updatedSnapshot)
+        return connection.copy(
+            result = connection.result.copy(state = updatedState),
+        )
+    }
+
     private fun postLoadClockSample(
         transport: DesktopSerialTransport,
         snapshot: DeviceSnapshot?,
@@ -10265,6 +10338,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val completed: Int,
         val total: Int,
         val label: String?,
+    )
+
+    private data class WorkshopSetupVerification(
+        val appInfo: SignalSlingerAppInfo,
+        val bootloaderVersion: String,
+        val bootloaderProtocolVersion: Int?,
     )
 
     private data class LoadedConnection(
