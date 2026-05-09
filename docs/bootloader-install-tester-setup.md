@@ -55,7 +55,20 @@ Windows:
 
 - PowerShell 7 with pymcuprog, or Windows PowerShell with Microchip Studio
 - For Microchip Studio path: install Microchip Studio 7 so `atprogram.exe` is available
-- For pymcuprog path: install Python 3, pymcuprog, and pyusb
+- For pymcuprog path: install Python 3, then run `python -m pip install pymcuprog pyusb`
+- Optional pipx path:
+
+```powershell
+python -m pip install --user pipx
+python -m pipx ensurepath
+```
+
+Open a fresh PowerShell window, then run:
+
+```powershell
+pipx install pymcuprog
+pipx inject pymcuprog pyusb
+```
 
 Linux:
 

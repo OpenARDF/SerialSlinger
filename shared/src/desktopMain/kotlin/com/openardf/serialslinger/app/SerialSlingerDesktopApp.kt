@@ -5969,16 +5969,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             trimmed.contains("No module named 'usb'", ignoreCase = true) ||
             trimmed.contains("No module named usb", ignoreCase = true)
         ) {
-            return "The pymcuprog Python environment is missing USB support.\n\nIf pymcuprog was installed with pipx, run:\npipx inject pymcuprog pyusb\n\nIf pymcuprog was installed with pip, run:\npython -m pip install pyusb"
+            return "The pymcuprog Python environment is missing USB support.\n\nRecommended install path:\npython -m pip install pyusb\n\nIf you installed pymcuprog with pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx inject pymcuprog pyusb"
         }
         if (trimmed.contains("pymcuprog command not found", ignoreCase = true)) {
-            return "The pymcuprog programmer tool was not found.\n\nInstall Python and pymcuprog, then try again:\npython -m pip install pymcuprog pyusb\n\nIf you use pipx, run:\npipx install pymcuprog\npipx inject pymcuprog pyusb"
+            return "The pymcuprog programmer tool was not found.\n\nRecommended install path:\npython -m pip install pymcuprog pyusb\n\nIf you prefer pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx install pymcuprog\npipx inject pymcuprog pyusb"
         }
         if (trimmed.contains("No programming backend found", ignoreCase = true)) {
             return "No supported programming tool was found.\n\nOn macOS or Linux, install Python, pymcuprog, and pyusb.\nOn Windows, install Microchip Studio or install pymcuprog and PowerShell 7."
         }
         if (trimmed.startsWith("- pymcuprog:", ignoreCase = true)) {
-            return "The pymcuprog programmer tool is required for this setup path.\n\nInstall Python and pymcuprog, then try again:\npython -m pip install pymcuprog pyusb\n\nIf you use pipx, run:\npipx install pymcuprog\npipx inject pymcuprog pyusb"
+            return "The pymcuprog programmer tool is required for this setup path.\n\nRecommended install path:\npython -m pip install pymcuprog pyusb\n\nIf you prefer pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx install pymcuprog\npipx inject pymcuprog pyusb"
         }
         if (trimmed.startsWith("- Python:", ignoreCase = true)) {
             return "Python is required before SerialSlinger can install the bootloader with pymcuprog.\n\nInstall Python 3, then install pymcuprog and pyusb."
@@ -6053,7 +6053,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "missing_pymcuprog" ->
                 "The pymcuprog programmer tool was not found.\n\nInstall Python and pymcuprog, then try again:\npython -m pip install pymcuprog pyusb"
             "missing_pyusb" ->
-                "The pymcuprog Python environment is missing USB support.\n\nIf pymcuprog was installed with pipx, run:\npipx inject pymcuprog pyusb\n\nIf pymcuprog was installed with pip, run:\npython -m pip install pyusb"
+                "The pymcuprog Python environment is missing USB support.\n\nRecommended install path:\npython -m pip install pyusb\n\nIf you installed pymcuprog with pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx inject pymcuprog pyusb"
             "usb_access_denied" ->
                 "The programmer was found but could not be opened over USB. Unplug/replug the programmer and check USB permissions, then try again."
             "target_not_detected" ->
