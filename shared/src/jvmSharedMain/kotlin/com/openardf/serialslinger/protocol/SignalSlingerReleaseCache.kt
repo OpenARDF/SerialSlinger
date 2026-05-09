@@ -116,6 +116,7 @@ class SignalSlingerReleaseCache(
         hardwareBuild: String,
         releaseVersion: String,
         overrideBoard: String? = null,
+        replaceBoardCache: Boolean = false,
     ): SignalSlingerReleaseSelection {
         val requestedHardware = overrideBoard?.substringAfter("HW-", overrideBoard)?.substringAfter("Board-", overrideBoard) ?: hardwareBuild
         require(requestedHardware.isNotBlank()) {
@@ -124,7 +125,7 @@ class SignalSlingerReleaseCache(
         val selected = downloadReleaseForHardware(
             hardwareBuild = requestedHardware,
             releaseVersion = releaseVersion,
-            replaceBoardCache = false,
+            replaceBoardCache = replaceBoardCache,
         )
         return SignalSlingerReleaseSelection(
             residentRelease = selected,
