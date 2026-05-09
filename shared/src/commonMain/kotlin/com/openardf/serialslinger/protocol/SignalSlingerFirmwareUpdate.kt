@@ -77,6 +77,7 @@ data class SignalSlingerWorkshopSetup(
     val setupLauncherFileName: String?,
     val provisioningScriptFileName: String?,
     val serialValidationScriptFileName: String?,
+    val supportedProgrammers: List<String>,
     val bootSectionPages: Int,
     val fuseBootSize: String,
     val fuseCodeSize: String,
@@ -349,6 +350,7 @@ object SignalSlingerFirmwareUpdate {
                     setupLauncherFileName = it.optionalString("setupLauncherFileName"),
                     provisioningScriptFileName = it.optionalString("provisioningScriptFileName"),
                     serialValidationScriptFileName = it.optionalString("serialValidationScriptFileName"),
+                    supportedProgrammers = it.optionalArray("supportedProgrammers")?.map { item -> item.asString() }.orEmpty(),
                     bootSectionPages = it.requiredInt("bootSectionPages"),
                     fuseBootSize = it.requiredString("fuseBootSize"),
                     fuseCodeSize = it.requiredString("fuseCodeSize"),
@@ -991,6 +993,8 @@ object SignalSlingerFirmwareUpdate {
     private fun Map<String, JsonValue>.optionalObject(key: String): Map<String, JsonValue>? = this[key]?.asObject()
 
     private fun Map<String, JsonValue>.requiredArray(key: String): List<JsonValue> = required(key).asArray()
+
+    private fun Map<String, JsonValue>.optionalArray(key: String): List<JsonValue>? = this[key]?.asArray()
 
     private fun Map<String, JsonValue>.required(key: String): JsonValue = this[key] ?: error("Release manifest is missing `$key`.")
 

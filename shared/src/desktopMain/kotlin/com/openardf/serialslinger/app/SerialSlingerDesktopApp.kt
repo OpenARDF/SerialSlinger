@@ -422,6 +422,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private lateinit var championshipSettingsMenuItem: JMenuItem
     private lateinit var advancedModeMenuItem: JMenuItem
     private lateinit var installBootloaderMenuItem: JMenuItem
+    private lateinit var installBootloaderBarePcbMenuItem: JMenuItem
     private lateinit var temperatureLogsMenuItem: JMenuItem
     private lateinit var temperatureLogMenuItem: JCheckBoxMenuItem
     private var temperatureLogTimer: Timer? = null
@@ -859,6 +860,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         JMenuItem("Install Bootloader on SignalSlinger...").apply {
                             installBootloaderMenuItem = this
                             addActionListener { chooseSignalSlingerWorkshopSetupPackage() }
+                        },
+                    )
+                    add(
+                        JMenuItem("Install Bootloader on Bare PCB...").apply {
+                            installBootloaderBarePcbMenuItem = this
+                            addActionListener { chooseSignalSlingerWorkshopSetupPackage(serialVerification = false) }
                         },
                     )
                     automaticFirmwareUpdatesMenuItem = JCheckBoxMenuItem(
@@ -5131,12 +5138,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun chooseSignalSlingerWorkshopSetupPackage() {
+    private fun chooseSignalSlingerWorkshopSetupPackage(serialVerification: Boolean = true) {
         val board = chooseSignalSlingerWorkshopSetupBoard() ?: return
-        val port = chooseSignalSlingerWorkshopSetupPort() ?: return
+        val port = if (serialVerification) chooseSignalSlingerWorkshopSetupPort() ?: return else null
         val sourceChoice = JOptionPane.showOptionDialog(
             this,
-            "Choose the bootloader package for physical hardware $board.",
+            if (serialVerification) {
+                "Choose the bootloader package for physical hardware $board."
+            } else {
+                "Choose the bootloader package for physical hardware $board.\n\nSerialSlinger will verify programming through the programmer only because this board does not have a serial connector."
+            },
             "Install Bootloader on SignalSlinger",
             JOptionPane.DEFAULT_OPTION,
             JOptionPane.PLAIN_MESSAGE,
@@ -5149,10 +5160,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         when (sourceChoice) {
-            0 -> prepareSignalSlingerUpdatesFromLatestGitHubRelease(board, port)
+            0 -> prepareSignalSlingerUpdatesFromLatestGitHubRelease(board, port, serialVerification = serialVerification)
             2 -> {
                 val version = chooseSignalSlingerGitHubReleaseVersion() ?: return
-                prepareSignalSlingerUpdatesFromGitHubReleaseVersion(board, port, version)
+                prepareSignalSlingerUpdatesFromGitHubReleaseVersion(board, port, version, serialVerification)
             }
             else -> {
                 val chooser = JFileChooser().apply {
@@ -5167,9 +5178,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
                 val selectedFile = chooser.selectedFile
                 if (selectedFile.extension.equals("zip", ignoreCase = true)) {
-                    prepareSignalSlingerUpdatesFromPackageFile(board, port, selectedFile)
+                    prepareSignalSlingerUpdatesFromPackageFile(board, port, selectedFile, serialVerification)
                 } else {
-                    prepareSignalSlingerUpdatesFromReleaseInfo(board, port, selectedFile)
+                    prepareSignalSlingerUpdatesFromReleaseInfo(board, port, selectedFile, serialVerification)
                 }
             }
         }
@@ -5179,7 +5190,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun handleOutdatedWorkshopSetupPackage(
         board: String,
-        port: String,
+        port: String?,
+        serialVerification: Boolean,
         exception: Exception,
     ): Boolean {
         if (exception !is OutdatedWorkshopSetupPackageException) {
@@ -5187,7 +5199,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         SwingUtilities.invokeLater {
             Timer(250) {
-                offerDownloadLatestWorkshopSetupPackage(board, port, exception.message.orEmpty())
+                offerDownloadLatestWorkshopSetupPackage(board, port, serialVerification, exception.message.orEmpty())
             }.apply {
                 isRepeats = false
                 start()
@@ -5198,12 +5210,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun offerDownloadLatestWorkshopSetupPackage(
         board: String,
-        port: String,
+        port: String?,
+        serialVerification: Boolean,
         reason: String,
     ) {
+        val targetText = port?.let { "$board on $it" } ?: "$board"
         val choice = JOptionPane.showOptionDialog(
             this,
-            "$reason\n\nSerialSlinger can download the refreshed package now and continue installing the bootloader for $board on $port.",
+            "$reason\n\nSerialSlinger can download the refreshed package now and continue installing the bootloader for $targetText.",
             "Install Bootloader on SignalSlinger",
             JOptionPane.DEFAULT_OPTION,
             JOptionPane.WARNING_MESSAGE,
@@ -5216,6 +5230,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 board = board,
                 port = port,
                 recoveringFromOutdatedResident = true,
+                serialVerification = serialVerification,
             )
         }
     }
@@ -5250,8 +5265,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun prepareSignalSlingerUpdatesFromLatestGitHubRelease(
         board: String,
-        port: String,
+        port: String?,
         recoveringFromOutdatedResident: Boolean = false,
+        serialVerification: Boolean = true,
     ) {
         runInBackground(
             status = "Installing SignalSlinger bootloader...",
@@ -5291,12 +5307,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 selection.downloadFailure?.let { failure ->
                     logEntries += DesktopLogEntry("GitHub update check failed: $failure", DesktopLogCategory.APP)
                 }
-                performSignalSlingerWorkshopSetup(board, port, selection.manifestFile, logEntries)
+                performSignalSlingerWorkshopSetup(board, port, selection.manifestFile, logEntries, serialVerification)
             } catch (exception: Exception) {
                 SwingUtilities.invokeLater {
                     appendLog("Install Bootloader", logEntries)
                 }
-                if (handleOutdatedWorkshopSetupPackage(board, port, exception)) {
+                if (handleOutdatedWorkshopSetupPackage(board, port, serialVerification, exception)) {
                     return@runInBackground
                 }
                 throw exception
@@ -5319,8 +5335,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun prepareSignalSlingerUpdatesFromGitHubReleaseVersion(
         board: String,
-        port: String,
+        port: String?,
         requestedVersion: String,
+        serialVerification: Boolean = true,
     ) {
         runInBackground(
             status = "Installing SignalSlinger bootloader...",
@@ -5337,12 +5354,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     replaceBoardCache = true,
                 )
                 logEntries += DesktopLogEntry(selection.message, DesktopLogCategory.APP)
-                performSignalSlingerWorkshopSetup(board, port, selection.manifestFile, logEntries)
+                performSignalSlingerWorkshopSetup(board, port, selection.manifestFile, logEntries, serialVerification)
             } catch (exception: Exception) {
                 SwingUtilities.invokeLater {
                     appendLog("Install Bootloader", logEntries)
                 }
-                if (handleOutdatedWorkshopSetupPackage(board, port, exception)) {
+                if (handleOutdatedWorkshopSetupPackage(board, port, serialVerification, exception)) {
                     return@runInBackground
                 }
                 throw exception
@@ -5352,8 +5369,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun prepareSignalSlingerUpdatesFromPackageFile(
         board: String,
-        port: String,
+        port: String?,
         packageFile: File,
+        serialVerification: Boolean = true,
     ) {
         runInBackground(
             status = "Installing SignalSlinger bootloader...",
@@ -5365,12 +5383,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             try {
                 val selection = SignalSlingerReleaseCache(desktopSignalSlingerReleaseCacheDirectory()).importReleasePackage(packageFile)
                 logEntries += DesktopLogEntry("Imported SignalSlinger ${selection.release.version} setup package for ${selection.release.board}.", DesktopLogCategory.APP)
-                performSignalSlingerWorkshopSetup(board, port, selection.manifestFile, logEntries)
+                performSignalSlingerWorkshopSetup(board, port, selection.manifestFile, logEntries, serialVerification)
             } catch (exception: Exception) {
                 SwingUtilities.invokeLater {
                     appendLog("Install Bootloader", logEntries)
                 }
-                if (handleOutdatedWorkshopSetupPackage(board, port, exception)) {
+                if (handleOutdatedWorkshopSetupPackage(board, port, serialVerification, exception)) {
                     return@runInBackground
                 }
                 throw exception
@@ -5380,8 +5398,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun prepareSignalSlingerUpdatesFromReleaseInfo(
         board: String,
-        port: String,
+        port: String?,
         manifestFile: File,
+        serialVerification: Boolean = true,
     ) {
         runInBackground(
             status = "Installing SignalSlinger bootloader...",
@@ -5391,12 +5410,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
-                performSignalSlingerWorkshopSetup(board, port, manifestFile, logEntries)
+                performSignalSlingerWorkshopSetup(board, port, manifestFile, logEntries, serialVerification)
             } catch (exception: Exception) {
                 SwingUtilities.invokeLater {
                     appendLog("Install Bootloader", logEntries)
                 }
-                if (handleOutdatedWorkshopSetupPackage(board, port, exception)) {
+                if (handleOutdatedWorkshopSetupPackage(board, port, serialVerification, exception)) {
                     return@runInBackground
                 }
                 throw exception
@@ -5406,9 +5425,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun performSignalSlingerWorkshopSetup(
         board: String,
-        port: String,
+        port: String?,
         manifestFile: File,
         logEntries: MutableList<DesktopLogEntry>,
+        serialVerification: Boolean,
     ) {
         fun log(message: String, category: DesktopLogCategory = DesktopLogCategory.APP) {
             logEntries += DesktopLogEntry(message, category)
@@ -5434,14 +5454,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         require(launcher.isFile) {
             "Workshop setup launcher `${launcherFile.fileName}` was not found next to `${manifestFile.name}`."
         }
-        requireWorkshopSetupLauncherSupportsHardenedFlow(launcher)
+        requireWorkshopSetupScriptsSupportHardenedFlow(launcher, manifest, packageDir)
         val powershell = findPowerShellExecutable()
         val setupScriptOptions = workshopSetupScriptOptions(powershell)
         log("Using PowerShell executable: $powershell")
         log("Setup package: ${manifest.product} ${manifest.version} ${manifest.board}")
         log("Setup backend: ${setupScriptOptions.backend}")
         log("Workshop setup: boot section ${workshopSetup.bootSectionPages} pages, BOOTSIZE=${workshopSetup.fuseBootSize}, CODESIZE=${workshopSetup.fuseCodeSize}")
-        releaseCurrentSerialConnectionForWorkshopSetup(port, logEntries)
+        if (workshopSetup.supportedProgrammers.isNotEmpty()) {
+            log("Supported programmers: ${workshopSetup.supportedProgrammers.joinToString(", ")}")
+        }
+        log("Serial verification: ${if (serialVerification) "enabled" else "skipped for bare-PCB setup"}.")
+        port?.let { releaseCurrentSerialConnectionForWorkshopSetup(it, logEntries) }
 
         setBusyProgress(20, 100, "Checking tools")
         runWorkshopSetupProcess(
@@ -5510,10 +5534,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     ),
                 )
                 addAll(setupScriptOptions.backendArgs)
+                port?.let {
+                    addAll(listOf("-Port", it))
+                }
                 addAll(
                     listOf(
-                        "-Port",
-                        port,
                         "-ProgramFuses",
                         "-ConfirmFuseWrite",
                         "-SkipSerialValidation",
@@ -5525,15 +5550,26 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             stepName = "Programming",
         )
 
-        setBusyProgress(94, 100, "Checking installed bootloader")
-        verifySignalSlingerWorkshopSetup(port, manifest, logEntries)
+        if (serialVerification) {
+            val verifiedPort = requireNotNull(port) { "Serial verification requires a serial port." }
+            setBusyProgress(94, 100, "Checking installed bootloader")
+            verifySignalSlingerWorkshopSetup(verifiedPort, manifest, logEntries)
+        } else {
+            setBusyProgress(100, 100, "Done")
+            log("Skipped serial verification because bare-PCB setup was selected.")
+        }
 
         log("SignalSlinger bootloader installation completed.")
         SwingUtilities.invokeLater {
             appendLog("Install Bootloader", logEntries)
             clearFormForUnread()
             setStatus("SignalSlinger bootloader installed.")
-            JOptionPane.showMessageDialog(this, "SignalSlinger bootloader installed.")
+            val message = if (serialVerification) {
+                "SignalSlinger bootloader installed."
+            } else {
+                "SignalSlinger bootloader installed.\n\nProgramming was verified through the programmer. Serial communication was not checked because bare-PCB setup was selected."
+            }
+            JOptionPane.showMessageDialog(this, message)
         }
     }
 
@@ -5773,9 +5809,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun requireWorkshopSetupLauncherSupportsHardenedFlow(launcher: File) {
-        val scriptText = Files.readString(launcher.toPath())
-        if (!scriptText.contains("CheckProgrammer")) {
+    private fun requireWorkshopSetupScriptsSupportHardenedFlow(
+        launcher: File,
+        manifest: SignalSlingerReleaseInfo,
+        packageDir: File,
+    ) {
+        val launcherText = Files.readString(launcher.toPath())
+        val toolText = manifest.workshopSetupToolFiles()
+            .map { releaseFile -> packageDir.resolve(releaseFile.fileName) }
+            .filter { file -> file.isFile && file.extension.equals("ps1", ignoreCase = true) }
+            .joinToString("\n") { file -> Files.readString(file.toPath()) }
+        val combinedScriptText = launcherText + "\n" + toolText
+        if (
+            !launcherText.contains("CheckProgrammer") ||
+            !combinedScriptText.contains("SS_SETUP_ERROR") ||
+            !combinedScriptText.contains("SS_SETUP_OK")
+        ) {
             throw OutdatedWorkshopSetupPackageException(
                 "This saved SignalSlinger setup package has out-of-date setup scripts.",
             )
@@ -5849,6 +5898,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun workshopSetupFailureReason(line: String): String? {
         val trimmed = line.trim().removePrefix("|").trim()
+        parseStableWorkshopSetupLine(trimmed)?.let { stableLine ->
+            if (stableLine.kind == "SS_SETUP_ERROR") {
+                return stableWorkshopSetupFailureReason(stableLine.tokens)
+            }
+        }
         if (trimmed.contains("No CMSIS-DAP devices found", ignoreCase = true)) {
             return "No compatible Atmel-ICE/CMSIS-DAP programmer was found. Connect the programmer to this computer, connect it to the SignalSlinger UPDI header, then try again."
         }
@@ -5900,6 +5954,59 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return null
     }
 
+    private data class StableWorkshopSetupLine(
+        val kind: String,
+        val tokens: Map<String, String>,
+    )
+
+    private fun parseStableWorkshopSetupLine(line: String): StableWorkshopSetupLine? {
+        val parts = line.split(Regex("\\s+")).filter(String::isNotBlank)
+        val kind = parts.firstOrNull()?.takeIf { it.startsWith("SS_SETUP_") } ?: return null
+        val tokens = parts.drop(1)
+            .mapNotNull { token ->
+                val separator = token.indexOf('=')
+                if (separator <= 0) {
+                    null
+                } else {
+                    token.substring(0, separator) to token.substring(separator + 1)
+                }
+            }
+            .toMap()
+        return StableWorkshopSetupLine(kind, tokens)
+    }
+
+    private fun stableWorkshopSetupFailureReason(tokens: Map<String, String>): String {
+        return when (tokens["code"]) {
+            "no_programmer" -> {
+                val supportedTools = tokens["detail"]
+                    ?.removePrefix("tools_")
+                    ?.replace(',', ' ')
+                    ?.split(Regex("[^A-Za-z0-9_-]+"))
+                    ?.filter(String::isNotBlank)
+                    ?.joinToString(", ")
+                    ?.takeIf(String::isNotBlank)
+                buildString {
+                    append("No compatible programmer and target were detected.")
+                    if (supportedTools != null) {
+                        append("\n\nSupported programmers: ")
+                        append(supportedTools)
+                    }
+                    append("\n\nConnect the programmer to this computer, connect it to the SignalSlinger UPDI header, make sure the board is powered, then try again.")
+                }
+            }
+            "missing_pymcuprog" ->
+                "The pymcuprog programmer tool was not found.\n\nInstall Python and pymcuprog, then try again:\npython -m pip install pymcuprog pyusb"
+            "missing_pyusb" ->
+                "The pymcuprog Python environment is missing USB support.\n\nIf pymcuprog was installed with pipx, run:\npipx inject pymcuprog pyusb\n\nIf pymcuprog was installed with pip, run:\npython -m pip install pyusb"
+            "usb_access_denied" ->
+                "The programmer was found but could not be opened over USB. Unplug/replug the programmer and check USB permissions, then try again."
+            "target_not_detected" ->
+                "The programmer was found, but the SignalSlinger target did not respond. Check target power and the UPDI connection, then try again."
+            else ->
+                "SignalSlinger setup stopped during ${tokens["step"] ?: "setup"}. See the session log for details."
+        }
+    }
+
     private fun defaultWorkshopSetupFailureReason(stepName: String): String? {
         return when (stepName) {
             "Checking tools" ->
@@ -5939,20 +6046,25 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun confirmSignalSlingerFuseWrite(
         manifest: SignalSlingerReleaseInfo,
-        port: String,
+        port: String?,
     ): Boolean {
         val setup = manifest.workshopSetup ?: return false
+        val setupTarget = if (port != null) {
+            "It will run the package setup tool on port `$port` and explicitly allow fuse writes."
+        } else {
+            "It will run the package setup tool through the connected programmer and explicitly allow fuse writes.\n\nSerial communication will not be checked because bare-PCB setup was selected."
+        }
         val confirmed = AtomicBoolean(false)
         SwingUtilities.invokeAndWait {
             hideBusyDialog()
             val choice = JOptionPane.showOptionDialog(
                 this,
                 "This will install the SignalSlinger bootloader for ${manifest.board}.\n\n" +
-                    "It will run the package setup tool on port `$port` and explicitly allow fuse writes.\n\n" +
+                    "$setupTarget\n\n" +
                     "Expected fuse settings:\n" +
                     "BOOTSIZE=${setup.fuseBootSize}\n" +
                     "CODESIZE=${setup.fuseCodeSize}\n\n" +
-                    "Only continue if an appropriate programmer is connected and the selected board is correct.",
+                    "Only continue if an appropriate programmer is connected, the board is powered, and the selected board is correct.",
                 "Confirm Fuse Write",
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE,
@@ -7087,6 +7199,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     installBootloaderMenuItem.font.deriveFont(installBootloaderMenuItem.font.style or java.awt.Font.BOLD)
                 } else {
                     installBootloaderMenuItem.font.deriveFont(java.awt.Font.PLAIN)
+                }
+        }
+        if (::installBootloaderBarePcbMenuItem.isInitialized) {
+            installBootloaderBarePcbMenuItem.isVisible = advancedEnabled
+            installBootloaderBarePcbMenuItem.isEnabled = advancedEnabled
+            installBootloaderBarePcbMenuItem.foreground = if (advancedEnabled) advancedColor else defaultMenuForeground
+            installBootloaderBarePcbMenuItem.font =
+                if (advancedEnabled) {
+                    installBootloaderBarePcbMenuItem.font.deriveFont(installBootloaderBarePcbMenuItem.font.style or java.awt.Font.BOLD)
+                } else {
+                    installBootloaderBarePcbMenuItem.font.deriveFont(java.awt.Font.PLAIN)
                 }
         }
         if (::temperatureLogsMenuItem.isInitialized) {

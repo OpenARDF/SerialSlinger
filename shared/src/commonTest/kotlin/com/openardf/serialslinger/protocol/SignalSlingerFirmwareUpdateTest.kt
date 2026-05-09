@@ -55,6 +55,7 @@ class SignalSlingerFirmwareUpdateTest {
         assertEquals("Prepare-SignalSlinger-Updates-v2.0.2-HW-3.5.ps1", manifest.workshopSetup?.setupLauncherFileName)
         assertEquals("provision-bootloader.ps1", manifest.workshopSetup?.provisioningScriptFileName)
         assertEquals("test-bootloader-serial.ps1", manifest.workshopSetup?.serialValidationScriptFileName)
+        assertEquals(listOf("atmelice", "pickit4", "snap", "powerdebugger", "edbg", "medbg", "nedbg"), manifest.workshopSetup?.supportedProgrammers)
         assertEquals(16, manifest.workshopSetup?.bootSectionPages)
         assertEquals("0x10", manifest.workshopSetup?.fuseBootSize)
         assertEquals("0x00", manifest.workshopSetup?.fuseCodeSize)
@@ -684,6 +685,7 @@ class SignalSlingerFirmwareUpdateTest {
                 "setupLauncherFileName": "Prepare-SignalSlinger-Updates-v2.0.2-HW-3.5.ps1",
                 "provisioningScriptFileName": "provision-bootloader.ps1",
                 "serialValidationScriptFileName": "test-bootloader-serial.ps1",
+                "supportedProgrammers": ["atmelice", "pickit4", "snap", "powerdebugger", "edbg", "medbg", "nedbg"],
                 "bootSectionPages": 16,
                 "fuseBootSize": "0x10",
                 "fuseCodeSize": "0x00"
