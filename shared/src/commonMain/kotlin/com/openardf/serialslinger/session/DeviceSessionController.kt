@@ -138,7 +138,7 @@ object DeviceSessionController {
         updatedState = updatedState.copy(
             snapshot = updatedState.snapshot?.copy(capabilities = firmwareProfile.capabilities),
         )
-        val totalCommands = bootstrapCommands.size + firmwareProfile.loadCommandsAfterVersion.size
+        val totalCommands = bootstrapCommands.size + firmwareProfile.loadCommandsAfterVersion.size + 1
         progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
         for (command in firmwareProfile.loadCommandsAfterVersion) {
             val resolvedCommand = resolvePatternSpeedReadCommand(
@@ -158,6 +158,30 @@ object DeviceSessionController {
             notifyReportReceived(responseLines)
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
             afterCommand?.invoke(resolvedCommand, updatedState, transport)?.let { intervention ->
+                commands += intervention.commandsSent
+                lines += intervention.linesReceived
+                traceEntries += intervention.traceEntries
+                notifyReportReceived(intervention.linesReceived)
+                updatedState = intervention.state
+            }
+            progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
+        }
+
+        if (updatedState.snapshot?.info?.bootloaderVersion.isNullOrBlank()) {
+            val command = "INF"
+            val sentAtMs = System.currentTimeMillis()
+            transport.sendCommands(listOf(command))
+            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+            val responseLines = transport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
+            commands += command
+            lines += responseLines
+            traceEntries += responseLines.map { line ->
+                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+            }
+            notifyReportReceived(responseLines)
+            updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
+            afterCommand?.invoke(command, updatedState, transport)?.let { intervention ->
                 commands += intervention.commandsSent
                 lines += intervention.linesReceived
                 traceEntries += intervention.traceEntries

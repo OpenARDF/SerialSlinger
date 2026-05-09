@@ -75,6 +75,28 @@ class DeviceSessionWorkflowTest {
     }
 
     @Test
+    fun appIdentityReplyClearsStaleBootloaderInfoWhenNoBootloaderReplyIsPresent() {
+        val stateWithBootloader = DeviceSessionWorkflow.ingestReportLines(
+            DeviceSessionWorkflow.connected(),
+            listOf(
+                "* SW Ver: 2.0.2 HW Build: 3.5",
+                "* Bootloader: BL0.13 protocol 1",
+            ),
+        )
+        assertEquals("BL0.13", stateWithBootloader.snapshot?.info?.bootloaderVersion)
+        assertEquals(1, stateWithBootloader.snapshot?.info?.bootloaderProtocolVersion)
+
+        val reloadedOlderApp = DeviceSessionWorkflow.ingestReportLines(
+            stateWithBootloader,
+            listOf("* SW Ver: 1.2.2 HW Build: 3.5"),
+        )
+
+        assertEquals("1.2.2", reloadedOlderApp.snapshot?.info?.softwareVersion)
+        assertEquals(null, reloadedOlderApp.snapshot?.info?.bootloaderVersion)
+        assertEquals(null, reloadedOlderApp.snapshot?.info?.bootloaderProtocolVersion)
+    }
+
+    @Test
     fun ingestReportLinesPreservesDisabledTransmissionsStateFromBatteryReply() {
         val state = DeviceSessionWorkflow.connected()
 

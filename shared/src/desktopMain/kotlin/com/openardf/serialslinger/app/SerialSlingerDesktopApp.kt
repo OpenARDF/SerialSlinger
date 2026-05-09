@@ -37,6 +37,7 @@ import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseInfo
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
 import com.openardf.serialslinger.session.DeviceLoadResult
+import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
@@ -48,6 +49,7 @@ import com.openardf.serialslinger.session.SettingVerification
 import com.openardf.serialslinger.transport.DesktopSerialPortInfo
 import com.openardf.serialslinger.transport.DesktopFirmwareUpdateTransport
 import com.openardf.serialslinger.transport.DesktopSerialTransport
+import com.openardf.serialslinger.transport.DeviceTransport
 import java.awt.AWTEvent
 import java.awt.Desktop
 import java.awt.Dialog
@@ -8051,6 +8053,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 progress = { completed, total ->
                     setBusyProgressRange(0, 85, completed, total, commandProgressLabel(completed, total))
                 },
+                afterCommand = ::drainResidualStartupReportAfterVer,
             )
             requireLoadResponses(portPath, initialRefresh)
             setBusyProgress(92, 100, "Checking device time")
@@ -8077,6 +8080,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             progress = { completed, total ->
                 setBusyProgressRange(0, 85, completed, total, commandProgressLabel(completed, total))
             },
+            afterCommand = ::drainResidualStartupReportAfterVer,
         )
         requireLoadResponses(portPath, initialLoad)
         setBusyProgress(92, 100, "Checking device time")
@@ -8103,6 +8107,49 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         require(result.linesReceived.isNotEmpty()) {
             "No response from SignalSlinger on `$portPath` while loading settings."
         }
+    }
+
+    private fun drainResidualStartupReportAfterVer(
+        command: String,
+        state: DeviceSessionState,
+        transport: DeviceTransport,
+    ): DeviceLoadInterventionResult? {
+        if (!command.equals("VER", ignoreCase = true)) {
+            return null
+        }
+        val desktopTransport = transport as? DesktopSerialTransport ?: return null
+        val lines = mutableListOf<String>()
+        val traceEntries = mutableListOf<SerialTraceEntry>()
+        val deadline = System.currentTimeMillis() + STARTUP_REPORT_DRAIN_MAX_WAIT_MS
+        var quietReads = 0
+
+        while (System.currentTimeMillis() < deadline && quietReads < STARTUP_REPORT_DRAIN_QUIET_READ_COUNT) {
+            val responseLines = desktopTransport.readAvailableLinesBriefly(STARTUP_REPORT_DRAIN_READ_WINDOW_MS)
+            if (responseLines.isEmpty()) {
+                quietReads++
+                if (quietReads < STARTUP_REPORT_DRAIN_QUIET_READ_COUNT) {
+                    Thread.sleep(STARTUP_REPORT_DRAIN_QUIET_PAUSE_MS)
+                }
+            } else {
+                val receivedAtMs = System.currentTimeMillis()
+                lines += responseLines
+                traceEntries += responseLines.map { line ->
+                    SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+                }
+                quietReads = 0
+            }
+        }
+
+        if (lines.isEmpty()) {
+            return null
+        }
+
+        return DeviceLoadInterventionResult(
+            state = DeviceSessionWorkflow.ingestReportLines(state, lines),
+            commandsSent = emptyList(),
+            linesReceived = lines,
+            traceEntries = traceEntries,
+        )
     }
 
     private fun mergeLoadResults(
@@ -10460,5 +10507,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         const val PERIODIC_DEVICE_TIME_CHECK_INTERVAL_MS = 1_800_000L
         const val FIRMWARE_CLONE_COMMAND_SETTLE_MS = 100L
         const val FIRMWARE_CLONE_PRE_CLONE_STOP_MAX_WAIT_MS = 1_500L
+        const val STARTUP_REPORT_DRAIN_MAX_WAIT_MS = 2_000L
+        const val STARTUP_REPORT_DRAIN_READ_WINDOW_MS = 220L
+        const val STARTUP_REPORT_DRAIN_QUIET_PAUSE_MS = 80L
+        const val STARTUP_REPORT_DRAIN_QUIET_READ_COUNT = 3
     }
 }
