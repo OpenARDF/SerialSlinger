@@ -15,18 +15,47 @@ data class SignalSlingerReleaseInfo(
     val version: String,
     val board: String,
     val update: SignalSlingerUpdateImage,
+    val firstInstall: SignalSlingerFirstInstallImage?,
     val serialSlinger: SignalSlingerUpdateSettings,
+    val workshopSetup: SignalSlingerWorkshopSetup?,
     val files: List<SignalSlingerReleaseFile>,
 ) {
     fun updateFile(): SignalSlingerReleaseFile {
         return files.firstOrNull { it.kind == "update" && it.fileName == update.fileName }
             ?: error("Release manifest does not list update file `${update.fileName}`.")
     }
+
+    fun firstInstallFile(): SignalSlingerReleaseFile {
+        val fileName = firstInstall?.fileName ?: error("Release manifest does not include workshop first-install metadata.")
+        return files.firstOrNull { it.kind == "first-install" && it.fileName == fileName }
+            ?: error("Release manifest does not list first-install file `$fileName`.")
+    }
+
+    fun setupHelperFile(): SignalSlingerReleaseFile {
+        val fileName = workshopSetup?.setupHelperFileName ?: error("Release manifest does not include workshop setup metadata.")
+        return files.firstOrNull { it.kind == "setup-helper" && it.fileName == fileName }
+            ?: error("Release manifest does not list setup-helper file `$fileName`.")
+    }
+
+    fun setupLauncherFile(): SignalSlingerReleaseFile {
+        val fileName = workshopSetup?.setupLauncherFileName ?: error("Release manifest does not include workshop setup launcher metadata.")
+        return files.firstOrNull { it.kind == "workshop-setup-launcher" && it.fileName == fileName }
+            ?: error("Release manifest does not list workshop setup launcher `$fileName`.")
+    }
+
+    fun workshopSetupToolFiles(): List<SignalSlingerReleaseFile> {
+        return files.filter { it.kind == "workshop-setup-tool" }
+    }
 }
 
 data class SignalSlingerUpdateImage(
     val fileName: String,
     val startAddress: Int,
+    val bytesInImage: Int,
+)
+
+data class SignalSlingerFirstInstallImage(
+    val fileName: String,
     val bytesInImage: Int,
 )
 
@@ -41,6 +70,16 @@ data class SignalSlingerUpdateSettings(
     val bootloaderVersion: String,
     val appStartAddress: Int,
     val flashBytes: Int,
+)
+
+data class SignalSlingerWorkshopSetup(
+    val setupHelperFileName: String,
+    val setupLauncherFileName: String?,
+    val provisioningScriptFileName: String?,
+    val serialValidationScriptFileName: String?,
+    val bootSectionPages: Int,
+    val fuseBootSize: String,
+    val fuseCodeSize: String,
 )
 
 data class SignalSlingerReleaseFile(
@@ -263,7 +302,9 @@ object SignalSlingerFirmwareUpdate {
             "Unsupported SignalSlinger release manifest format `$format`."
         }
         val update = root.requiredObject("update")
+        val firstInstall = root.optionalObject("firstInstall")
         val serialSlinger = root.requiredObject("serialSlinger")
+        val workshopSetup = root.optionalObject("workshopSetup")
         val files = root.requiredArray("files").map { item ->
             val file = item.asObject()
             SignalSlingerReleaseFile(
@@ -284,6 +325,12 @@ object SignalSlingerFirmwareUpdate {
                 startAddress = parseIntLiteral(update.requiredString("startAddress")),
                 bytesInImage = update.requiredInt("bytesInImage"),
             ),
+            firstInstall = firstInstall?.let {
+                SignalSlingerFirstInstallImage(
+                    fileName = it.requiredString("fileName"),
+                    bytesInImage = it.requiredInt("bytesInImage"),
+                )
+            },
             serialSlinger = SignalSlingerUpdateSettings(
                 appBaud = serialSlinger.requiredInt("appBaud"),
                 updateBaud = serialSlinger.requiredInt("updateBaud"),
@@ -296,6 +343,17 @@ object SignalSlingerFirmwareUpdate {
                 appStartAddress = parseIntLiteral(serialSlinger.requiredString("appStartAddress")),
                 flashBytes = serialSlinger.requiredInt("flashBytes"),
             ),
+            workshopSetup = workshopSetup?.let {
+                SignalSlingerWorkshopSetup(
+                    setupHelperFileName = it.requiredString("setupHelperFileName"),
+                    setupLauncherFileName = it.optionalString("setupLauncherFileName"),
+                    provisioningScriptFileName = it.optionalString("provisioningScriptFileName"),
+                    serialValidationScriptFileName = it.optionalString("serialValidationScriptFileName"),
+                    bootSectionPages = it.requiredInt("bootSectionPages"),
+                    fuseBootSize = it.requiredString("fuseBootSize"),
+                    fuseCodeSize = it.requiredString("fuseCodeSize"),
+                )
+            },
             files = files,
         )
     }
@@ -929,6 +987,8 @@ object SignalSlingerFirmwareUpdate {
     private fun Map<String, JsonValue>.optionalInt(key: String): Int? = this[key]?.asInt()
 
     private fun Map<String, JsonValue>.requiredObject(key: String): Map<String, JsonValue> = required(key).asObject()
+
+    private fun Map<String, JsonValue>.optionalObject(key: String): Map<String, JsonValue>? = this[key]?.asObject()
 
     private fun Map<String, JsonValue>.requiredArray(key: String): List<JsonValue> = required(key).asArray()
 

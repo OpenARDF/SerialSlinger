@@ -213,6 +213,24 @@ class SignalSlingerReleaseCacheTest {
         }
     }
 
+    @Test
+    fun importsLocalReleasePackageIntoResidentCache() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        val packageFile = Files.createTempFile("signalslinger-release-package", ".zip").toFile()
+        try {
+            packageFile.writeBytes(releaseZip(version = "2.0.2", board = "HW-3.5"))
+
+            val resident = SignalSlingerReleaseCache(root).importReleasePackage(packageFile)
+
+            assertEquals("2.0.2", resident.release.version)
+            assertEquals("HW-3.5", resident.release.board)
+            assertTrue(root.resolve("HW-3.5/2.0.2/SignalSlinger-Release-Info-v2.0.2-HW-3.5.json").isFile)
+        } finally {
+            packageFile.delete()
+            root.deleteRecursively()
+        }
+    }
+
     private fun manifest(
         version: String,
         board: String,

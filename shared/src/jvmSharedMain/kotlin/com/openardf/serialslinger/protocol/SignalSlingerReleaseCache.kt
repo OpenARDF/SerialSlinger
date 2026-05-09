@@ -133,6 +133,43 @@ class SignalSlingerReleaseCache(
         )
     }
 
+    fun importReleasePackage(packageFile: File): SignalSlingerResidentRelease {
+        require(packageFile.isFile) {
+            "SignalSlinger release package `${packageFile.path}` was not found."
+        }
+        require(packageFile.extension.equals("zip", ignoreCase = true)) {
+            "SignalSlinger release package must be a ZIP file."
+        }
+        rootDirectory.parentFile?.mkdirs()
+        val stagingDir = Files.createTempDirectory(rootDirectory.toPath().parent ?: rootDirectory.toPath(), "serialslinger-import-")
+        try {
+            extractZipSafely(packageFile.readBytes(), stagingDir.toFile())
+            val manifestFile = findReleaseManifest(stagingDir.toFile())
+                ?: error("SignalSlinger package did not contain release info.")
+            val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(manifestFile.readText())
+            val boardDir = rootDirectory.resolve(release.board)
+            boardDir.mkdirs()
+            val targetDir = boardDir.resolve(release.version)
+            if (targetDir.exists()) {
+                targetDir.deleteRecursively()
+            }
+            if (!stagingDir.toFile().renameTo(targetDir)) {
+                targetDir.mkdirs()
+                stagingDir.toFile().copyRecursively(targetDir, overwrite = true)
+                stagingDir.toFile().deleteRecursively()
+            }
+            return SignalSlingerResidentRelease(
+                manifestFile = requireNotNull(findReleaseManifest(targetDir)) {
+                    "Imported SignalSlinger package did not contain release info."
+                },
+                release = release,
+            )
+        } catch (exception: Exception) {
+            stagingDir.toFile().deleteRecursively()
+            throw exception
+        }
+    }
+
     fun availableResidentBoards(): List<String> {
         if (!rootDirectory.isDirectory) {
             return emptyList()

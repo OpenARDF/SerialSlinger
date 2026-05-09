@@ -45,6 +45,26 @@ class SignalSlingerFirmwareUpdateTest {
     }
 
     @Test
+    fun parsesWorkshopSetupManifestFields() {
+        val manifest = SignalSlingerFirmwareUpdate.parseReleaseInfo(
+            sampleWorkshopManifest(),
+        )
+
+        assertEquals("SignalSlinger-First-Install-v2.0.2-HW-3.5.hex", manifest.firstInstall?.fileName)
+        assertEquals("SignalSlinger-Setup-Helper-v2.0.2-HW-3.5-BL0.12.hex", manifest.workshopSetup?.setupHelperFileName)
+        assertEquals("Prepare-SignalSlinger-Updates-v2.0.2-HW-3.5.ps1", manifest.workshopSetup?.setupLauncherFileName)
+        assertEquals("provision-bootloader.ps1", manifest.workshopSetup?.provisioningScriptFileName)
+        assertEquals("test-bootloader-serial.ps1", manifest.workshopSetup?.serialValidationScriptFileName)
+        assertEquals(16, manifest.workshopSetup?.bootSectionPages)
+        assertEquals("0x10", manifest.workshopSetup?.fuseBootSize)
+        assertEquals("0x00", manifest.workshopSetup?.fuseCodeSize)
+        assertEquals("SignalSlinger-First-Install-v2.0.2-HW-3.5.hex", manifest.firstInstallFile().fileName)
+        assertEquals("SignalSlinger-Setup-Helper-v2.0.2-HW-3.5-BL0.12.hex", manifest.setupHelperFile().fileName)
+        assertEquals("Prepare-SignalSlinger-Updates-v2.0.2-HW-3.5.ps1", manifest.setupLauncherFile().fileName)
+        assertEquals(2, manifest.workshopSetupToolFiles().size)
+    }
+
+    @Test
     fun gatesBootloaderUpdateSupportAtFirmwareTwoDotZeroDotZero() {
         assertEquals(false, SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(null))
         assertEquals(false, SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(""))
@@ -629,6 +649,79 @@ class SignalSlingerFirmwareUpdateTest {
 
     private fun sha256ForSampleHex(): String {
         return "1d9878e560beae019c8f407190e576b5c61c7ad9ab2a55a38ee5f1d97e1bfef6"
+    }
+
+    private fun sampleWorkshopManifest(): String {
+        return """
+            {
+              "format": "signalslinger-release-info-v1",
+              "product": "SignalSlinger",
+              "version": "2.0.2",
+              "board": "HW-3.5",
+              "update": {
+                "fileName": "SignalSlinger-Update-v2.0.2-HW-3.5.hex",
+                "startAddress": "0x2000",
+                "bytesInImage": 90226
+              },
+              "firstInstall": {
+                "fileName": "SignalSlinger-First-Install-v2.0.2-HW-3.5.hex",
+                "bytesInImage": 92904
+              },
+              "serialSlinger": {
+                "appBaud": 9600,
+                "updateBaud": 115200,
+                "appInfoCommand": "INF",
+                "appUpdateCommand": "UPD",
+                "bootloaderEntryCommand": "U",
+                "pageBytes": 512,
+                "protocolVersion": 1,
+                "bootloaderVersion": "BL0.12",
+                "appStartAddress": "0x2000",
+                "flashBytes": 131072
+              },
+              "workshopSetup": {
+                "setupHelperFileName": "SignalSlinger-Setup-Helper-v2.0.2-HW-3.5-BL0.12.hex",
+                "setupLauncherFileName": "Prepare-SignalSlinger-Updates-v2.0.2-HW-3.5.ps1",
+                "provisioningScriptFileName": "provision-bootloader.ps1",
+                "serialValidationScriptFileName": "test-bootloader-serial.ps1",
+                "bootSectionPages": 16,
+                "fuseBootSize": "0x10",
+                "fuseCodeSize": "0x00"
+              },
+              "files": [
+                {
+                  "fileName": "SignalSlinger-Update-v2.0.2-HW-3.5.hex",
+                  "kind": "update",
+                  "sha256": "0000000000000000000000000000000000000000000000000000000000000001"
+                },
+                {
+                  "fileName": "SignalSlinger-First-Install-v2.0.2-HW-3.5.hex",
+                  "kind": "first-install",
+                  "sha256": "0000000000000000000000000000000000000000000000000000000000000002"
+                },
+                {
+                  "fileName": "SignalSlinger-Setup-Helper-v2.0.2-HW-3.5-BL0.12.hex",
+                  "kind": "setup-helper",
+                  "sha256": "0000000000000000000000000000000000000000000000000000000000000003"
+                },
+                {
+                  "fileName": "Prepare-SignalSlinger-Updates-v2.0.2-HW-3.5.ps1",
+                  "kind": "workshop-setup-launcher",
+                  "sha256": "0000000000000000000000000000000000000000000000000000000000000004"
+                },
+                {
+                  "fileName": "provision-bootloader.ps1",
+                  "kind": "workshop-setup-tool",
+                  "sha256": "0000000000000000000000000000000000000000000000000000000000000005"
+                },
+                {
+                  "fileName": "test-bootloader-serial.ps1",
+                  "kind": "workshop-setup-tool",
+                  "sha256": "0000000000000000000000000000000000000000000000000000000000000006"
+                }
+              ]
+            }
+        """.trimIndent()
     }
 
     private fun intelHex(vararg chunks: Pair<Int, ByteArray>): String {

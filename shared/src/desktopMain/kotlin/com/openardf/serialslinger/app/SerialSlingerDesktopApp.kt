@@ -32,6 +32,7 @@ import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
 import com.openardf.serialslinger.protocol.SignalSlingerAlreadyCurrentException
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
+import com.openardf.serialslinger.protocol.SignalSlingerReleaseInfo
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceSessionController
@@ -846,6 +847,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     add(
                         JMenuItem("Update SignalSlinger...").apply {
                             addActionListener { chooseSignalSlingerUpdatePackage() }
+                        },
+                    )
+                    add(
+                        JMenuItem("Prepare SignalSlinger for Updates...").apply {
+                            addActionListener { chooseSignalSlingerWorkshopSetupPackage() }
                         },
                     )
                     automaticFirmwareUpdatesMenuItem = JCheckBoxMenuItem(
@@ -5110,6 +5116,346 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             0, 1 -> options[choice]
             else -> null
         }
+    }
+
+    private fun chooseSignalSlingerWorkshopSetupPackage() {
+        val board = chooseSignalSlingerWorkshopSetupBoard() ?: return
+        val port = chooseSignalSlingerWorkshopSetupPort() ?: return
+        val sourceChoice = JOptionPane.showOptionDialog(
+            this,
+            "Choose the setup package for physical hardware $board.",
+            "Prepare SignalSlinger for Updates",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            arrayOf("Choose Local Package", "Download Latest", "Download Version", "Cancel"),
+            "Download Latest",
+        )
+        if (sourceChoice == 3 || sourceChoice == JOptionPane.CLOSED_OPTION) {
+            return
+        }
+
+        when (sourceChoice) {
+            1 -> prepareSignalSlingerUpdatesFromLatestGitHubRelease(board, port)
+            2 -> {
+                val version = chooseSignalSlingerGitHubReleaseVersion() ?: return
+                prepareSignalSlingerUpdatesFromGitHubReleaseVersion(board, port, version)
+            }
+            else -> {
+                val chooser = JFileChooser().apply {
+                    dialogTitle = "Prepare SignalSlinger for Updates"
+                    fileSelectionMode = JFileChooser.FILES_ONLY
+                    fileFilter = FileNameExtensionFilter("SignalSlinger release package (*.zip, *.json)", "zip", "json")
+                }
+                if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+                    return
+                }
+                val selectedFile = chooser.selectedFile
+                if (selectedFile.extension.equals("zip", ignoreCase = true)) {
+                    prepareSignalSlingerUpdatesFromPackageFile(board, port, selectedFile)
+                } else {
+                    prepareSignalSlingerUpdatesFromReleaseInfo(board, port, selectedFile)
+                }
+            }
+        }
+    }
+
+    private fun chooseSignalSlingerWorkshopSetupBoard(): String? {
+        val options = arrayOf("HW-3.5", "HW-3.4", "Cancel")
+        val choice = JOptionPane.showOptionDialog(
+            this,
+            "Select the physical SignalSlinger hardware variant.\n\nUse the marking on the board. Installed firmware may report the wrong variant.",
+            "Prepare SignalSlinger for Updates",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+            null,
+            options,
+            options.first(),
+        )
+        return when (choice) {
+            0, 1 -> options[choice]
+            else -> null
+        }
+    }
+
+    private fun chooseSignalSlingerWorkshopSetupPort(): String? {
+        val defaultPort = currentConnectedPortPath ?: selectedProbe()?.portInfo?.systemPortPath ?: ""
+        val input = JOptionPane.showInputDialog(
+            this,
+            "Enter the programmer or serial port to pass to the setup tool.\n\nExamples: COM7 or /dev/cu.usbserial-XXXX",
+            defaultPort,
+        ) ?: return null
+        return input.trim().takeIf(String::isNotBlank)
+    }
+
+    private fun prepareSignalSlingerUpdatesFromLatestGitHubRelease(
+        board: String,
+        port: String,
+    ) {
+        runInBackground(
+            status = "Preparing SignalSlinger setup...",
+            showBusyDialog = true,
+            busyDialogTitle = "Preparing SignalSlinger",
+            busyDialogPrimaryMessage = "Preparing SignalSlinger for updates...",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                val selection = SignalSlingerReleaseCache(desktopSignalSlingerReleaseCacheDirectory()).selectLatestForUpdate(
+                    hardwareBuild = board.substringAfter("HW-"),
+                    currentFirmwareVersion = null,
+                    overrideBoard = board,
+                )
+                logEntries += DesktopLogEntry(selection.message, DesktopLogCategory.APP)
+                selection.downloadFailure?.let { failure ->
+                    logEntries += DesktopLogEntry("GitHub update check failed: $failure", DesktopLogCategory.APP)
+                }
+                performSignalSlingerWorkshopSetup(board, port, selection.manifestFile, logEntries)
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Prepare SignalSlinger", logEntries)
+                }
+                throw exception
+            }
+        }
+    }
+
+    private fun prepareSignalSlingerUpdatesFromGitHubReleaseVersion(
+        board: String,
+        port: String,
+        requestedVersion: String,
+    ) {
+        runInBackground(
+            status = "Preparing SignalSlinger setup...",
+            showBusyDialog = true,
+            busyDialogTitle = "Preparing SignalSlinger",
+            busyDialogPrimaryMessage = "Preparing SignalSlinger for updates...",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                val selection = SignalSlingerReleaseCache(desktopSignalSlingerReleaseCacheDirectory()).selectGitHubReleaseForUpdate(
+                    hardwareBuild = board.substringAfter("HW-"),
+                    releaseVersion = requestedVersion,
+                    overrideBoard = board,
+                )
+                logEntries += DesktopLogEntry(selection.message, DesktopLogCategory.APP)
+                performSignalSlingerWorkshopSetup(board, port, selection.manifestFile, logEntries)
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Prepare SignalSlinger", logEntries)
+                }
+                throw exception
+            }
+        }
+    }
+
+    private fun prepareSignalSlingerUpdatesFromPackageFile(
+        board: String,
+        port: String,
+        packageFile: File,
+    ) {
+        runInBackground(
+            status = "Preparing SignalSlinger setup...",
+            showBusyDialog = true,
+            busyDialogTitle = "Preparing SignalSlinger",
+            busyDialogPrimaryMessage = "Preparing SignalSlinger for updates...",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                val selection = SignalSlingerReleaseCache(desktopSignalSlingerReleaseCacheDirectory()).importReleasePackage(packageFile)
+                logEntries += DesktopLogEntry("Imported SignalSlinger ${selection.release.version} setup package for ${selection.release.board}.", DesktopLogCategory.APP)
+                performSignalSlingerWorkshopSetup(board, port, selection.manifestFile, logEntries)
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Prepare SignalSlinger", logEntries)
+                }
+                throw exception
+            }
+        }
+    }
+
+    private fun prepareSignalSlingerUpdatesFromReleaseInfo(
+        board: String,
+        port: String,
+        manifestFile: File,
+    ) {
+        runInBackground(
+            status = "Preparing SignalSlinger setup...",
+            showBusyDialog = true,
+            busyDialogTitle = "Preparing SignalSlinger",
+            busyDialogPrimaryMessage = "Preparing SignalSlinger for updates...",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                performSignalSlingerWorkshopSetup(board, port, manifestFile, logEntries)
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Prepare SignalSlinger", logEntries)
+                }
+                throw exception
+            }
+        }
+    }
+
+    private fun performSignalSlingerWorkshopSetup(
+        board: String,
+        port: String,
+        manifestFile: File,
+        logEntries: MutableList<DesktopLogEntry>,
+    ) {
+        fun log(message: String, category: DesktopLogCategory = DesktopLogCategory.APP) {
+            logEntries += DesktopLogEntry(message, category)
+        }
+
+        setBusyProgress(5, 100, "Checking file")
+        log("Preparing SignalSlinger workshop setup from ${manifestFile.name}.")
+        val manifest = SignalSlingerFirmwareUpdate.parseReleaseInfo(Files.readString(manifestFile.toPath()))
+        require(manifest.product == "SignalSlinger") {
+            "Setup package product `${manifest.product}` is not supported."
+        }
+        require(SignalSlingerFirmwareUpdate.hardwareMatchesBoard(board.substringAfter("HW-"), manifest.board)) {
+            "Setup package ${manifest.board} does not match selected hardware $board."
+        }
+        val workshopSetup = manifest.workshopSetup ?: error("Release package does not include workshop setup metadata.")
+        val launcherFile = manifest.setupLauncherFile()
+        val packageDir = manifestFile.parentFile
+        verifyWorkshopSetupFiles(manifest, packageDir, logEntries)
+        val launcher = packageDir.resolve(launcherFile.fileName)
+        require(launcher.isFile) {
+            "Workshop setup launcher `${launcherFile.fileName}` was not found next to `${manifestFile.name}`."
+        }
+        val powershell = findPowerShellExecutable()
+        log("Using PowerShell executable: $powershell")
+        log("Setup package: ${manifest.product} ${manifest.version} ${manifest.board}")
+        log("Workshop setup: boot section ${workshopSetup.bootSectionPages} pages, BOOTSIZE=${workshopSetup.fuseBootSize}, CODESIZE=${workshopSetup.fuseCodeSize}")
+
+        setBusyProgress(20, 100, "Checking tools")
+        runWorkshopSetupProcess(
+            command = listOf(
+                powershell,
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                launcher.absolutePath,
+                "-CheckPrereqs",
+                "-SkipSerialValidation",
+            ),
+            workingDirectory = packageDir,
+            logEntries = logEntries,
+            stepName = "Checking tools",
+        )
+
+        require(confirmSignalSlingerFuseWrite(manifest, port)) {
+            "Workshop setup cancelled before fuse write."
+        }
+
+        setBusyProgress(45, 100, "Programming")
+        runWorkshopSetupProcess(
+            command = listOf(
+                powershell,
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                launcher.absolutePath,
+                "-Port",
+                port,
+                "-ProgramFuses",
+                "-ConfirmFuseWrite",
+            ),
+            workingDirectory = packageDir,
+            logEntries = logEntries,
+            stepName = "Programming",
+        )
+
+        log("SignalSlinger workshop setup completed.")
+        SwingUtilities.invokeLater {
+            appendLog("Prepare SignalSlinger", logEntries)
+            clearFormForUnread()
+            setStatus("SignalSlinger setup completed.")
+            JOptionPane.showMessageDialog(this, "SignalSlinger setup completed.")
+        }
+    }
+
+    private fun verifyWorkshopSetupFiles(
+        manifest: SignalSlingerReleaseInfo,
+        packageDir: File,
+        logEntries: MutableList<DesktopLogEntry>,
+    ) {
+        val filesToVerify = buildList {
+            add(manifest.updateFile())
+            add(manifest.firstInstallFile())
+            add(manifest.setupHelperFile())
+            add(manifest.setupLauncherFile())
+            addAll(manifest.workshopSetupToolFiles())
+        }.distinctBy { it.fileName }
+        filesToVerify.forEach { releaseFile ->
+            val file = packageDir.resolve(releaseFile.fileName)
+            require(file.isFile) {
+                "Release package is missing `${releaseFile.fileName}`."
+            }
+            SignalSlingerFirmwareUpdate.verifyReleaseFileHash(releaseFile, Files.readAllBytes(file.toPath()))
+            logEntries += DesktopLogEntry("Checked ${releaseFile.fileName}.", DesktopLogCategory.APP)
+        }
+    }
+
+    private fun findPowerShellExecutable(): String {
+        return listOf("pwsh", "powershell").firstOrNull { command ->
+            runCatching {
+                val process = ProcessBuilder(command, "-NoProfile", "-Command", "\$PSVersionTable.PSVersion.ToString()")
+                    .redirectErrorStream(true)
+                    .start()
+                process.inputStream.bufferedReader().use { it.readText() }
+                process.waitFor() == 0
+            }.getOrDefault(false)
+        } ?: error("PowerShell was not found. Install PowerShell 7 (`pwsh`) or Windows PowerShell, then try again.")
+    }
+
+    private fun runWorkshopSetupProcess(
+        command: List<String>,
+        workingDirectory: File,
+        logEntries: MutableList<DesktopLogEntry>,
+        stepName: String,
+    ) {
+        logEntries += DesktopLogEntry("$stepName: ${command.joinToString(" ")}", DesktopLogCategory.APP)
+        val process = ProcessBuilder(command)
+            .directory(workingDirectory)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        val exitCode = process.waitFor()
+        output.lineSequence()
+            .filter { it.isNotBlank() }
+            .forEach { line -> logEntries += DesktopLogEntry(line, DesktopLogCategory.APP) }
+        require(exitCode == 0) {
+            "$stepName failed with exit code $exitCode."
+        }
+    }
+
+    private fun confirmSignalSlingerFuseWrite(
+        manifest: SignalSlingerReleaseInfo,
+        port: String,
+    ): Boolean {
+        val setup = manifest.workshopSetup ?: return false
+        val confirmed = AtomicBoolean(false)
+        SwingUtilities.invokeAndWait {
+            hideBusyDialog()
+            val choice = JOptionPane.showConfirmDialog(
+                this,
+                "This workshop setup will program SignalSlinger update support for ${manifest.board}.\n\n" +
+                    "It will run the package setup tool on port `$port` and explicitly allow fuse writes.\n\n" +
+                    "Expected fuse settings:\n" +
+                    "BOOTSIZE=${setup.fuseBootSize}\n" +
+                    "CODESIZE=${setup.fuseCodeSize}\n\n" +
+                    "Only continue if an appropriate programmer is connected and the selected board is correct.",
+                "Confirm Fuse Write",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+            )
+            confirmed.set(choice == JOptionPane.YES_OPTION)
+            if (confirmed.get() && backgroundWorkInProgress) {
+                scheduleBusyDialog("Programming SignalSlinger setup...")
+            }
+        }
+        return confirmed.get()
     }
 
     private fun confirmLoadedFirmwareSupportsUpdate(): Boolean {
