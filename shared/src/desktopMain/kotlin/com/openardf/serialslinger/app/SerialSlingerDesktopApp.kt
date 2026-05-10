@@ -5951,6 +5951,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val process = ProcessBuilder(command)
             .directory(workingDirectory)
             .redirectErrorStream(true)
+            .apply { augmentWorkshopToolEnvironment(environment()) }
             .start()
         var failureReason: String? = null
         process.inputStream.bufferedReader().useLines { lines ->
@@ -5979,6 +5980,44 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun augmentWorkshopToolEnvironment(environment: MutableMap<String, String>) {
+        if (!System.getProperty("os.name").orEmpty().contains("Windows", ignoreCase = true)) {
+            return
+        }
+        val pathKey = environment.keys.firstOrNull { it.equals("Path", ignoreCase = true) } ?: "Path"
+        val existingEntries = environment[pathKey]
+            .orEmpty()
+            .split(File.pathSeparatorChar)
+            .map(String::trim)
+            .filter(String::isNotBlank)
+        val augmentedEntries = buildList {
+            addAll(existingEntries)
+            addAll(windowsPythonScriptsDirectories())
+        }.distinctBy { it.lowercase() }
+        environment[pathKey] = augmentedEntries.joinToString(File.pathSeparator)
+    }
+
+    private fun windowsPythonScriptsDirectories(): List<String> {
+        val roots = listOfNotNull(
+            System.getenv("APPDATA")?.let { File(it, "Python") },
+            System.getenv("LOCALAPPDATA")?.let { File(it, "Python") },
+            System.getenv("LOCALAPPDATA")?.let { File(it, "Programs\\Python") },
+        )
+        return roots
+            .asSequence()
+            .filter(File::isDirectory)
+            .flatMap { root ->
+                root.listFiles()
+                    .orEmpty()
+                    .asSequence()
+                    .map { File(it, "Scripts") }
+                    .filter { it.isDirectory }
+                    .map { it.absolutePath }
+            }
+            .distinctBy { it.lowercase() }
+            .toList()
+    }
+
     private data class WorkshopSetupProgress(
         val completed: Int,
         val label: String,
@@ -6005,16 +6044,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             trimmed.contains("No module named 'usb'", ignoreCase = true) ||
             trimmed.contains("No module named usb", ignoreCase = true)
         ) {
-            return "The pymcuprog Python environment is missing USB support.\n\nRecommended install path:\npython -m pip install pyusb\n\nIf you installed pymcuprog with pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx inject pymcuprog pyusb\n\nIf you had to add or change command-line tools, close and reopen SerialSlinger before trying Install Bootloader again."
+            return "The pymcuprog Python environment is missing USB support.\n\nRun:\npython -m pip install pyusb\n\nIf SerialSlinger still cannot use pymcuprog after that, close and reopen the app and make sure your Python Scripts folder is on PATH."
         }
         if (trimmed.contains("pymcuprog command not found", ignoreCase = true)) {
-            return "The pymcuprog programmer tool was not found.\n\nRecommended install path:\npython -m pip install pymcuprog pyusb\n\nIf you prefer pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx install pymcuprog\npipx inject pymcuprog pyusb\n\nAfter installing, close and reopen SerialSlinger before trying Install Bootloader again so it picks up the new command-line tools."
+            return "The pymcuprog programmer tool was not found.\n\nRun:\npython -m pip install pymcuprog pyusb\n\nIf SerialSlinger still cannot find pymcuprog after that, close and reopen the app.\n\nIf it still is not found, add your Python Scripts folder to PATH, then reopen SerialSlinger.\n\nCommon Windows locations:\n%APPDATA%\\Python\\Python3xx\\Scripts\n%LOCALAPPDATA%\\Python\\pythoncore-3.xx*\\Scripts\n%LOCALAPPDATA%\\Programs\\Python\\Python3xx\\Scripts"
         }
         if (trimmed.contains("No programming backend found", ignoreCase = true)) {
-            return "No supported programming tool was found.\n\nOn macOS or Linux, install Python, pymcuprog, and pyusb.\nOn Windows, install Microchip Studio or install pymcuprog and PowerShell 7.\n\nIf you install new command-line tools while SerialSlinger is already open, close and reopen the app before trying again."
+            return "No supported programming tool was found.\n\nOn macOS or Linux, install Python, pymcuprog, and pyusb.\nOn Windows, install Microchip Studio or run:\npython -m pip install pymcuprog pyusb\n\nIf you install new command-line tools while SerialSlinger is already open, close and reopen the app before trying again."
         }
         if (trimmed.startsWith("- pymcuprog:", ignoreCase = true)) {
-            return "The pymcuprog programmer tool is required for this setup path.\n\nRecommended install path:\npython -m pip install pymcuprog pyusb\n\nIf you prefer pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx install pymcuprog\npipx inject pymcuprog pyusb\n\nAfter installing, close and reopen SerialSlinger before trying Install Bootloader again so it picks up the new command-line tools."
+            return "The pymcuprog programmer tool is required for this setup path.\n\nRun:\npython -m pip install pymcuprog pyusb\n\nIf SerialSlinger still cannot find pymcuprog after that, close and reopen the app.\n\nIf it still is not found, add your Python Scripts folder to PATH, then reopen SerialSlinger.\n\nCommon Windows locations:\n%APPDATA%\\Python\\Python3xx\\Scripts\n%LOCALAPPDATA%\\Python\\pythoncore-3.xx*\\Scripts\n%LOCALAPPDATA%\\Programs\\Python\\Python3xx\\Scripts"
         }
         if (trimmed.startsWith("- Python:", ignoreCase = true)) {
             return "Python is required before SerialSlinger can install the bootloader with pymcuprog.\n\nInstall Python 3, then install pymcuprog and pyusb.\n\nIf SerialSlinger is already open after the install finishes, close and reopen it before trying Install Bootloader again."
@@ -6087,9 +6126,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
             }
             "missing_pymcuprog" ->
-                "The pymcuprog programmer tool was not found.\n\nInstall Python and pymcuprog, then try again:\npython -m pip install pymcuprog pyusb\n\nAfter installing, close and reopen SerialSlinger before trying Install Bootloader again so it picks up the new command-line tools."
+                "The pymcuprog programmer tool was not found.\n\nRun:\npython -m pip install pymcuprog pyusb\n\nIf SerialSlinger still cannot find pymcuprog after that, close and reopen the app.\n\nIf it still is not found, add your Python Scripts folder to PATH, then reopen SerialSlinger.\n\nCommon Windows locations:\n%APPDATA%\\Python\\Python3xx\\Scripts\n%LOCALAPPDATA%\\Python\\pythoncore-3.xx*\\Scripts\n%LOCALAPPDATA%\\Programs\\Python\\Python3xx\\Scripts"
             "missing_pyusb" ->
-                "The pymcuprog Python environment is missing USB support.\n\nRecommended install path:\npython -m pip install pyusb\n\nIf you installed pymcuprog with pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx inject pymcuprog pyusb\n\nIf you had to add or change command-line tools, close and reopen SerialSlinger before trying Install Bootloader again."
+                "The pymcuprog Python environment is missing USB support.\n\nRun:\npython -m pip install pyusb\n\nIf SerialSlinger still cannot use pymcuprog after that, close and reopen the app and make sure your Python Scripts folder is on PATH."
             "usb_access_denied" ->
                 "The programmer was found but could not be opened over USB. Unplug/replug the programmer and check USB permissions, then try again."
             "target_not_detected" ->
