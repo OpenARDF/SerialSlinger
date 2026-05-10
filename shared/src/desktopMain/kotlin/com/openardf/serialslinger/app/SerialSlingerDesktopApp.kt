@@ -5534,7 +5534,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
 
         setBusyProgress(32, 100, "Searching for attached programmer...")
-        runWorkshopSetupProcess(
+        runRecoverableWorkshopSetupProcess(
             command = buildList {
                 addAll(
                     listOf(
@@ -5556,6 +5556,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             workingDirectory = packageDir,
             logEntries = logEntries,
             stepName = "Checking programmer",
+            retryProgressCompleted = 32,
+            retryProgressLabel = "Searching for attached programmer...",
         )
 
         require(confirmSignalSlingerFuseWrite(manifest, port)) {
@@ -5563,7 +5565,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         setBusyProgress(45, 100, "Programming. This may take several minutes.")
-        runWorkshopSetupProcess(
+        runRecoverableWorkshopSetupProcess(
             command = buildList {
                 addAll(
                     listOf(
@@ -5589,6 +5591,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             workingDirectory = packageDir,
             logEntries = logEntries,
             stepName = "Programming",
+            retryProgressCompleted = 45,
+            retryProgressLabel = "Programming. This may take several minutes.",
         )
 
         val verification = if (serialVerification) {
@@ -5959,7 +5963,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 val line = stripTerminalFormatting(rawLine).trim()
                 if (line.isNotBlank()) {
                     logEntries += DesktopLogEntry(line, DesktopLogCategory.APP)
-                    failureReason = workshopSetupFailureReason(line) ?: failureReason
+                    failureReason = choosePreferredWorkshopSetupFailureReason(failureReason, workshopSetupFailureReason(line))
                     userFacingWorkshopSetupProgress(line, stepName)?.let { progress ->
                         setBusyProgress(progress.completed, 100, progress.label)
                     }
@@ -5967,9 +5971,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
         }
         val exitCode = process.waitFor()
-        require(exitCode == 0) {
+        if (exitCode != 0) {
             val friendlyReason = failureReason ?: defaultWorkshopSetupFailureReason(stepName)
-            buildString {
+            val message = buildString {
                 append("$stepName failed.")
                 friendlyReason?.let { reason ->
                     append("\n\n")
@@ -5977,6 +5981,123 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
                 append("\n\nSee the session log for the full tool output.")
             }
+            throw WorkshopSetupProcessException(
+                stepName = stepName,
+                userMessage = message,
+                recoverable = friendlyReason?.let(::isRecoverableWorkshopSetupFailureReason) == true,
+            )
+        }
+    }
+
+    private class WorkshopSetupProcessException(
+        val stepName: String,
+        val userMessage: String,
+        val recoverable: Boolean,
+    ) : IllegalStateException(userMessage)
+
+    private fun runRecoverableWorkshopSetupProcess(
+        command: List<String>,
+        workingDirectory: File,
+        logEntries: MutableList<DesktopLogEntry>,
+        stepName: String,
+        retryProgressCompleted: Int,
+        retryProgressLabel: String,
+    ) {
+        var attempt = 1
+        while (true) {
+            try {
+                runWorkshopSetupProcess(command, workingDirectory, logEntries, stepName)
+                return
+            } catch (exception: WorkshopSetupProcessException) {
+                if (!exception.recoverable) {
+                    throw exception
+                }
+                logEntries += DesktopLogEntry(
+                    "$stepName stopped with a recoverable problem; waiting for user to continue or cancel.",
+                    DesktopLogCategory.APP,
+                )
+                if (!confirmRecoverableWorkshopSetupRetry(exception, attempt)) {
+                    throw IllegalStateException(
+                        "$stepName cancelled.\n\n${exception.userMessage}",
+                        exception,
+                    )
+                }
+                attempt += 1
+                logEntries += DesktopLogEntry("Retrying $stepName after user confirmation.", DesktopLogCategory.APP)
+                setBusyProgress(retryProgressCompleted, 100, retryProgressLabel)
+            }
+        }
+    }
+
+    private fun confirmRecoverableWorkshopSetupRetry(
+        exception: WorkshopSetupProcessException,
+        attempt: Int,
+    ): Boolean {
+        val shouldContinue = AtomicBoolean(false)
+        SwingUtilities.invokeAndWait {
+            hideBusyDialog()
+            val retryLabel = if (attempt == 1) {
+                "retry ${exception.stepName}"
+            } else {
+                "retry ${exception.stepName} again"
+            }
+            val choice = JOptionPane.showOptionDialog(
+                this,
+                "${exception.userMessage}\n\nFix the issue, then choose Continue to $retryLabel from this point. Choose Cancel to stop bootloader installation.",
+                "Install Bootloader on SignalSlinger",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                arrayOf("Continue", "Cancel"),
+                "Continue",
+            )
+            shouldContinue.set(choice == JOptionPane.YES_OPTION)
+            if (shouldContinue.get()) {
+                setStatus("Retrying ${exception.stepName.lowercase()}...")
+                scheduleBusyDialog("Retrying ${exception.stepName.lowercase()}...")
+            } else {
+                setStatus("Bootloader installation cancelled during ${exception.stepName.lowercase()}.")
+            }
+        }
+        return shouldContinue.get()
+    }
+
+    private fun isRecoverableWorkshopSetupFailureReason(reason: String): Boolean {
+        return reason.contains("No compatible Atmel-ICE/CMSIS-DAP programmer was found", ignoreCase = true) ||
+            reason.contains("No compatible programmer and target were detected.", ignoreCase = true) ||
+            reason.contains("could not be opened over USB", ignoreCase = true) ||
+            reason.contains("target did not respond", ignoreCase = true) ||
+            reason.contains("connection was lost while writing required fuse settings", ignoreCase = true) ||
+            reason.contains("could not read the device fuse settings through the programmer", ignoreCase = true) ||
+            reason.contains("Fuse verification failed", ignoreCase = true)
+    }
+
+    private fun choosePreferredWorkshopSetupFailureReason(
+        current: String?,
+        candidate: String?,
+    ): String? {
+        return when {
+            candidate == null -> current
+            current == null -> candidate
+            workshopSetupFailureReasonPriority(candidate) > workshopSetupFailureReasonPriority(current) -> candidate
+            else -> current
+        }
+    }
+
+    private fun workshopSetupFailureReasonPriority(reason: String): Int {
+        return when {
+            reason.contains("could not be opened over USB", ignoreCase = true) -> 120
+            reason.contains("connection was lost while writing required fuse settings", ignoreCase = true) -> 115
+            reason.contains("target did not respond", ignoreCase = true) -> 110
+            reason.contains("programmer tool was not found", ignoreCase = true) -> 105
+            reason.contains("missing USB support", ignoreCase = true) -> 105
+            reason.contains("PowerShell is required", ignoreCase = true) -> 105
+            reason.contains("could not read the device fuse settings", ignoreCase = true) -> 100
+            reason.contains("fuse verification failed", ignoreCase = true) -> 100
+            reason.contains("No compatible programmer and target were detected.", ignoreCase = true) -> 80
+            reason.contains("setup stopped during", ignoreCase = true) -> 30
+            reason.contains("failed with exit code", ignoreCase = true) -> 20
+            else -> 60
         }
     }
 
@@ -6056,31 +6177,31 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return "The pymcuprog programmer tool is required for this setup path.\n\nRun:\npython -m pip install pymcuprog pyusb\n\nIf SerialSlinger still cannot find pymcuprog after that, close and reopen the app.\n\nIf it still is not found, add your Python Scripts folder to PATH, then reopen SerialSlinger.\n\nCommon Windows locations:\n%APPDATA%\\Python\\Python3xx\\Scripts\n%LOCALAPPDATA%\\Python\\pythoncore-3.xx*\\Scripts\n%LOCALAPPDATA%\\Programs\\Python\\Python3xx\\Scripts"
         }
         if (trimmed.startsWith("- Python:", ignoreCase = true)) {
-            return "Python is required before SerialSlinger can install the bootloader with pymcuprog.\n\nInstall Python 3, then install pymcuprog and pyusb.\n\nIf SerialSlinger is already open after the install finishes, close and reopen it before trying Install Bootloader again."
+            return "Python is required before SerialSlinger can install the bootloader with pymcuprog.\n\nInstall Python 3 from python.org. During install, enable the option to add Python to PATH.\n\nAfter Python is installed, open PowerShell and run:\npython -m pip install pymcuprog pyusb\n\nThen close and reopen SerialSlinger before trying Install Bootloader again."
         }
         if (trimmed.startsWith("- atprogram:", ignoreCase = true)) {
-            return "Microchip Studio atprogram.exe was not found.\n\nInstall Microchip Studio 7 on Windows, or use PowerShell 7 with pymcuprog.\n\nIf SerialSlinger is already open after installing tools, close and reopen it before trying again."
+            return "Microchip Studio atprogram.exe was not found.\n\nInstall Microchip Studio 7 on Windows, or use PowerShell 7 with pymcuprog instead.\n\nFor the pymcuprog path, open PowerShell and run:\npython -m pip install pymcuprog pyusb\n\nIf SerialSlinger is already open after installing tools, close and reopen it before trying again."
         }
         if (trimmed.startsWith("- PowerShell:", ignoreCase = true)) {
-            return "PowerShell is required for the SignalSlinger setup scripts.\n\nInstall PowerShell 7, then close and reopen SerialSlinger before trying again."
+            return "PowerShell is required for the SignalSlinger setup scripts.\n\nInstall PowerShell 7 from Microsoft, then close and reopen SerialSlinger before trying again."
         }
         if (trimmed.contains("parameter name 'CheckProgrammer'", ignoreCase = true)) {
             return "The selected SignalSlinger setup package has out-of-date setup scripts. Choose Download Latest to refresh the saved package, then try again."
         }
         if (trimmed.contains("Atmel Studio atprogram.exe not found", ignoreCase = true)) {
-            return "The validation script tried to use Windows atprogram.exe, which is not available on this Mac."
+            return "The validation script tried to use Windows atprogram.exe, which is not available on this Mac.\n\nInstall PowerShell 7, Python 3, pymcuprog, and pyusb, then try Install Bootloader again:\npython -m pip install pymcuprog pyusb"
         }
         if (trimmed.contains("Bootloader serial validation failed", ignoreCase = true)) {
-            return "Bootloader serial validation failed after programming."
+            return "Bootloader serial validation failed after programming.\n\nDisconnect and reconnect the SignalSlinger serial cable, make sure the correct serial port is selected, then use Reload SignalSlinger Data. If the device does not respond, try Install Bootloader again with the programmer still connected."
         }
         if (trimmed.contains("Read fuses failed", ignoreCase = true)) {
-            return "SerialSlinger could not read the device fuse settings through the programmer."
+            return "SerialSlinger could not read the device fuse settings through the programmer.\n\nUnplug and reconnect the programmer, make sure the SignalSlinger is powered, check the UPDI connection, then try Install Bootloader again."
         }
         if (trimmed.contains("Fuse verification failed", ignoreCase = true)) {
-            return trimmed
+            return "$trimmed\n\nUnplug and reconnect the programmer, make sure the SignalSlinger is powered, check the UPDI connection, then try Install Bootloader again."
         }
         if (trimmed.contains("failed with exit code", ignoreCase = true)) {
-            return trimmed
+            return "$trimmed\n\nTry the operation again after checking the programmer connection, SignalSlinger power, and the selected serial port."
         }
         return null
     }
@@ -6109,6 +6230,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun stableWorkshopSetupFailureReason(tokens: Map<String, String>): String {
         return when (tokens["code"]) {
             "no_programmer" -> {
+                val step = tokens["step"].orEmpty()
+                if (step.startsWith("write_fuse_offset_", ignoreCase = true)) {
+                    return "The programmer connection was lost while writing required fuse settings.\n\nUnplug and reconnect the programmer, make sure the SignalSlinger stays powered, then try Install Bootloader again."
+                }
                 val supportedTools = formatSupportedProgrammerList(tokens["detail"])
                 buildString {
                     append("No compatible programmer and target were detected.")
@@ -6128,7 +6253,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "target_not_detected" ->
                 "The programmer was found, but the SignalSlinger target did not respond. Check target power and the UPDI connection, then try again."
             else ->
-                "SignalSlinger setup stopped during ${tokens["step"] ?: "setup"}. See the session log for details."
+                "SignalSlinger setup stopped during ${tokens["step"] ?: "setup"}.\n\nCheck the programmer connection, SignalSlinger power, and selected hardware/serial port, then try Install Bootloader again.\n\nSee the session log for details."
         }
     }
 
