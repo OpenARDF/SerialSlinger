@@ -21,6 +21,42 @@ class SignalSlingerProtocolCodecTest {
     }
 
     @Test
+    fun parsesBootloaderVersionReplyIntoDeviceInfoPatch() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("* Bootloader: BL0.13 protocol 1")
+
+        assertNotNull(update)
+        assertEquals("BL0.13", update.deviceInfoPatch?.bootloaderVersion)
+        assertEquals(1, update.deviceInfoPatch?.bootloaderProtocolVersion)
+    }
+
+    @Test
+    fun parsesAppInfoBootloaderReplyIntoDeviceInfoPatch() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("* INF bl=BL0.13 proto=1")
+
+        assertNotNull(update)
+        assertEquals("BL0.13", update.deviceInfoPatch?.bootloaderVersion)
+        assertEquals(1, update.deviceInfoPatch?.bootloaderProtocolVersion)
+    }
+
+    @Test
+    fun parsesAppInfoVersionReplyIntoDeviceInfoPatch() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200")
+
+        assertNotNull(update)
+        assertEquals("2.0.2", update.deviceInfoPatch?.softwareVersion)
+        assertEquals("3.5", update.deviceInfoPatch?.hardwareBuild)
+    }
+
+    @Test
+    fun treatsUnknownBootloaderVersionReplyAsUnavailable() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("* Bootloader: unknown protocol unknown")
+
+        assertNotNull(update)
+        assertEquals(null, update.deviceInfoPatch?.bootloaderVersion)
+        assertEquals(null, update.deviceInfoPatch?.bootloaderProtocolVersion)
+    }
+
+    @Test
     fun parsesStationIdReplyAndTrimsStoredLeadingSpace() {
         val update = SignalSlingerProtocolCodec.parseReportLine("* ID: W1FOX")
 

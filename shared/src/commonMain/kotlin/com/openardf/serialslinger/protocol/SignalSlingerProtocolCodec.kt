@@ -11,6 +11,8 @@ import com.openardf.serialslinger.model.WritePlan
 data class DeviceInfoPatch(
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
+    val bootloaderVersion: String? = null,
+    val bootloaderProtocolVersion: Int? = null,
 )
 
 data class DeviceStatusPatch(
@@ -97,6 +99,8 @@ data class DeviceReportUpdate(
 
 object SignalSlingerProtocolCodec {
     private val versionPattern = Regex("""^\* SW Ver:\s*(.+?)\s+HW Build:\s*(.+)$""")
+    private val bootloaderVersionPattern = Regex("""^\* Bootloader:\s*(\S+)\s+protocol\s+(\S+)$""", RegexOption.IGNORE_CASE)
+    private val appInfoPattern = Regex("""\*\s+INF\s+(.+)$""")
     private val stationIdPattern = Regex("""^\* ID:\s*(.*)$""")
     private val eventPattern = Regex("""^\* Event:\s*(.+)$""")
     private val foxPattern = Regex("""^\*\s*Fox:\s*(.+)$""")
@@ -141,6 +145,32 @@ object SignalSlingerProtocolCodec {
 
     fun parseReportLine(line: String): DeviceReportUpdate? {
         val trimmed = line.trim()
+        appInfoPattern.find(trimmed)?.let { match ->
+            val fields = parseKeyValueFields(match.groupValues[1])
+            val softwareVersion = fields["sw"]
+            val hardwareBuild = fields["hw"]
+            val bootloaderVersion = fields["bl"]?.takeUnless { it.equals("unknown", ignoreCase = true) }
+            val bootloaderProtocolVersion = fields["proto"]
+                ?.takeUnless { it.equals("unknown", ignoreCase = true) }
+                ?.toIntOrNull()
+
+            if (
+                softwareVersion != null ||
+                hardwareBuild != null ||
+                bootloaderVersion != null ||
+                bootloaderProtocolVersion != null
+            ) {
+                return DeviceReportUpdate(
+                    deviceInfoPatch = DeviceInfoPatch(
+                        softwareVersion = softwareVersion,
+                        hardwareBuild = hardwareBuild,
+                        bootloaderVersion = bootloaderVersion,
+                        bootloaderProtocolVersion = bootloaderProtocolVersion,
+                    ),
+                )
+            }
+        }
+
         if (!trimmed.startsWith("*")) {
             return null
         }
@@ -150,6 +180,17 @@ object SignalSlingerProtocolCodec {
                 deviceInfoPatch = DeviceInfoPatch(
                     softwareVersion = match.groupValues[1].trim(),
                     hardwareBuild = match.groupValues[2].trim(),
+                ),
+            )
+        }
+
+        bootloaderVersionPattern.matchEntire(trimmed)?.let { match ->
+            val bootloaderVersion = match.groupValues[1].trim().takeUnless { it.equals("unknown", ignoreCase = true) }
+            val bootloaderProtocolVersion = match.groupValues[2].trim().takeUnless { it.equals("unknown", ignoreCase = true) }?.toIntOrNull()
+            return DeviceReportUpdate(
+                deviceInfoPatch = DeviceInfoPatch(
+                    bootloaderVersion = bootloaderVersion,
+                    bootloaderProtocolVersion = bootloaderProtocolVersion,
                 ),
             )
         }
@@ -417,6 +458,20 @@ object SignalSlingerProtocolCodec {
             "None Set" -> EventType.NONE
             else -> null
         }
+    }
+
+    private fun parseKeyValueFields(text: String): Map<String, String> {
+        return text
+            .split(Regex("""\s+"""))
+            .mapNotNull { token ->
+                val separatorIndex = token.indexOf('=')
+                if (separatorIndex <= 0 || separatorIndex == token.lastIndex) {
+                    null
+                } else {
+                    token.substring(0, separatorIndex) to token.substring(separatorIndex + 1)
+                }
+            }
+            .toMap()
     }
 
     private fun parseFoxRole(raw: String): FoxRole? {

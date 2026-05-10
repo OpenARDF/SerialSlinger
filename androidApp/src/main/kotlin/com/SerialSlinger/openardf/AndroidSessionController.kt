@@ -25,6 +25,7 @@ import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
 import com.openardf.serialslinger.model.ThermalShutdownSupport
+import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
@@ -36,6 +37,13 @@ import com.openardf.serialslinger.session.FirmwareCloneSession
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
+import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
+import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateProgress
+import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
+import com.openardf.serialslinger.protocol.SignalSlingerAlreadyCurrentException
+import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
+import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
+import com.openardf.serialslinger.transport.AndroidFirmwareUpdateTransport
 import com.openardf.serialslinger.transport.AndroidDirectSerialTransport
 import com.openardf.serialslinger.transport.AndroidUsbTransport
 import com.openardf.serialslinger.transport.DeviceTransport
@@ -78,12 +86,20 @@ data class AndroidUiState(
     val scheduleDerivedDataPending: Boolean,
     val probeInFlight: Boolean,
     val signalSlingerReadInFlight: Boolean,
+    val firmwareUpdateProgress: AndroidFirmwareUpdateProgress?,
     val currentTimeSyncInFlight: Boolean,
     val clockPhaseErrorMillis: Long?,
     val hasClockPhaseWarning: Boolean,
     val canClone: Boolean,
     val cloneTemplateTimedEventEditsLocked: Boolean,
     val temperatureLoggingEnabled: Boolean,
+)
+
+data class AndroidFirmwareUpdateProgress(
+    val stage: String,
+    val completedPages: Int,
+    val totalPages: Int,
+    val detail: String?,
 )
 
 private data class ScheduleImpactSummary(
@@ -223,6 +239,7 @@ object AndroidSessionController {
     private var latestSessionViewState: AndroidSessionViewState? = null
     private var latestLoadedTarget: AndroidConnectionTarget? = null
     private var latestLoadedDeviceName: String? = null
+    private var pendingBootloaderVersion: PendingBootloaderVersion? = null
     private var draftStationId: String? = null
     private var draftEventType: String? = null
     private var draftFoxRole: String? = null
@@ -239,6 +256,7 @@ object AndroidSessionController {
     private var scheduleDerivedDataPending: Boolean = false
     private var probeInFlight: Boolean = false
     private var signalSlingerReadInFlight: Boolean = false
+    private var firmwareUpdateProgress: AndroidFirmwareUpdateProgress? = null
     private var currentTimeSyncInFlight: Boolean = false
     private var deviceTimeOffset: Duration? = null
     private var lastClockPhaseErrorMillis: Long? = null
@@ -309,6 +327,7 @@ object AndroidSessionController {
                 scheduleDerivedDataPending = scheduleDerivedDataPending,
                 probeInFlight = probeInFlight,
                 signalSlingerReadInFlight = signalSlingerReadInFlight,
+                firmwareUpdateProgress = firmwareUpdateProgress,
                 currentTimeSyncInFlight = currentTimeSyncInFlight,
                 clockPhaseErrorMillis = currentClockSkewMillisLocked(),
                 hasClockPhaseWarning = hasClockPhaseWarningLocked(),
@@ -420,6 +439,7 @@ object AndroidSessionController {
             latestSessionViewState = null
             latestLoadedTarget = null
             latestLoadedDeviceName = null
+            pendingBootloaderVersion = null
             applySnapshotDrafts(null)
             deviceTimeOffset = null
             lastClockPhaseErrorMillis = null
@@ -1172,14 +1192,15 @@ object AndroidSessionController {
                         lastClockPhaseErrorMillis = null
                         cachedManualWriteDelayMillis = null
                     }
+                    val displayedLoadResult = applyPendingBootloaderVersion(loadResult)
                     latestSessionViewState = AndroidSessionViewState(
-                        state = loadResult.state,
-                        traceEntries = loadResult.traceEntries,
+                        state = displayedLoadResult.state,
+                        traceEntries = displayedLoadResult.traceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
                     cloneTemplateTimedEventEditsLocked = false
-                    loadedSnapshot?.let(::rememberCloneTemplateFrom)
-                    applySnapshotDrafts(loadedSnapshot)
+                    displayedLoadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
+                    applySnapshotDrafts(displayedLoadResult.state.snapshot)
                     clockAnchor?.let { anchor ->
                         applyClockDisplayAnchor(
                             currentTimeCompact = anchor.currentTimeCompact,
@@ -2421,6 +2442,156 @@ object AndroidSessionController {
 
             emitCommandLog(
                 command = "set-frequency-bank",
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+            )
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(result) }
+            }
+        }
+    }
+
+    fun runTimedEventFrequencyDefaultsSubmit(
+        context: Context,
+        defaults: TimedEventDefaultFrequencies,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
+    ) {
+        val sanitizedDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(defaults)
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+        val snapshot = sessionState?.snapshot
+        val editableSettings = sessionState?.editableSettings
+        val templateToUpdate = synchronized(this) { cloneTemplateSettings ?: snapshot?.settings }
+
+        if (templateToUpdate == null) {
+            val error = IllegalStateException("Load Timed Event Settings before applying default frequencies.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "Default frequency update failed."
+                statusIsError = true
+            }
+            emitCommandLog("set-frequency-defaults", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(Result.failure(error)) }
+            }
+            return
+        }
+
+        synchronized(this) {
+            cloneTemplateSettings = FrequencySupport.applyTimedEventDefaultFrequencies(templateToUpdate, sanitizedDefaults)
+            cloneTemplateTimedEventEditsLocked = false
+            if (cloneTemplateDaysRemaining == null) {
+                cloneTemplateDaysRemaining = snapshot?.status?.daysRemaining
+            }
+        }
+
+        if (sessionState == null || snapshot == null || editableSettings == null) {
+            synchronized(this) {
+                latestSubmitSummary = "Timed Event default frequencies saved to clone settings."
+                latestProbeSummary = "Latest load remains available above. Clone settings were updated."
+                statusText = "Timed Event default frequencies updated."
+                statusIsError = false
+            }
+            emitCommandLog(
+                "set-frequency-defaults",
+                source,
+                success = true,
+                summary = "Updated clone template timed event frequencies.",
+            )
+            notifyListeners()
+            return
+        }
+
+        if (!snapshot.capabilities.supportsFrequencyProfiles) {
+            val error =
+                IllegalStateException(
+                    "Timed Event default frequencies were saved to clone settings, " +
+                        "but the connected device does not support frequency bank editing.",
+                )
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "Default frequencies saved to clone settings only."
+                statusIsError = true
+            }
+            emitCommandLog("set-frequency-defaults", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(Result.failure(error)) }
+            }
+            return
+        }
+
+        synchronized(this) {
+            latestSubmitSummary = "Submitting timed event default frequencies..."
+            statusText = "Submitting timed event default frequencies..."
+            statusIsError = false
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-frequency-defaults-submit") {
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                DeviceSessionController.submitEdits(
+                    sessionState,
+                    editableSettingsWithTimedEventDefaultFrequencies(editableSettings, sanitizedDefaults),
+                    transport,
+                )
+            }
+
+            synchronized(this) {
+                if (result.isSuccess) {
+                    val submitResult = result.getOrThrow()
+                    val wasNoOp = submitResult.wasNoOp()
+                    latestSessionViewState = AndroidSessionViewState(
+                        state = submitResult.state,
+                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
+                    )
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
+                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
+                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
+                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
+                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
+                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
+                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
+                    latestSubmitSummary = renderSubmitSummary(submitResult)
+                    latestProbeSummary =
+                        if (wasNoOp) {
+                            "Latest load remains available above. Timed Event frequencies already matched the saved defaults."
+                        } else {
+                            "Latest load remains available above. Timed Event default frequencies were applied."
+                        }
+                    statusText =
+                        if (wasNoOp) {
+                            "Timed Event default frequencies already matched."
+                        } else {
+                            "Timed Event default frequencies updated and verified."
+                        }
+                    statusIsError = false
+                } else {
+                    latestSubmitSummary = buildString {
+                        appendLine("Submit failed.")
+                        append(result.exceptionOrNull()?.message ?: "Unknown error")
+                    }.trim()
+                    statusText = "Default frequencies saved to clone settings only."
+                    statusIsError = true
+                }
+            }
+
+            emitCommandLog(
+                command = "set-frequency-defaults",
                 source = source,
                 success = result.isSuccess,
                 summary = synchronized(this) { latestSubmitSummary },
@@ -3949,6 +4120,8 @@ object AndroidSessionController {
             appendLine("connectionState=${sessionViewState.state.connectionState}")
             appendLine("softwareVersion=${snapshot.info.softwareVersion ?: "<unknown>"}")
             appendLine("hardwareBuild=${snapshot.info.hardwareBuild ?: "<unknown>"}")
+            appendLine("bootloaderVersion=${snapshot.info.bootloaderVersion ?: "<unknown>"}")
+            appendLine("bootloaderProtocol=${snapshot.info.bootloaderProtocolVersion ?: "<unknown>"}")
             appendLine("productName=${snapshot.info.productName ?: "<unknown>"}")
             appendLine("stationId=${snapshot.settings.stationId}")
             appendLine("eventType=${snapshot.settings.eventType}")
@@ -4415,6 +4588,32 @@ object AndroidSessionController {
             commandsSent = base.commandsSent + additional.commandsSent,
             linesReceived = base.linesReceived + additional.linesReceived,
             traceEntries = base.traceEntries + additional.traceEntries,
+        )
+    }
+
+    private fun applyPendingBootloaderVersion(result: DeviceLoadResult): DeviceLoadResult {
+        val pending = pendingBootloaderVersion ?: return result
+        val state = result.state
+        val snapshot = state.snapshot ?: return result
+        val info = snapshot.info
+        val loadedVersion = info.softwareVersion.orEmpty().trim()
+        val loadedHardware = info.hardwareBuild.orEmpty().trim()
+        if (
+            loadedVersion != pending.firmwareVersion ||
+            !SignalSlingerFirmwareUpdate.hardwareMatchesBoard(loadedHardware, pending.board)
+        ) {
+            return result
+        }
+
+        pendingBootloaderVersion = null
+        val updatedSnapshot = snapshot.copy(
+            info = info.copy(
+                bootloaderVersion = info.bootloaderVersion ?: pending.bootloaderVersion,
+                bootloaderProtocolVersion = info.bootloaderProtocolVersion ?: pending.bootloaderProtocolVersion,
+            ),
+        )
+        return result.copy(
+            state = state.copy(snapshot = updatedSnapshot),
         )
     }
 
@@ -5032,6 +5231,19 @@ object AndroidSessionController {
         )
     }
 
+    private fun editableSettingsWithTimedEventDefaultFrequencies(
+        editableSettings: EditableDeviceSettings,
+        defaults: TimedEventDefaultFrequencies,
+    ): EditableDeviceSettings {
+        val sanitizedDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(defaults)
+        return editableSettings.copy(
+            lowFrequencyHz = editableSettings.lowFrequencyHz.copy(editedValue = sanitizedDefaults.frequency1Hz),
+            mediumFrequencyHz = editableSettings.mediumFrequencyHz.copy(editedValue = sanitizedDefaults.frequency2Hz),
+            highFrequencyHz = editableSettings.highFrequencyHz.copy(editedValue = sanitizedDefaults.frequency3Hz),
+            beaconFrequencyHz = editableSettings.beaconFrequencyHz.copy(editedValue = sanitizedDefaults.frequencyBHz),
+        )
+    }
+
     private fun noOpSubmitResult(state: DeviceSessionState): DeviceSubmitResult {
         val snapshot = requireNotNull(state.snapshot) {
             "A loaded SignalSlinger snapshot is required for a no-op submit."
@@ -5330,6 +5542,358 @@ object AndroidSessionController {
             }
         }
     }
+
+    fun runSignalSlingerFirmwareUpdate(
+        context: Context,
+        overrideBoard: String? = null,
+        recoverAlreadyWaiting: Boolean = false,
+        requestedVersion: String? = null,
+        confirmResidentFallback: ((version: String, board: String, downloadFailure: String) -> Boolean)? = null,
+        onComplete: ((Result<Unit>) -> Unit)? = null,
+    ) {
+        val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
+        val startState =
+            synchronized(this) {
+                val snapshot = latestSessionViewState?.state?.snapshot
+                val target = latestLoadedTarget
+                val recoveryUsbDeviceName =
+                    if (recoverAlreadyWaiting && target !is AndroidConnectionTarget.Usb) {
+                        resolveUsbDevice(usbManager, requestedDeviceName = null)?.deviceName
+                    } else {
+                        null
+                    }
+                val hardwareBuild = snapshot?.info?.hardwareBuild?.trim().orEmpty()
+                val firmwareVersion = snapshot?.info?.softwareVersion?.trim().orEmpty()
+                val updateBlockedByActiveRead = !recoverAlreadyWaiting && (signalSlingerReadInFlight || probeInFlight)
+                if (recoverAlreadyWaiting) {
+                    probeInFlight = false
+                    signalSlingerReadInFlight = false
+                }
+                when {
+                    updateBlockedByActiveRead -> Result.failure(IllegalStateException("SignalSlinger is busy. Try the update again after the current operation finishes."))
+                    recoverAlreadyWaiting && overrideBoard == null -> Result.failure(IllegalStateException("Select the physical SignalSlinger hardware before starting Recovery Update."))
+                    recoverAlreadyWaiting && target !is AndroidConnectionTarget.Usb && recoveryUsbDeviceName == null -> Result.failure(IllegalStateException("Connect SignalSlinger to the USB port before starting Recovery Update."))
+                    !recoverAlreadyWaiting && snapshot == null -> Result.failure(IllegalStateException("Load the attached SignalSlinger before starting an update."))
+                    !recoverAlreadyWaiting && !SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(firmwareVersion) ->
+                        Result.failure(IllegalStateException("The attached SignalSlinger is running firmware ${firmwareVersion.ifBlank { "unknown" }}. Firmware updates require SignalSlinger firmware 2.0.0 or newer."))
+                    !recoverAlreadyWaiting && hardwareBuild.isBlank() && overrideBoard == null -> Result.failure(IllegalStateException("SerialSlinger could not identify the attached hardware. Reload SignalSlinger and try again."))
+                    !recoverAlreadyWaiting && target !is AndroidConnectionTarget.Usb -> Result.failure(IllegalStateException("Android firmware update requires a USB-connected SignalSlinger."))
+                    else -> {
+                        val deviceName = (target as? AndroidConnectionTarget.Usb)?.deviceName ?: recoveryUsbDeviceName
+                        require(!deviceName.isNullOrBlank()) { "Android firmware update requires a USB-connected SignalSlinger." }
+                        signalSlingerReadInFlight = true
+                        firmwareUpdateProgress = AndroidFirmwareUpdateProgress("Preparing update", 0, 0, null)
+                        statusText = "Preparing update..."
+                        statusIsError = false
+                        latestSubmitSummary = "Preparing SignalSlinger update..."
+                        Result.success(
+                            UpdateStart(
+                                deviceName = deviceName,
+                                hardwareBuild = hardwareBuild.ifBlank { overrideBoard.orEmpty() },
+                                firmwareVersion = if (recoverAlreadyWaiting) null else firmwareVersion,
+                                overrideBoard = overrideBoard,
+                                recoverAlreadyWaiting = recoverAlreadyWaiting,
+                                requestedVersion = requestedVersion?.trim()?.removePrefix("v")?.takeIf(String::isNotBlank),
+                            ),
+                        )
+                    }
+                }
+            }
+        if (startState.isFailure) {
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(startState.exceptionOrNull()!!)) } }
+            return
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-firmware-update") {
+            val updateLog = mutableListOf<AndroidLogEntry>()
+            val result =
+                runCatching {
+                    val start = startState.getOrThrow()
+                    val cache = SignalSlingerReleaseCache(context.applicationContext.filesDir.resolve("signalslinger-updates"))
+                    val selection =
+                        start.requestedVersion?.let { version ->
+                            cache.selectGitHubReleaseForUpdate(
+                                hardwareBuild = start.hardwareBuild,
+                                releaseVersion = version,
+                                overrideBoard = start.overrideBoard,
+                            )
+                        } ?: cache.selectLatestForUpdate(
+                            hardwareBuild = start.hardwareBuild,
+                            currentFirmwareVersion = start.firmwareVersion,
+                            overrideBoard = start.overrideBoard,
+                        )
+                    val downloadFailure = selection.downloadFailure
+                    if (selection.source == SignalSlingerReleaseSelectionSource.RESIDENT && downloadFailure != null) {
+                        val confirmed = confirmResidentFallback?.invoke(
+                            selection.release.version,
+                            selection.release.board,
+                            downloadFailure,
+                        ) ?: false
+                        require(confirmed) { "Update cancelled." }
+                    }
+                    val updateFile = selection.release.updateFile()
+                    val manifestDirectory = requireNotNull(selection.manifestFile.parentFile) {
+                        "SignalSlinger release manifest has no parent directory."
+                    }
+                    val hexFile = manifestDirectory.resolve(updateFile.fileName)
+                    val hexBytes = hexFile.readBytes()
+                    SignalSlingerFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
+                    val usbDevice = resolveUsbDevice(usbManager, start.deviceName)
+                        ?: error("SignalSlinger is no longer connected.")
+                    updateLog += AndroidLogEntry(selection.message, AndroidLogCategory.APP)
+                    selection.downloadFailure?.let { failure ->
+                        updateLog += AndroidLogEntry("GitHub update check failed: $failure", AndroidLogCategory.APP)
+                    }
+                    val transport = loggingFirmwareUpdateTransport(
+                        AndroidFirmwareUpdateTransport(usbManager, usbDevice),
+                        updateLog,
+                    )
+                    try {
+                        SignalSlingerFirmwareUpdate.performUpdate(
+                            transport = transport,
+                            release = selection.release,
+                            hexText = hexBytes.decodeToString(),
+                            recoverAlreadyWaiting = start.recoverAlreadyWaiting,
+                            allowAppHardwareMismatch = start.overrideBoard != null,
+                            progress = ::recordFirmwareUpdateProgress,
+                        )
+                    } finally {
+                        transport.disconnect()
+                    }
+                    selection.release
+                }
+            val alreadyCurrent = result.exceptionOrNull()?.isAlreadyCurrentUpdate() == true
+            if (result.isFailure) {
+                val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
+                updateLog += AndroidLogEntry(
+                    if (alreadyCurrent) {
+                        "No update needed: $message"
+                    } else {
+                        "Update failed: $message"
+                    },
+                    AndroidLogCategory.APP,
+                )
+            }
+            if (updateLog.isNotEmpty()) {
+                appendSessionLogEntries("Update SignalSlinger", updateLog)
+            }
+
+            synchronized(this) {
+                signalSlingerReadInFlight = false
+                if (result.isSuccess) {
+                    val release = result.getOrThrow()
+                    pendingBootloaderVersion = PendingBootloaderVersion(
+                        firmwareVersion = release.version,
+                        board = release.board,
+                        bootloaderVersion = release.serialSlinger.bootloaderVersion,
+                        bootloaderProtocolVersion = release.serialSlinger.protocolVersion,
+                    )
+                    latestSessionViewState = null
+                    latestSubmitSummary = "SignalSlinger update completed: ${release.product} ${release.version} ${release.board}."
+                    latestProbeSummary = "Reload SignalSlinger after update."
+                    statusText = "SignalSlinger update completed."
+                    statusIsError = false
+                    firmwareUpdateProgress = null
+                } else if (alreadyCurrent) {
+                    val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
+                    latestSubmitSummary = message
+                    statusText = "SignalSlinger is already up to date."
+                    statusIsError = false
+                    firmwareUpdateProgress = null
+                } else {
+                    val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
+                    latestSubmitSummary = "SignalSlinger update failed.\n$message"
+                    statusText = "SignalSlinger update failed."
+                    statusIsError = true
+                    firmwareUpdateProgress = null
+                }
+            }
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post {
+                    callback(
+                        result.fold(
+                            onSuccess = { Result.success(Unit) },
+                            onFailure = { failure ->
+                                if (failure.isAlreadyCurrentUpdate()) {
+                                    Result.success(Unit)
+                                } else {
+                                    Result.failure(IllegalStateException(friendlyUpdateFailureMessage(failure), failure))
+                                }
+                            },
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun recordFirmwareUpdateProgress(progress: SignalSlingerFirmwareUpdateProgress) {
+        val androidProgress = AndroidFirmwareUpdateProgress(
+            stage = progress.stage,
+            completedPages = progress.completedPages,
+            totalPages = progress.totalPages,
+            detail = progress.detail,
+        )
+        synchronized(this) {
+            firmwareUpdateProgress = androidProgress
+            statusText = progress.stage
+            statusIsError = false
+            latestSubmitSummary =
+                buildString {
+                    append(progress.stage)
+                    if (progress.totalPages > 0) {
+                        append(" ")
+                        append(progress.completedPages)
+                        append("/")
+                        append(progress.totalPages)
+                    }
+                    progress.detail?.let { append("\n").append(it) }
+                }
+        }
+        notifyListeners()
+    }
+
+    private fun loggingFirmwareUpdateTransport(
+        delegate: SignalSlingerFirmwareUpdateTransport,
+        logEntries: MutableList<AndroidLogEntry>,
+    ): SignalSlingerFirmwareUpdateTransport {
+        fun log(message: String) {
+            logEntries += AndroidLogEntry(message, AndroidLogCategory.SERIAL)
+        }
+
+        return object : SignalSlingerFirmwareUpdateTransport {
+            override fun connect(baudRate: Int) {
+                log("Opening update connection at $baudRate baud.")
+                delegate.connect(baudRate)
+            }
+
+            override fun reconfigureBaudRate(baudRate: Int): Boolean {
+                val changed = delegate.reconfigureBaudRate(baudRate)
+                if (changed) {
+                    log("Switching update connection to $baudRate baud.")
+                }
+                return changed
+            }
+
+            override fun disconnect() {
+                delegate.disconnect()
+            }
+
+            override fun writeAscii(text: String) {
+                log("TX ${text.toFirmwareLogFragment()}")
+                delegate.writeAscii(text)
+            }
+
+            override fun writeBytes(bytes: ByteArray) {
+                log("TX ${firmwareFrameLogLabel(bytes)}")
+                delegate.writeBytes(bytes)
+            }
+
+            override fun readLines(timeoutMs: Long): List<String> {
+                val lines = delegate.readLines(timeoutMs)
+                lines.forEach { line -> log("RX ${line.toFirmwareLogFragment()}") }
+                return lines
+            }
+        }
+    }
+
+    private fun firmwareFrameLogLabel(bytes: ByteArray): String {
+        if (bytes.isEmpty()) {
+            return "<empty binary frame>"
+        }
+        val command = bytes[0].toInt().toChar()
+        val address =
+            if (bytes.size >= 5) {
+                (bytes[1].toInt() and 0xFF) or
+                    ((bytes[2].toInt() and 0xFF) shl 8) or
+                    ((bytes[3].toInt() and 0xFF) shl 16) or
+                    ((bytes[4].toInt() and 0xFF) shl 24)
+            } else {
+                null
+            }
+        return buildString {
+            append(command)
+            append(" frame")
+            if (address != null) {
+                append(" addr=0x")
+                append(address.toString(16).uppercase().padStart(8, '0'))
+            }
+            append(" bytes=")
+            append(bytes.size)
+        }
+    }
+
+    private fun String.toFirmwareLogFragment(): String {
+        return buildString {
+            append('"')
+            this@toFirmwareLogFragment.forEach { ch ->
+                when (ch) {
+                    '\r' -> append("\\r")
+                    '\n' -> append("\\n")
+                    '\t' -> append("\\t")
+                    in ' '..'~' -> append(ch)
+                    else -> append("\\u").append(ch.code.toString(16).uppercase().padStart(4, '0'))
+                }
+            }
+            append('"')
+        }
+    }
+
+    private fun friendlyUpdateFailureMessage(error: Throwable?): String {
+        val details = generateSequence(error) { it.cause }
+            .mapNotNull { it.message }
+            .firstOrNull { it.isNotBlank() }
+            ?: "Unknown error"
+        return when {
+            details.contains("does not support firmware updates", ignoreCase = true) ->
+                "This SignalSlinger is too old to update automatically.\n\n$details"
+            details.contains("does not match package board", ignoreCase = true) ||
+                details.contains("correct hardware package", ignoreCase = true) ->
+                "This update file is for different SignalSlinger hardware.\n\n$details"
+            details.contains("hash mismatch", ignoreCase = true) ||
+                details.contains("size mismatch", ignoreCase = true) ->
+                "SerialSlinger could not verify the update file.\n\n$details"
+            details.contains("could not confirm the updated firmware", ignoreCase = true) ||
+                details.contains("did not enter update mode", ignoreCase = true) ||
+                details.contains("did not respond in update mode", ignoreCase = true) ->
+                "The update was interrupted or SignalSlinger did not restart as expected.\n\nReconnect the device and try again.\n\n$details"
+            details.contains("USB connection was interrupted", ignoreCase = true) ||
+                details.contains("Error writing", ignoreCase = true) ||
+                details.contains("rc=-1", ignoreCase = true) ->
+                "The USB connection was interrupted during the update.\n\nReconnect SignalSlinger and try Recovery Update.\n\n$details"
+            else -> details
+        }
+    }
+
+    private fun Throwable.isAlreadyCurrentUpdate(): Boolean {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is SignalSlingerAlreadyCurrentException) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    private data class UpdateStart(
+        val deviceName: String,
+        val hardwareBuild: String,
+        val firmwareVersion: String?,
+        val overrideBoard: String?,
+        val recoverAlreadyWaiting: Boolean,
+        val requestedVersion: String?,
+    )
+
+    private data class PendingBootloaderVersion(
+        val firmwareVersion: String,
+        val board: String,
+        val bootloaderVersion: String,
+        val bootloaderProtocolVersion: Int,
+    )
 
     private fun effectivePatternText(
         eventType: EventType,

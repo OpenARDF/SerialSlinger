@@ -1,5 +1,7 @@
 package com.openardf.serialslinger.app
 
+import com.openardf.serialslinger.model.FrequencySupport
+import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import java.util.prefs.Preferences
 
 enum class FrequencyDisplayUnit {
@@ -31,6 +33,8 @@ data class DesktopDisplayPreferences(
     val scheduleTimeInputMode: ScheduleTimeInputMode = ScheduleTimeInputMode.ABSOLUTE,
     val defaultEventLengthMinutes: Int = 6 * 60,
     val advancedModeEnabled: Boolean = false,
+    val automaticFirmwareUpdatesEnabled: Boolean = false,
+    val timedEventDefaultFrequencies: TimedEventDefaultFrequencies = FrequencySupport.defaultTimedEventFrequencies,
 )
 
 interface DesktopDisplayPreferencesStore {
@@ -49,6 +53,11 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
     private const val keyScheduleTimeInputMode = "scheduleTimeInputMode"
     private const val keyDefaultEventLengthMinutes = "defaultEventLengthMinutes"
     private const val keyAdvancedModeEnabled = "advancedModeEnabled"
+    private const val keyAutomaticFirmwareUpdatesEnabled = "automaticFirmwareUpdatesEnabled"
+    private const val keyTimedEventDefaultFrequency1Hz = "timedEventDefaultFrequency1Hz"
+    private const val keyTimedEventDefaultFrequency2Hz = "timedEventDefaultFrequency2Hz"
+    private const val keyTimedEventDefaultFrequency3Hz = "timedEventDefaultFrequency3Hz"
+    private const val keyTimedEventDefaultFrequencyBHz = "timedEventDefaultFrequencyBHz"
     private val preferences: Preferences = Preferences.userRoot().node(nodePath)
 
     override fun load(): DesktopDisplayPreferences {
@@ -73,10 +82,34 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
             ),
             defaultEventLengthMinutes = preferences.getInt(keyDefaultEventLengthMinutes, 6 * 60).coerceIn(10, 24 * 60),
             advancedModeEnabled = preferences.getBoolean(keyAdvancedModeEnabled, false),
+            automaticFirmwareUpdatesEnabled = preferences.getBoolean(keyAutomaticFirmwareUpdatesEnabled, false),
+            timedEventDefaultFrequencies =
+                FrequencySupport.sanitizeTimedEventDefaultFrequencies(
+                    TimedEventDefaultFrequencies(
+                        frequency1Hz = preferences.getLong(
+                            keyTimedEventDefaultFrequency1Hz,
+                            FrequencySupport.defaultTimedEventFrequencies.frequency1Hz,
+                        ),
+                        frequency2Hz = preferences.getLong(
+                            keyTimedEventDefaultFrequency2Hz,
+                            FrequencySupport.defaultTimedEventFrequencies.frequency2Hz,
+                        ),
+                        frequency3Hz = preferences.getLong(
+                            keyTimedEventDefaultFrequency3Hz,
+                            FrequencySupport.defaultTimedEventFrequencies.frequency3Hz,
+                        ),
+                        frequencyBHz = preferences.getLong(
+                            keyTimedEventDefaultFrequencyBHz,
+                            FrequencySupport.defaultTimedEventFrequencies.frequencyBHz,
+                        ),
+                    ),
+                ),
         )
     }
 
     override fun save(preferences: DesktopDisplayPreferences) {
+        val sanitizedTimedEventDefaults =
+            FrequencySupport.sanitizeTimedEventDefaultFrequencies(preferences.timedEventDefaultFrequencies)
         this.preferences.put(keyFrequencyDisplayUnit, preferences.frequencyDisplayUnit.name)
         this.preferences.put(keyTemperatureDisplayUnit, preferences.temperatureDisplayUnit.name)
         this.preferences.putBoolean(keyLogVisible, preferences.logVisible)
@@ -85,6 +118,11 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
         this.preferences.put(keyScheduleTimeInputMode, preferences.scheduleTimeInputMode.name)
         this.preferences.putInt(keyDefaultEventLengthMinutes, preferences.defaultEventLengthMinutes.coerceIn(10, 24 * 60))
         this.preferences.putBoolean(keyAdvancedModeEnabled, preferences.advancedModeEnabled)
+        this.preferences.putBoolean(keyAutomaticFirmwareUpdatesEnabled, preferences.automaticFirmwareUpdatesEnabled)
+        this.preferences.putLong(keyTimedEventDefaultFrequency1Hz, sanitizedTimedEventDefaults.frequency1Hz)
+        this.preferences.putLong(keyTimedEventDefaultFrequency2Hz, sanitizedTimedEventDefaults.frequency2Hz)
+        this.preferences.putLong(keyTimedEventDefaultFrequency3Hz, sanitizedTimedEventDefaults.frequency3Hz)
+        this.preferences.putLong(keyTimedEventDefaultFrequencyBHz, sanitizedTimedEventDefaults.frequencyBHz)
         this.preferences.flush()
     }
 

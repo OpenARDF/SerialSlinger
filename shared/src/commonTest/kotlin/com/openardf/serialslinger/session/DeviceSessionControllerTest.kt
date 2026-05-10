@@ -59,7 +59,9 @@ class DeviceSessionControllerTest {
 
         assertTrue(transport.isConnected)
         assertEquals(
-            com.openardf.serialslinger.protocol.SignalSlingerFirmwareSupport.resolve("1.2.3").fullLoadCommands,
+            listOf("VER") +
+                com.openardf.serialslinger.protocol.SignalSlingerFirmwareSupport.resolve("1.2.3").loadCommandsAfterVersion +
+                listOf("INF"),
             result.commandsSent,
         )
         assertEquals(result.commandsSent, transport.sentCommands)
@@ -118,6 +120,44 @@ class DeviceSessionControllerTest {
         assertTrue(foxIndex > goStopIndex)
         assertEquals(transport.sentCommands, result.commandsSent)
         assertEquals(false, result.state.snapshot?.status?.eventEnabled)
+    }
+
+    @Test
+    fun connectAndLoadQueriesAppInfoWhenBootloaderVersionWasNotSupplied() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "VER" to listOf("* SW Ver: 2.0.2 HW Build: 3.5"),
+                "INF" to listOf(
+                    "* INF product=SignalSlinger update=UPD",
+                    "* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200",
+                    "* INF bl=BL0.13 proto=1",
+                ),
+            ),
+        )
+
+        val result = DeviceSessionController.connectAndLoad(transport)
+
+        assertEquals("INF", result.commandsSent.last())
+        assertEquals("BL0.13", result.state.snapshot?.info?.bootloaderVersion)
+        assertEquals(1, result.state.snapshot?.info?.bootloaderProtocolVersion)
+    }
+
+    @Test
+    fun connectAndLoadDoesNotQueryAppInfoWhenBootloaderVersionWasAlreadySupplied() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "VER" to listOf(
+                    "* SW Ver: 2.0.2 HW Build: 3.5",
+                    "* Bootloader: BL0.13 protocol 1",
+                ),
+            ),
+        )
+
+        val result = DeviceSessionController.connectAndLoad(transport)
+
+        assertFalse("INF" in result.commandsSent)
+        assertEquals("BL0.13", result.state.snapshot?.info?.bootloaderVersion)
+        assertEquals(1, result.state.snapshot?.info?.bootloaderProtocolVersion)
     }
 
     @Test
@@ -496,7 +536,9 @@ class DeviceSessionControllerTest {
 
         assertEquals(listOf("CLK F 260410172000"), result.commandsSent)
         assertEquals(
-            listOf("CLK", "EVT") + com.openardf.serialslinger.protocol.SignalSlingerFirmwareSupport.resolve("1.2.3").fullLoadCommands,
+            listOf("CLK", "EVT", "VER") +
+                com.openardf.serialslinger.protocol.SignalSlingerFirmwareSupport.resolve("1.2.3").loadCommandsAfterVersion +
+                listOf("INF"),
             result.readbackCommandsSent,
         )
         assertTrue("VER" in transport.sentCommands)

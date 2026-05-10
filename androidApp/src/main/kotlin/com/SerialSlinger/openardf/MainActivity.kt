@@ -50,6 +50,8 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.ProgressBar
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
@@ -61,6 +63,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
 import com.openardf.serialslinger.model.ConnectionState
+import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.DeviceStatus
 import com.openardf.serialslinger.model.DeviceSettings
@@ -85,6 +88,10 @@ import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
 import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
 import com.openardf.serialslinger.model.ThermalShutdownSupport
+import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
+import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
+import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
+import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.transport.AndroidUsbDeviceDescriptor
 import com.openardf.serialslinger.transport.AndroidUsbTransport
@@ -96,6 +103,8 @@ import java.time.LocalDateTime
 import java.util.Date
 import java.util.Locale
 import java.util.WeakHashMap
+import java.util.concurrent.CountDownLatch
+import kotlin.concurrent.thread
 import kotlin.math.abs
 
 @SuppressLint("NewApi")
@@ -158,9 +167,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var deviceTimeSetMode: AndroidDeviceTimeSetMode = AndroidDeviceTimeSetMode.AUTOMATIC
     private var scheduleTimeInputMode: AndroidScheduleTimeInputMode = AndroidScheduleTimeInputMode.ABSOLUTE
     private var defaultEventLengthMinutes: Int = 6 * 60
+    private var timedEventDefaultFrequencies: TimedEventDefaultFrequencies = FrequencySupport.defaultTimedEventFrequencies
     private var rawSerialVisible: Boolean = true
     private var systemTimeVisible: Boolean = false
     private var deviceDataVisible: Boolean = true
+    private var automaticFirmwareUpdatesEnabled: Boolean = false
+    private var automaticFirmwareUpdateCheckInProgress: Boolean = false
+    private var automaticFirmwareUpdatePromptVisible: Boolean = false
     private var advancedModeEnabled: Boolean = false
     private val autoDetectHandler = Handler(Looper.getMainLooper())
     private val clockDisplayHandler = Handler(Looper.getMainLooper())
@@ -198,6 +211,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var startupDeviceStatusDialog: Dialog? = null
     private var startupSearchDialogShown: Boolean = false
     private var startupReadDialogShown: Boolean = false
+    private var firmwareUpdateDialog: Dialog? = null
+    private var firmwareUpdateProgressBar: ProgressBar? = null
+    private var firmwareUpdateStatusView: TextView? = null
     private var previewModeEnabled: Boolean = false
     private var previewSessionViewState: AndroidSessionViewState? = null
     private var previewUnlockStep: Int = 0
@@ -210,6 +226,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             dismissStaleStartupDeviceStatusDialog()
             showPendingEventPauseNotice()
             showStartupDeviceStatusModalIfNeeded()
+            showOrUpdateFirmwareUpdateModal()
             showPendingTimelyReplyWarning()
         }
     }
@@ -279,6 +296,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 device?.deviceName?.let { "deviceName=$it" } ?: "deviceName=<unknown>",
                             ),
                         )
+                        if (firmwareUpdateActive()) {
+                            AndroidSessionController.recordStatus("USB reconnected. Continuing SignalSlinger update...", isError = false)
+                            return
+                        }
                         AndroidSessionController.recordStatus("Loading SignalSlinger...", isError = false)
                         scheduleAutoDetect(delayMs = AUTO_DETECT_ATTACH_DELAY_MS)
                     }
@@ -291,6 +312,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 device?.deviceName?.let { "deviceName=$it" } ?: "deviceName=<unknown>",
                             ),
                         )
+                        if (firmwareUpdateActive()) {
+                            AndroidSessionController.recordStatus(
+                                "USB connection interrupted. Reconnect SignalSlinger to continue or recover the update.",
+                                isError = true,
+                            )
+                            return
+                        }
                         device?.deviceName?.let { deviceName ->
                             if (pendingAutoPermissionDeviceName == deviceName) {
                                 pendingAutoPermissionDeviceName = null
@@ -326,6 +354,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         rawSerialVisible = uiPreferences.getBoolean(PREF_RAW_SERIAL_VISIBLE, true)
         systemTimeVisible = uiPreferences.getBoolean(PREF_SYSTEM_TIME_VISIBLE, false)
         deviceDataVisible = uiPreferences.getBoolean(PREF_DEVICE_DATA_VISIBLE, true)
+        automaticFirmwareUpdatesEnabled = uiPreferences.getBoolean(PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED, false)
         advancedModeEnabled = uiPreferences.getBoolean(PREF_ADVANCED_MODE_ENABLED, false)
         frequencyDisplayUnit =
             AndroidFrequencyDisplayUnit.valueOf(
@@ -349,6 +378,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             )
         defaultEventLengthMinutes =
             uiPreferences.getInt(PREF_DEFAULT_EVENT_LENGTH_MINUTES, 6 * 60).coerceIn(10, 24 * 60)
+        timedEventDefaultFrequencies = loadTimedEventDefaultFrequenciesPreference()
         usbManager = getSystemService(UsbManager::class.java)
         val spacingPx = (16 * resources.displayMetrics.density).toInt()
 
@@ -374,6 +404,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
         renderContent()
         showStartupDeviceStatusModalIfNeeded()
+        showOrUpdateFirmwareUpdateModal()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -398,12 +429,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         autoDetectHandler.removeCallbacksAndMessages(null)
         clockDisplayHandler.removeCallbacksAndMessages(null)
         dismissStatusPopup()
+        dismissFirmwareUpdateDialog()
         AndroidSessionController.removeListener(refreshListener)
         super.onPause()
     }
 
     override fun onDestroy() {
         dismissStatusPopup()
+        dismissFirmwareUpdateDialog()
         unregisterReceiver(usbReceiver)
         super.onDestroy()
     }
@@ -445,6 +478,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         attempt: Int = 0,
         forceReload: Boolean = false,
     ) {
+        if (firmwareUpdateActive()) {
+            return
+        }
         val shouldShowSearch = forceReload || AndroidSessionController.snapshotUiState().sessionViewState == null
         if (shouldShowSearch && !autoDetectSearchingForHeader) {
             autoDetectSearchingForHeader = true
@@ -468,6 +504,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         attempt: Int,
         forceReload: Boolean = false,
     ) {
+        if (firmwareUpdateActive()) {
+            autoDetectSearchingForHeader = false
+            return
+        }
         val usbDevices = AndroidUsbTransport.connectedDevices(usbManager)
         val supportedDevices = usbDevices.filter { it.supportedSerialDriver }
         val permittedSupportedDevices = supportedDevices.filter { it.hasPermission }
@@ -533,6 +573,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             result.exceptionOrNull()?.message?.let { "message=$it" } ?: "message=<none>",
                         ),
                     )
+                    if (result.isSuccess) {
+                        maybeOfferAutomaticSignalSlingerFirmwareUpdate()
+                    }
                     if (result.isFailure && attempt < AUTO_DETECT_MAX_RETRIES) {
                         scheduleAutoDetect(
                             delayMs = AUTO_DETECT_RETRY_DELAY_MS,
@@ -599,6 +642,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun requestSignalSlingerReload() {
+        if (firmwareUpdateActive()) {
+            AndroidSessionController.recordStatus("SignalSlinger update is already in progress.", isError = false)
+            return
+        }
         clearCloneSessionTemplateLock()
         autoDetectSearchingForHeader = true
         AndroidSessionController.recordStatus("Searching for SignalSlinger...", isError = true)
@@ -625,6 +672,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     ): AndroidUsbDeviceDescriptor? {
         return candidates.firstOrNull { it.deviceName == newlyDiscoveredDeviceName && predicate(it) }
             ?: candidates.firstOrNull(predicate)
+    }
+
+    private fun firmwareUpdateActive(): Boolean {
+        return AndroidSessionController.snapshotUiState().firmwareUpdateProgress != null
     }
 
     private fun renderContent() {
@@ -1736,12 +1787,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         deviceDataCard.addView(
             compactLabeledRow(
                 "Version",
-                readOnlyField(
-                    listOfNotNull(
-                        loadedInfo?.softwareVersion?.takeIf { it.isNotBlank() },
-                        loadedInfo?.hardwareBuild?.takeIf { it.isNotBlank() }?.let { "HW $it" },
-                    ).joinToString(" / ").ifBlank { "<unknown>" },
-                ),
+                readOnlyField(formatReportedVersion(loadedInfo)),
             ),
         )
 
@@ -2806,6 +2852,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("Device Info")
             appendLine("Software version: ${info.softwareVersion.orUnknown()}")
             appendLine("Hardware build: ${info.hardwareBuild.orUnknown()}")
+            appendLine("Bootloader version: ${info.bootloaderVersion.orUnknown()}")
+            appendLine("Bootloader protocol: ${info.bootloaderProtocolVersion?.toString().orUnknown()}")
             appendLine("Product name: ${info.productName.orUnknown()}")
             appendLine("Serial port name: ${info.serialPortName.orUnknown()}")
             appendLine()
@@ -2864,6 +2912,27 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("Scheduling: ${capabilities.supportsScheduling}")
             appendLine("Frequency profiles: ${capabilities.supportsFrequencyProfiles}")
         }.trim()
+    }
+
+    private fun formatReportedVersion(info: DeviceInfo?): String {
+        val softwareVersion = info?.softwareVersion?.trim().orEmpty()
+        val hardwareBuild = info?.hardwareBuild?.trim().orEmpty()
+        if (softwareVersion.isBlank() || hardwareBuild.isBlank()) {
+            return "Not Available"
+        }
+        return buildString {
+            append("SW Ver: $softwareVersion HW Build: $hardwareBuild")
+            append(" Bootloader: ")
+            val bootloaderVersion = info?.bootloaderVersion?.trim()?.takeIf { it.isNotBlank() }
+            if (bootloaderVersion == null) {
+                append("Not Available")
+            } else {
+                append(bootloaderVersion)
+                info.bootloaderProtocolVersion?.let { protocol ->
+                    append(" protocol $protocol")
+                }
+            }
+        }
     }
 
     private fun renderTrace(traceEntries: List<com.openardf.serialslinger.session.SerialTraceEntry>): String {
@@ -2994,7 +3063,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     addView(weightedButton("Settings", enabled = !disconnectedLocked) { showSettingsDialog() })
-                    addView(weightedButton("Tools", enabled = !disconnectedLocked) { showToolsDialog(uiState) })
+                    addView(weightedButton("Tools") { showToolsDialog(uiState) })
                 },
             )
         }
@@ -3004,6 +3073,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         message: String?,
         isError: Boolean,
     ) {
+        if (AndroidSessionController.snapshotUiState().firmwareUpdateProgress != null) {
+            return
+        }
         val statusText = message?.trim().takeIf { !it.isNullOrBlank() } ?: return
         val popupKey = "${if (isError) "error" else "info"}|$statusText"
         if (popupKey == lastStatusPopupKey) {
@@ -3076,6 +3148,87 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         statusPopupDismissRunnable = null
         statusPopupWindow?.dismiss()
         statusPopupWindow = null
+    }
+
+    private fun showOrUpdateFirmwareUpdateModal() {
+        val progress = AndroidSessionController.snapshotUiState().firmwareUpdateProgress
+        if (progress == null) {
+            dismissFirmwareUpdateDialog()
+            return
+        }
+
+        if (firmwareUpdateDialog?.isShowing != true) {
+            val density = resources.displayMetrics.density
+            val container =
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding((20 * density).toInt(), (10 * density).toInt(), (20 * density).toInt(), 0)
+                    firmwareUpdateStatusView =
+                        TextView(this@MainActivity).apply {
+                            textSize = 15f
+                            setTextColor(Color.parseColor("#1F2937"))
+                        }
+                    addView(firmwareUpdateStatusView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+                    firmwareUpdateProgressBar =
+                        ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
+                            max = 1000
+                        }
+                    addView(
+                        firmwareUpdateProgressBar,
+                        LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                            topMargin = (12 * density).toInt()
+                        },
+                    )
+                }
+            firmwareUpdateDialog =
+                AlertDialog.Builder(this)
+                    .setTitle("Updating SignalSlinger")
+                    .setView(container)
+                    .create()
+                    .apply {
+                        setCanceledOnTouchOutside(false)
+                        setCancelable(false)
+                        showLogged("Updating SignalSlinger")
+                    }
+        }
+
+        firmwareUpdateStatusView?.text = userFacingFirmwareUpdateStage(progress.stage)
+        firmwareUpdateProgressBar?.let { bar ->
+            bar.isIndeterminate = false
+            bar.progress =
+                if (progress.totalPages > 0) {
+                    progress.completedPages.coerceIn(0, progress.totalPages) * 1000 / progress.totalPages
+                } else {
+                    firmwareUpdateStageBaseline(progress.stage)
+                }
+        }
+    }
+
+    private fun userFacingFirmwareUpdateStage(stage: String): String =
+        when (stage) {
+            "Preparing update" -> "Preparing update"
+            "Checking file" -> "Checking file"
+            "Sending update" -> "Sending update"
+            "Verifying update" -> "Verifying update"
+            "Restarting SignalSlinger" -> "Restarting SignalSlinger"
+            else -> "Updating SignalSlinger"
+        }
+
+    private fun firmwareUpdateStageBaseline(stage: String): Int =
+        when (stage) {
+            "Preparing update" -> 50
+            "Checking file" -> 120
+            "Sending update" -> 250
+            "Verifying update" -> 700
+            "Restarting SignalSlinger" -> 950
+            else -> 50
+        }
+
+    private fun dismissFirmwareUpdateDialog() {
+        firmwareUpdateDialog?.dismiss()
+        firmwareUpdateDialog = null
+        firmwareUpdateProgressBar = null
+        firmwareUpdateStatusView = null
     }
 
     // Keep portrait phones stacked, but let landscape phones use the wider split layout.
@@ -3362,13 +3515,19 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             "Device Time Setting (${if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) "Manual" else "Automatic"})",
             "Schedule Time Setting (${if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"})",
             "Default Event Length (${formatDefaultEventLength(defaultEventLengthMinutes)})",
+            "Timed Event Default Frequencies",
+            "Set Frequencies to Defaults",
             "${if (systemTimeVisible) "Hide" else "Show"} System Time",
             "${if (deviceDataVisible) "Hide" else "Show"} Device Data",
             "Set Events to Championships Settings",
             "About (Ver $appVersionLabel)",
         )
         val enabledRows = labels.indices.map { index ->
-            index != 7 || championshipSettingsEnabled
+            when (index) {
+                6 -> displayedTimedEventSettings != null
+                9 -> championshipSettingsEnabled
+                else -> true
+            }
         }
         val adapter =
             object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
@@ -3395,10 +3554,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     2 -> showDeviceTimeSettingDialog()
                     3 -> showScheduleTimeInputSettingDialog()
                     4 -> showDefaultEventLengthDialog()
-                    5 -> setSystemTimeVisible(!systemTimeVisible)
-                    6 -> setDeviceDataVisible(!deviceDataVisible)
-                    7 -> showChampionshipSettingsConfirmation()
-                    8 -> showAboutDialog()
+                    5 -> showTimedEventDefaultFrequenciesDialog()
+                    6 -> applyTimedEventDefaultFrequenciesFromSettings()
+                    7 -> setSystemTimeVisible(!systemTimeVisible)
+                    8 -> setDeviceDataVisible(!deviceDataVisible)
+                    9 -> showChampionshipSettingsConfirmation()
+                    10 -> showAboutDialog()
                 }
                 dialog.dismiss()
             }
@@ -3606,6 +3767,115 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
             .setNegativeButton("Cancel", null)
             .showLogged("Default Event Length")
+    }
+
+    private fun showTimedEventDefaultFrequenciesDialog() {
+        val dialogHorizontalPadding = (20 * resources.displayMetrics.density).toInt()
+        val dialogVerticalPadding = (12 * resources.displayMetrics.density).toInt()
+        val currentDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(timedEventDefaultFrequencies)
+
+        fun frequencyField(initialFrequencyHz: Long): EditText {
+            return EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                imeOptions = EditorInfo.IME_ACTION_DONE
+                setText(timedEventDefaultFrequencyText(initialFrequencyHz))
+                setSelection(text.length)
+            }
+        }
+
+        fun frequencyRow(label: String, field: EditText): LinearLayout {
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text = label
+                        textSize = 14f
+                        setTextColor(Color.parseColor("#1F1F1F"))
+                    },
+                )
+                addView(field)
+            }
+        }
+
+        fun parseTimedEventDefaultFrequency(fieldLabel: String, rawValue: String): Long {
+            val parsedFrequencyHz = FrequencySupport.parseFrequencyHz(rawValue)
+                ?: throw IllegalArgumentException("$fieldLabel must be a valid MHz value between 3.50 and 3.70.")
+            require(parsedFrequencyHz in FrequencySupport.minimumTimedEventFrequencyHz..FrequencySupport.maximumTimedEventFrequencyHz) {
+                "$fieldLabel must be between 3.50 and 3.70 MHz."
+            }
+            return parsedFrequencyHz
+        }
+
+        val frequency1Field = frequencyField(currentDefaults.frequency1Hz)
+        val frequency2Field = frequencyField(currentDefaults.frequency2Hz)
+        val frequency3Field = frequencyField(currentDefaults.frequency3Hz)
+        val frequencyBField = frequencyField(currentDefaults.frequencyBHz)
+        val helperText =
+            TextView(this).apply {
+                text = "Enter values from 3.50 to 3.70 MHz. Shared values are allowed."
+                textSize = 13f
+                setTextColor(Color.parseColor("#5F6368"))
+            }
+
+        val contentView =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dialogHorizontalPadding, dialogVerticalPadding, dialogHorizontalPadding, 0)
+                addView(frequencyRow("Frequency 1", frequency1Field))
+                addView(frequencyRow("Frequency 2", frequency2Field))
+                addView(frequencyRow("Frequency 3", frequency3Field))
+                addView(frequencyRow("Frequency B", frequencyBField))
+                addView(helperText)
+            }
+
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Timed Event Default Frequencies")
+                .setView(contentView)
+                .setPositiveButton("Save", null)
+                .setNegativeButton("Cancel", null)
+                .showLogged("Timed Event Default Frequencies")
+
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            try {
+                timedEventDefaultFrequencies =
+                    FrequencySupport.sanitizeTimedEventDefaultFrequencies(
+                        TimedEventDefaultFrequencies(
+                            frequency1Hz = parseTimedEventDefaultFrequency("Frequency 1", frequency1Field.text.toString()),
+                            frequency2Hz = parseTimedEventDefaultFrequency("Frequency 2", frequency2Field.text.toString()),
+                            frequency3Hz = parseTimedEventDefaultFrequency("Frequency 3", frequency3Field.text.toString()),
+                            frequencyBHz = parseTimedEventDefaultFrequency("Frequency B", frequencyBField.text.toString()),
+                        ),
+                    )
+                saveTimedEventDefaultFrequenciesPreference()
+                dialog.dismiss()
+                maybeShowStatusPopup("Saved timed event default frequencies.", isError = false)
+            } catch (exception: IllegalArgumentException) {
+                maybeShowStatusPopup(exception.message ?: "Invalid timed event default frequency.", isError = true)
+            }
+        }
+    }
+
+    private fun applyTimedEventDefaultFrequenciesFromSettings() {
+        val defaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(timedEventDefaultFrequencies)
+        if (displayedTimedEventSettings == null && !isPreviewModeActive()) {
+            maybeShowStatusPopup("Load Timed Event Settings first.", isError = true)
+            return
+        }
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            if (isPreviewModeActive()) {
+                updatePreviewSettings { settings ->
+                    FrequencySupport.applyTimedEventDefaultFrequencies(settings, defaults)
+                }
+                maybeShowStatusPopup("Applied default frequencies to preview timed event settings.", isError = false)
+                return@runTimedEventSettingsChangeWithCloneTemplateGuard
+            }
+            AndroidSessionController.runTimedEventFrequencyDefaultsSubmit(
+                context = this,
+                defaults = defaults,
+                source = "settings-menu",
+            )
+        }
     }
 
     private fun showLastsDurationDialog(
@@ -4075,6 +4345,22 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     },
                 )
                 add(
+                    ToolOption("Update SignalSlinger") {
+                        showSignalSlingerUpdateConfirmation(uiState)
+                    },
+                )
+                add(
+                    ToolOption(
+                        if (automaticFirmwareUpdatesEnabled) {
+                            "Disable Automatic SignalSlinger Firmware Updates"
+                        } else {
+                            "Enable Automatic SignalSlinger Firmware Updates"
+                        },
+                    ) {
+                        setAutomaticFirmwareUpdatesEnabled(!automaticFirmwareUpdatesEnabled)
+                    },
+                )
+                add(
                     ToolOption("View Android Session Log") {
                         showLargeTextDialog(
                             title = "Android Session Log",
@@ -4166,6 +4452,358 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
             .setNegativeButton("Close", null)
             .showLogged("Tools")
+    }
+
+    private fun showSignalSlingerUpdateConfirmation(uiState: AndroidUiState) {
+        val version = uiState.sessionViewState?.state?.snapshot?.info?.softwareVersion?.takeIf { it.isNotBlank() } ?: "unknown"
+        val hardware = uiState.sessionViewState?.state?.snapshot?.info?.hardwareBuild?.takeIf { it.isNotBlank() } ?: "unknown"
+        val forcedHardwareBoard = forcedHardwareUpdateBoard(hardware)
+        val forcedHardwareLabel =
+            forcedHardwareBoard?.let { board -> "Force ${forcedHardwareDisplayName(board)} Update" } ?: "Force Hardware Update"
+        val modeLabels = arrayOf("Update Connected Device", forcedHardwareLabel)
+        val density = resources.displayMetrics.density
+        val modeGroup =
+            RadioGroup(this).apply {
+                orientation = RadioGroup.VERTICAL
+                modeLabels.forEachIndexed { index, label ->
+                    addView(
+                        RadioButton(this@MainActivity).apply {
+                            id = View.generateViewId()
+                            text = label
+                            textSize = 16f
+                            tag = index
+                            isChecked = index == 0
+                        },
+                        RadioGroup.LayoutParams(MATCH_PARENT, WRAP_CONTENT),
+                    )
+                }
+            }
+        val content =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding((20 * density).toInt(), (8 * density).toInt(), (20 * density).toInt(), 0)
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text =
+                            "SerialSlinger will check for the latest update for this SignalSlinger.\n\n" +
+                                "Current firmware: $version\n" +
+                                "Hardware: $hardware\n\n" +
+                                "If the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n" +
+                                forcedHardwareUpdateHelpText(forcedHardwareBoard)
+                        textSize = 15f
+                        setTextColor(Color.parseColor("#1F2937"))
+                    },
+                    LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT),
+                )
+                addView(
+                    modeGroup,
+                    LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                        topMargin = (10 * density).toInt()
+                    },
+                )
+            }
+        val scrollableContent =
+            ScrollView(this).apply {
+                isFillViewport = false
+                addView(content)
+            }
+        AlertDialog.Builder(this)
+            .setTitle("Update SignalSlinger")
+            .setView(scrollableContent)
+            .setPositiveButton("Update") { _, _ ->
+                val selectedMode =
+                    modeGroup.findViewById<RadioButton>(modeGroup.checkedRadioButtonId)?.tag as? Int ?: 0
+                when (selectedMode) {
+                    1 -> {
+                        if (forcedHardwareBoard == null) {
+                            chooseSignalSlingerHardwareOverrideBoard("Force Hardware Update") { overrideBoard ->
+                                chooseSignalSlingerUpdateSource { requestedVersion ->
+                                    startAndroidSignalSlingerUpdate(overrideBoard, recoverAlreadyWaiting = true, requestedVersion = requestedVersion)
+                                }
+                            }
+                        } else {
+                            confirmForcedHardwareUpdate(forcedHardwareBoard) {
+                                chooseSignalSlingerUpdateSource { requestedVersion ->
+                                    startAndroidSignalSlingerUpdate(forcedHardwareBoard, recoverAlreadyWaiting = true, requestedVersion = requestedVersion)
+                                }
+                            }
+                        }
+                    }
+                    else -> {
+                        chooseSignalSlingerUpdateSource { requestedVersion ->
+                            startAndroidSignalSlingerUpdate(overrideBoard = null, recoverAlreadyWaiting = false, requestedVersion = requestedVersion)
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update SignalSlinger")
+    }
+
+    private fun forcedHardwareUpdateBoard(hardwareBuild: String): String? =
+        when {
+            SignalSlingerFirmwareUpdate.hardwareMatchesBoard(hardwareBuild, "HW-3.4") -> "HW-3.5"
+            SignalSlingerFirmwareUpdate.hardwareMatchesBoard(hardwareBuild, "HW-3.5") -> "HW-3.4"
+            else -> null
+        }
+
+    private fun forcedHardwareUpdateHelpText(forcedHardwareBoard: String?): String =
+        if (forcedHardwareBoard == null) {
+            "Use Force Hardware Update only when SignalSlinger no longer loads normally after an interrupted update."
+        } else {
+            "Use Force ${forcedHardwareDisplayName(forcedHardwareBoard)} Update only when SignalSlinger no longer loads normally after an interrupted update. " +
+                "SerialSlinger will use the opposite hardware update because the connected device reports the other hardware version."
+        }
+
+    private fun forcedHardwareDisplayName(board: String): String =
+        "${board.removePrefix("HW-")} HW"
+
+    private fun confirmForcedHardwareUpdate(
+        board: String,
+        onConfirmed: () -> Unit,
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle("Update SignalSlinger")
+            .setMessage(
+                "Force ${forcedHardwareDisplayName(board)} Update will install the update for physical hardware $board.\n\n" +
+                    "SerialSlinger selected this because the connected device reports the other hardware version. " +
+                    "Only continue if SignalSlinger no longer loads normally after an interrupted update.",
+            )
+            .setPositiveButton("Force ${forcedHardwareDisplayName(board)} Update") { _, _ ->
+                onConfirmed()
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update SignalSlinger")
+    }
+
+    private fun chooseSignalSlingerHardwareOverrideBoard(
+        modeLabel: String,
+        onSelected: (String) -> Unit,
+    ) {
+        val options = arrayOf("HW-3.5", "HW-3.4")
+        AlertDialog.Builder(this)
+            .setTitle("Update SignalSlinger")
+            .setItems(options) { _, which ->
+                confirmSignalSlingerHardwareOverrideBoard(modeLabel, options[which], onSelected)
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update SignalSlinger")
+    }
+
+    private fun confirmSignalSlingerHardwareOverrideBoard(
+        modeLabel: String,
+        board: String,
+        onConfirmed: (String) -> Unit,
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle("Update SignalSlinger")
+            .setMessage(
+                "$modeLabel will install the update for physical hardware $board.\n\n" +
+                    "Only continue if the connected SignalSlinger board is actually $board.",
+            )
+            .setPositiveButton("Use $board") { _, _ ->
+                onConfirmed(board)
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update SignalSlinger")
+    }
+
+    private fun chooseSignalSlingerUpdateSource(onSelected: (String?) -> Unit) {
+        val options = arrayOf("Latest Version", "Specific Version")
+        AlertDialog.Builder(this)
+            .setTitle("Update SignalSlinger")
+            .setItems(options) { _, which ->
+                if (which == 0) {
+                    onSelected(null)
+                } else {
+                    askSignalSlingerUpdateVersion(onSelected)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update SignalSlinger")
+    }
+
+    private fun askSignalSlingerUpdateVersion(onSelected: (String?) -> Unit) {
+        val input =
+            EditText(this).apply {
+                hint = "2.0.2"
+                setSingleLine(true)
+                setText("2.0.2")
+                selectAll()
+            }
+        AlertDialog.Builder(this)
+            .setTitle("Update SignalSlinger")
+            .setMessage("Enter the SignalSlinger firmware version to download.")
+            .setView(input)
+            .setPositiveButton("Update") { _, _ ->
+                val version = input.text?.toString()?.trim()?.removePrefix("v").orEmpty()
+                if (version.isBlank()) {
+                    showLargeTextDialog("Update SignalSlinger", "Enter a firmware version such as 2.0.2.")
+                } else {
+                    onSelected(version)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update SignalSlinger")
+    }
+
+    private fun startAndroidSignalSlingerUpdate(
+        overrideBoard: String?,
+        recoverAlreadyWaiting: Boolean,
+        requestedVersion: String?,
+    ) {
+        AndroidSessionController.runSignalSlingerFirmwareUpdate(
+            context = applicationContext,
+            overrideBoard = overrideBoard,
+            recoverAlreadyWaiting = recoverAlreadyWaiting,
+            requestedVersion = requestedVersion,
+            confirmResidentFallback = ::confirmResidentSignalSlingerUpdate,
+        ) { result ->
+            result.exceptionOrNull()?.let { error ->
+                showLargeTextDialog("Update SignalSlinger", error.message ?: error.toString())
+            }
+            if (result.isSuccess) {
+                scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
+            }
+        }
+    }
+
+    private fun confirmResidentSignalSlingerUpdate(
+        version: String,
+        board: String,
+        downloadFailure: String,
+    ): Boolean {
+        val latch = CountDownLatch(1)
+        var confirmed = false
+        Handler(Looper.getMainLooper()).post {
+            AlertDialog.Builder(this)
+                .setTitle("Update SignalSlinger")
+                .setMessage(
+                    "SerialSlinger could not download the latest update.\n\n" +
+                        "Use the resident SignalSlinger $version update for $board?",
+                )
+                .setPositiveButton("Use Resident Update") { _, _ ->
+                    confirmed = true
+                    latch.countDown()
+                }
+                .setNegativeButton("Cancel") { _, _ ->
+                    latch.countDown()
+                }
+                .setOnCancelListener {
+                    latch.countDown()
+                }
+                .showLogged("Update SignalSlinger")
+        }
+        latch.await()
+        if (!confirmed) {
+            AndroidSessionController.logAppEvent(
+                title = "update",
+                lines = listOf("GitHub update check failed: $downloadFailure"),
+            )
+        }
+        return confirmed
+    }
+
+    private fun setAutomaticFirmwareUpdatesEnabled(enabled: Boolean) {
+        automaticFirmwareUpdatesEnabled = enabled
+        uiPreferences.edit().putBoolean(PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED, enabled).apply()
+        AndroidSessionController.recordStatus(
+            if (enabled) {
+                "Automatic SignalSlinger firmware updates enabled."
+            } else {
+                "Automatic SignalSlinger firmware updates disabled."
+            },
+            isError = false,
+        )
+        renderContent()
+    }
+
+    private fun maybeOfferAutomaticSignalSlingerFirmwareUpdate() {
+        if (!automaticFirmwareUpdatesEnabled ||
+            automaticFirmwareUpdateCheckInProgress ||
+            automaticFirmwareUpdatePromptVisible ||
+            firmwareUpdateActive()
+        ) {
+            return
+        }
+        val uiState = AndroidSessionController.snapshotUiState()
+        val snapshot = uiState.sessionViewState?.state?.snapshot ?: return
+        val hardwareBuild = snapshot.info.hardwareBuild.orEmpty().trim()
+        val firmwareVersion = snapshot.info.softwareVersion.orEmpty().trim()
+        if (hardwareBuild.isBlank() || !SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(firmwareVersion)) {
+            return
+        }
+
+        automaticFirmwareUpdateCheckInProgress = true
+        thread(name = "serialslinger-android-automatic-firmware-update-check", isDaemon = true) {
+            val result = runCatching {
+                SignalSlingerReleaseCache(applicationContext.filesDir.resolve("signalslinger-updates")).selectLatestForUpdate(
+                    hardwareBuild = hardwareBuild,
+                    currentFirmwareVersion = firmwareVersion,
+                )
+            }
+            runOnUiThread {
+                automaticFirmwareUpdateCheckInProgress = false
+                val selection = result.getOrNull() ?: return@runOnUiThread
+                val latestState = AndroidSessionController.snapshotUiState()
+                val latestSnapshot = latestState.sessionViewState?.state?.snapshot ?: return@runOnUiThread
+                if (
+                    latestSnapshot.info.hardwareBuild.orEmpty().trim() != hardwareBuild ||
+                    latestSnapshot.info.softwareVersion.orEmpty().trim() != firmwareVersion ||
+                    firmwareUpdateActive()
+                ) {
+                    return@runOnUiThread
+                }
+                automaticFirmwareUpdatePromptVisible = true
+                val sourceText =
+                    if (selection.source == SignalSlingerReleaseSelectionSource.RESIDENT) {
+                        if (selection.downloadFailure != null) {
+                            "SerialSlinger could not download the latest release, but a resident update is available."
+                        } else {
+                            "SerialSlinger already has this update saved locally."
+                        }
+                    } else {
+                        "SerialSlinger downloaded the latest update."
+                    }
+                AlertDialog.Builder(this)
+                    .setTitle("Update SignalSlinger")
+                    .setMessage(
+                        "$sourceText\n\n" +
+                            "Current firmware: $firmwareVersion\n" +
+                            "Available firmware: ${selection.release.version}\n" +
+                            "Hardware: ${selection.release.board}\n\n" +
+                            "Update SignalSlinger now?",
+                    )
+                    .setPositiveButton("Update") { _, _ ->
+                        automaticFirmwareUpdatePromptVisible = false
+                        startAndroidSignalSlingerAutomaticUpdate()
+                    }
+                    .setNegativeButton("Not Now") { _, _ ->
+                        automaticFirmwareUpdatePromptVisible = false
+                    }
+                    .setOnCancelListener {
+                        automaticFirmwareUpdatePromptVisible = false
+                    }
+                    .showLogged("Update SignalSlinger")
+            }
+        }
+    }
+
+    private fun startAndroidSignalSlingerAutomaticUpdate() {
+        AndroidSessionController.runSignalSlingerFirmwareUpdate(
+            context = applicationContext,
+            overrideBoard = null,
+            recoverAlreadyWaiting = false,
+            requestedVersion = null,
+            confirmResidentFallback = { _, _, _ -> true },
+        ) { result ->
+            result.exceptionOrNull()?.let { error ->
+                showLargeTextDialog("Update SignalSlinger", error.message ?: error.toString())
+            }
+            if (result.isSuccess) {
+                scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
+            }
+        }
     }
 
     private fun temperatureLoggingSupported(uiState: AndroidUiState): Boolean {
@@ -4945,7 +5583,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         guardCloneTemplate: Boolean = false,
         onSubmit: (Long) -> Unit,
     ) {
-        var currentFrequencyHz = selectedFrequencyHz?.coerceIn(3_501_000L, 3_700_000L) ?: 3_520_000L
+        var currentFrequencyHz =
+            selectedFrequencyHz?.coerceIn(
+                FrequencySupport.minimumTimedEventFrequencyHz,
+                FrequencySupport.maximumTimedEventFrequencyHz,
+            ) ?: 3_520_000L
         lateinit var valueView: EditText
         valueView =
             pickerField(
@@ -4976,7 +5618,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         onSelected: (Long) -> Unit,
     ) {
         val dialogHorizontalPadding = (16 * resources.displayMetrics.density).toInt()
-        val initialKhz = (initialFrequencyHz.coerceIn(3_501_000L, 3_700_000L) / 1_000L).toInt()
+        val initialKhz =
+            (
+                initialFrequencyHz.coerceIn(
+                    FrequencySupport.minimumTimedEventFrequencyHz,
+                    FrequencySupport.maximumTimedEventFrequencyHz,
+                ) / 1_000L
+            ).toInt()
         val previewView =
             sectionBody("").apply {
                 setTextColor(Color.parseColor("#2F5EA6"))
@@ -5017,7 +5665,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         (onesSpinner.selectedItem as Int)
                 }
                 val refreshSelection = {
-                    val boundedKhz = currentKhz().coerceIn(3501, 3700)
+                    val boundedKhz = currentKhz().coerceIn(3500, 3700)
                     if (boundedKhz != currentKhz()) {
                         setSpinnerSelectionByValue(hundredsSpinner, hundredsOptions, (boundedKhz % 1000) / 100)
                         setSpinnerSelectionByValue(tensSpinner, digitOptions, (boundedKhz % 100) / 10)
@@ -5064,7 +5712,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         (onesSpinner.selectedItem as Int)
                 }
                 val refreshSelection = {
-                    val boundedKhz = currentKhz().coerceIn(3501, 3700)
+                    val boundedKhz = currentKhz().coerceIn(3500, 3700)
                     if (boundedKhz != currentKhz()) {
                         setSpinnerSelectionByValue(hundredsSpinner, hundredsOptions, (boundedKhz % 1000) / 100)
                         setSpinnerSelectionByValue(tensSpinner, digitOptions, (boundedKhz % 100) / 10)
@@ -5588,6 +6236,33 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun saveDefaultEventLengthPreference() {
         uiPreferences.edit().putInt(PREF_DEFAULT_EVENT_LENGTH_MINUTES, defaultEventLengthMinutes.coerceIn(10, 24 * 60)).apply()
+    }
+
+    private fun loadTimedEventDefaultFrequenciesPreference(): TimedEventDefaultFrequencies {
+        val defaults = FrequencySupport.defaultTimedEventFrequencies
+        return FrequencySupport.sanitizeTimedEventDefaultFrequencies(
+            TimedEventDefaultFrequencies(
+                frequency1Hz = uiPreferences.getLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_1_HZ, defaults.frequency1Hz),
+                frequency2Hz = uiPreferences.getLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_2_HZ, defaults.frequency2Hz),
+                frequency3Hz = uiPreferences.getLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_3_HZ, defaults.frequency3Hz),
+                frequencyBHz = uiPreferences.getLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_B_HZ, defaults.frequencyBHz),
+            ),
+        )
+    }
+
+    private fun saveTimedEventDefaultFrequenciesPreference() {
+        val sanitizedDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(timedEventDefaultFrequencies)
+        timedEventDefaultFrequencies = sanitizedDefaults
+        uiPreferences.edit()
+            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_1_HZ, sanitizedDefaults.frequency1Hz)
+            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_2_HZ, sanitizedDefaults.frequency2Hz)
+            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_3_HZ, sanitizedDefaults.frequency3Hz)
+            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_B_HZ, sanitizedDefaults.frequencyBHz)
+            .apply()
+    }
+
+    private fun timedEventDefaultFrequencyText(frequencyHz: Long): String {
+        return "%.3f".format(Locale.US, frequencyHz / 1_000_000.0)
     }
 
     private fun relativeEditorSelectionForStart(
@@ -6428,9 +7103,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val PREF_RAW_SERIAL_VISIBLE = "raw_serial_visible"
         private const val PREF_SYSTEM_TIME_VISIBLE = "system_time_visible"
         private const val PREF_DEVICE_DATA_VISIBLE = "device_data_visible"
+        private const val PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED = "automatic_firmware_updates_enabled"
         private const val PREF_ADVANCED_MODE_ENABLED = "advanced_mode_enabled"
         private const val PREF_SCHEDULE_TIME_INPUT_MODE = "schedule_time_input_mode"
         private const val PREF_DEFAULT_EVENT_LENGTH_MINUTES = "default_event_length_minutes"
+        private const val PREF_TIMED_EVENT_DEFAULT_FREQUENCY_1_HZ = "timed_event_default_frequency_1_hz"
+        private const val PREF_TIMED_EVENT_DEFAULT_FREQUENCY_2_HZ = "timed_event_default_frequency_2_hz"
+        private const val PREF_TIMED_EVENT_DEFAULT_FREQUENCY_3_HZ = "timed_event_default_frequency_3_hz"
+        private const val PREF_TIMED_EVENT_DEFAULT_FREQUENCY_B_HZ = "timed_event_default_frequency_b_hz"
         private const val PREF_FREQUENCY_DISPLAY_UNIT = "frequency_display_unit"
         private const val PREF_TEMPERATURE_DISPLAY_UNIT = "temperature_display_unit"
         private const val PREF_DEVICE_TIME_SET_MODE = "device_time_set_mode"

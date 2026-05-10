@@ -7,6 +7,7 @@ import com.openardf.serialslinger.model.EditableDeviceSettings
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.WritePlan
+import com.openardf.serialslinger.platform.platformCurrentTimeMillis
 import com.openardf.serialslinger.protocol.DeviceReportUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareSupport
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
@@ -110,11 +111,11 @@ object DeviceSessionController {
         progress?.invoke(0, bootstrapCommands.size.coerceAtLeast(1))
 
         for (command in bootstrapCommands) {
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             commands += command
             lines += responseLines
             traceEntries += responseLines.map { line ->
@@ -138,18 +139,18 @@ object DeviceSessionController {
         updatedState = updatedState.copy(
             snapshot = updatedState.snapshot?.copy(capabilities = firmwareProfile.capabilities),
         )
-        val totalCommands = bootstrapCommands.size + firmwareProfile.loadCommandsAfterVersion.size
+        val totalCommands = bootstrapCommands.size + firmwareProfile.loadCommandsAfterVersion.size + 1
         progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
         for (command in firmwareProfile.loadCommandsAfterVersion) {
             val resolvedCommand = resolvePatternSpeedReadCommand(
                 command = command,
                 eventType = updatedState.snapshot?.settings?.eventType,
             )
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(resolvedCommand))
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, resolvedCommand)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             commands += resolvedCommand
             lines += responseLines
             traceEntries += responseLines.map { line ->
@@ -158,6 +159,30 @@ object DeviceSessionController {
             notifyReportReceived(responseLines)
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
             afterCommand?.invoke(resolvedCommand, updatedState, transport)?.let { intervention ->
+                commands += intervention.commandsSent
+                lines += intervention.linesReceived
+                traceEntries += intervention.traceEntries
+                notifyReportReceived(intervention.linesReceived)
+                updatedState = intervention.state
+            }
+            progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
+        }
+
+        if (updatedState.snapshot?.info?.bootloaderVersion.isNullOrBlank()) {
+            val command = "INF"
+            val sentAtMs = platformCurrentTimeMillis()
+            transport.sendCommands(listOf(command))
+            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+            val responseLines = transport.readAvailableLines()
+            val receivedAtMs = platformCurrentTimeMillis()
+            commands += command
+            lines += responseLines
+            traceEntries += responseLines.map { line ->
+                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+            }
+            notifyReportReceived(responseLines)
+            updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
+            afterCommand?.invoke(command, updatedState, transport)?.let { intervention ->
                 commands += intervention.commandsSent
                 lines += intervention.linesReceived
                 traceEntries += intervention.traceEntries
@@ -213,11 +238,11 @@ object DeviceSessionController {
         ).coerceAtLeast(1)
         progress?.invoke(0, totalCommands)
         for (command in submission.commands) {
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             submitTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             submitLines += responseLines
             submitTraceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
@@ -247,11 +272,11 @@ object DeviceSessionController {
 
         for (command in readbackCommands) {
             reportedReadbackCommands += command
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             readbackTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             readbackLines += responseLines
             readbackTraceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)

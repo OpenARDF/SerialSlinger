@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.SENDTO" />
@@ -49,7 +51,9 @@
                 <action android:name="com.SerialSlinger.openardf.DEBUG_SET_START_TIME" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_SET_FINISH_TIME" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_SET_DAYS_TO_RUN" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_RAW_COMMAND" />
                 <action android:name="com.SerialSlinger.openardf.DEBUG_CLONE" />
+                <action android:name="com.SerialSlinger.openardf.DEBUG_CLONE_WAIT" />
             </intent-filter>
         </receiver>
         <activity

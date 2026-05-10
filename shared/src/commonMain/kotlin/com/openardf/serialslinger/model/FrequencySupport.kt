@@ -36,7 +36,25 @@ data class FrequencyPresentation(
     val banks: List<FrequencyBankState>,
 )
 
+data class TimedEventDefaultFrequencies(
+    val frequency1Hz: Long,
+    val frequency2Hz: Long,
+    val frequency3Hz: Long,
+    val frequencyBHz: Long,
+)
+
 object FrequencySupport {
+    const val minimumTimedEventFrequencyHz = 3_500_000L
+    const val maximumTimedEventFrequencyHz = 3_700_000L
+
+    val defaultTimedEventFrequencies =
+        TimedEventDefaultFrequencies(
+            frequency1Hz = 3_530_000L,
+            frequency2Hz = 3_550_000L,
+            frequency3Hz = 3_570_000L,
+            frequencyBHz = 3_600_000L,
+        )
+
     private val unitPattern = Regex("""^\s*([0-9]+(?:\.[0-9]+)?)\s*([kKmM]?)[hH][zZ]\s*$""")
     private val numericPattern = Regex("""^\s*([0-9]+(?:\.[0-9]+)?)\s*$""")
 
@@ -78,6 +96,32 @@ object FrequencySupport {
         val fractionalKhz = ((absoluteHz % 1_000_000) / 1_000).toInt()
         val sign = if (frequencyHz < 0) "-" else ""
         return "$sign$wholeMhz.${fractionalKhz.toString().padStart(3, '0')} MHz"
+    }
+
+    fun coerceTimedEventFrequencyHz(frequencyHz: Long): Long {
+        return frequencyHz.coerceIn(minimumTimedEventFrequencyHz, maximumTimedEventFrequencyHz)
+    }
+
+    fun sanitizeTimedEventDefaultFrequencies(defaults: TimedEventDefaultFrequencies): TimedEventDefaultFrequencies {
+        return TimedEventDefaultFrequencies(
+            frequency1Hz = coerceTimedEventFrequencyHz(defaults.frequency1Hz),
+            frequency2Hz = coerceTimedEventFrequencyHz(defaults.frequency2Hz),
+            frequency3Hz = coerceTimedEventFrequencyHz(defaults.frequency3Hz),
+            frequencyBHz = coerceTimedEventFrequencyHz(defaults.frequencyBHz),
+        )
+    }
+
+    fun applyTimedEventDefaultFrequencies(
+        settings: DeviceSettings,
+        defaults: TimedEventDefaultFrequencies,
+    ): DeviceSettings {
+        val sanitizedDefaults = sanitizeTimedEventDefaultFrequencies(defaults)
+        return settings.copy(
+            lowFrequencyHz = sanitizedDefaults.frequency1Hz,
+            mediumFrequencyHz = sanitizedDefaults.frequency2Hz,
+            highFrequencyHz = sanitizedDefaults.frequency3Hz,
+            beaconFrequencyHz = sanitizedDefaults.frequencyBHz,
+        )
     }
 
     fun activeFrequencySlots(settings: DeviceSettings): List<FrequencySlot> {

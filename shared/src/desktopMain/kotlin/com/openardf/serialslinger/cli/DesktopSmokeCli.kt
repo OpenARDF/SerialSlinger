@@ -11,7 +11,11 @@ import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.session.DeviceSubmitResult
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.FirmwareCloneSession
+import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
+import com.openardf.serialslinger.transport.DesktopFirmwareUpdateTransport
 import com.openardf.serialslinger.transport.DesktopSerialTransport
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import java.time.LocalDateTime
 
@@ -34,6 +38,20 @@ sealed interface DesktopSmokeCommand {
     data class Raw(
         val port: String,
         val commands: List<String>,
+    ) : DesktopSmokeCommand
+
+    data class UpdateProbe(
+        val port: String,
+        val recoverAlreadyWaiting: Boolean,
+        val updateBaud: Int,
+        val resetAppFirst: Boolean,
+    ) : DesktopSmokeCommand
+
+    data class Update(
+        val port: String,
+        val manifestPath: String,
+        val recoverAlreadyWaiting: Boolean,
+        val allowAppHardwareMismatch: Boolean,
     ) : DesktopSmokeCommand
 }
 
@@ -67,6 +85,26 @@ object DesktopSmokeCliParser {
                     commands = args.drop(2),
                 )
             }
+            "update-probe" -> {
+                if (args.size < 2) return null
+                DesktopSmokeCommand.UpdateProbe(
+                    port = args[1],
+                    recoverAlreadyWaiting = args.drop(2).any { it == "--already-waiting" },
+                    updateBaud = args.drop(2).firstNotNullOfOrNull { argument ->
+                        argument.removePrefix("--update-baud=").takeIf { it != argument }?.toInt()
+                    } ?: 115_200,
+                    resetAppFirst = args.drop(2).any { it == "--reset-app" },
+                )
+            }
+            "update" -> {
+                if (args.size < 3) return null
+                DesktopSmokeCommand.Update(
+                    port = args[1],
+                    manifestPath = args[2],
+                    recoverAlreadyWaiting = args.drop(3).any { it == "--already-waiting" },
+                    allowAppHardwareMismatch = args.drop(3).any { it == "--allow-hardware-mismatch" },
+                )
+            }
             else -> null
         }
     }
@@ -89,6 +127,18 @@ fun main(args: Array<String>) {
         is DesktopSmokeCommand.Clone -> runClone(command.port)
         is DesktopSmokeCommand.Submit -> runSubmit(command.port, command.assignments)
         is DesktopSmokeCommand.Raw -> runRaw(command.port, command.commands)
+        is DesktopSmokeCommand.UpdateProbe -> runUpdateProbe(
+            command.port,
+            command.recoverAlreadyWaiting,
+            command.updateBaud,
+            command.resetAppFirst,
+        )
+        is DesktopSmokeCommand.Update -> runUpdate(
+            command.port,
+            command.manifestPath,
+            command.recoverAlreadyWaiting,
+            command.allowAppHardwareMismatch,
+        )
         null -> printUsage()
     }
 }
@@ -209,6 +259,119 @@ private fun runRaw(port: String, commands: List<String>) {
         }
     } finally {
         transport.disconnect()
+    }
+}
+
+private fun runUpdateProbe(
+    port: String,
+    recoverAlreadyWaiting: Boolean,
+    updateBaud: Int,
+    resetAppFirst: Boolean,
+) {
+    val transport = DesktopFirmwareUpdateTransport(port)
+    try {
+        if (resetAppFirst) {
+            println("Opening app connection at 9600 baud.")
+            transport.connect(9_600)
+            println("TX **\\\\r")
+            transport.writeAscii("**\r")
+            printLines("Wake replies", transport.readLines(200))
+            println("TX RST\\\\n")
+            transport.writeAscii("RST\n")
+            printLines("Reset replies", transport.readLines(150))
+            transport.disconnect()
+        } else if (!recoverAlreadyWaiting) {
+            println("Opening app connection at 9600 baud.")
+            transport.connect(9_600)
+            println("TX **\\\\r")
+            transport.writeAscii("**\r")
+            printLines("Wake replies", transport.readLines(200))
+            println("TX UPD\\\\r")
+            transport.writeAscii("UPD\r")
+            val appLines = transport.readLines(1_500)
+            printLines("App/update-entry replies", appLines)
+            transport.disconnect()
+        }
+
+        println("Opening update connection at $updateBaud baud.")
+        transport.connect(updateBaud)
+        var identityLine: String? = null
+        repeat(12) { attempt ->
+            if (identityLine != null) {
+                return@repeat
+            }
+            println("TX U (attempt ${attempt + 1})")
+            transport.writeAscii("U")
+            val lines = transport.readLines(300)
+            printLines("Update-entry replies", lines)
+            identityLine = lines.firstOrNull { SignalSlingerFirmwareUpdate.parseIdentityLine(it) != null }
+            if (identityLine == null && lines.any { it.trim() == "BOOT" }) {
+                println("TX ?")
+                transport.writeAscii("?")
+                val infoLines = transport.readLines(700)
+                printLines("Info replies", infoLines)
+                identityLine = infoLines.firstOrNull { SignalSlingerFirmwareUpdate.parseIdentityLine(it) != null }
+            }
+        }
+        val identity = identityLine?.let(SignalSlingerFirmwareUpdate::parseIdentityLine)
+        println("Parsed identity: ${identity ?: "<none>"}")
+        println("TX R")
+        transport.writeAscii("R")
+    } finally {
+        transport.disconnect()
+    }
+}
+
+private fun runUpdate(
+    port: String,
+    manifestPath: String,
+    recoverAlreadyWaiting: Boolean,
+    allowAppHardwareMismatch: Boolean,
+) {
+    val manifestFile = Path.of(manifestPath)
+    val release = SignalSlingerFirmwareUpdate.parseReleaseInfo(Files.readString(manifestFile))
+    val updateFile = release.updateFile()
+    val hexFile = manifestFile.parent.resolve(updateFile.fileName)
+    val hexBytes = Files.readAllBytes(hexFile)
+    SignalSlingerFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
+    val transport = DesktopFirmwareUpdateTransport(port)
+    try {
+        SignalSlingerFirmwareUpdate.performUpdate(
+            transport = transport,
+            release = release,
+            hexText = hexBytes.decodeToString(),
+            recoverAlreadyWaiting = recoverAlreadyWaiting,
+            allowAppHardwareMismatch = allowAppHardwareMismatch,
+            progress = { progress ->
+                println(
+                    buildString {
+                        append(progress.stage)
+                        if (progress.totalPages > 0) {
+                            append(" ")
+                            append(progress.completedPages)
+                            append("/")
+                            append(progress.totalPages)
+                        }
+                        progress.detail?.let { append(" - ").append(it) }
+                    },
+                )
+            },
+        )
+        println("Update completed: ${release.product} ${release.version} ${release.board}")
+    } finally {
+        transport.disconnect()
+    }
+}
+
+private fun printLines(
+    label: String,
+    lines: List<String>,
+) {
+    println("$label:")
+    if (lines.isEmpty()) {
+        println("  <no lines>")
+    } else {
+        lines.forEach { println("  $it") }
     }
 }
 
