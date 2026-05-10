@@ -87,6 +87,7 @@ import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
 import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
 import com.openardf.serialslinger.model.ThermalShutdownSupport
+import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
@@ -165,6 +166,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var deviceTimeSetMode: AndroidDeviceTimeSetMode = AndroidDeviceTimeSetMode.AUTOMATIC
     private var scheduleTimeInputMode: AndroidScheduleTimeInputMode = AndroidScheduleTimeInputMode.ABSOLUTE
     private var defaultEventLengthMinutes: Int = 6 * 60
+    private var timedEventDefaultFrequencies: TimedEventDefaultFrequencies = FrequencySupport.defaultTimedEventFrequencies
     private var rawSerialVisible: Boolean = true
     private var systemTimeVisible: Boolean = false
     private var deviceDataVisible: Boolean = true
@@ -375,6 +377,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             )
         defaultEventLengthMinutes =
             uiPreferences.getInt(PREF_DEFAULT_EVENT_LENGTH_MINUTES, 6 * 60).coerceIn(10, 24 * 60)
+        timedEventDefaultFrequencies = loadTimedEventDefaultFrequenciesPreference()
         usbManager = getSystemService(UsbManager::class.java)
         val spacingPx = (16 * resources.displayMetrics.density).toInt()
 
@@ -3498,13 +3501,19 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             "Device Time Setting (${if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) "Manual" else "Automatic"})",
             "Schedule Time Setting (${if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"})",
             "Default Event Length (${formatDefaultEventLength(defaultEventLengthMinutes)})",
+            "Timed Event Default Frequencies",
+            "Set Frequencies to Defaults",
             "${if (systemTimeVisible) "Hide" else "Show"} System Time",
             "${if (deviceDataVisible) "Hide" else "Show"} Device Data",
             "Set Events to Championships Settings",
             "About (Ver $appVersionLabel)",
         )
         val enabledRows = labels.indices.map { index ->
-            index != 7 || championshipSettingsEnabled
+            when (index) {
+                6 -> displayedTimedEventSettings != null
+                9 -> championshipSettingsEnabled
+                else -> true
+            }
         }
         val adapter =
             object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
@@ -3531,10 +3540,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     2 -> showDeviceTimeSettingDialog()
                     3 -> showScheduleTimeInputSettingDialog()
                     4 -> showDefaultEventLengthDialog()
-                    5 -> setSystemTimeVisible(!systemTimeVisible)
-                    6 -> setDeviceDataVisible(!deviceDataVisible)
-                    7 -> showChampionshipSettingsConfirmation()
-                    8 -> showAboutDialog()
+                    5 -> showTimedEventDefaultFrequenciesDialog()
+                    6 -> applyTimedEventDefaultFrequenciesFromSettings()
+                    7 -> setSystemTimeVisible(!systemTimeVisible)
+                    8 -> setDeviceDataVisible(!deviceDataVisible)
+                    9 -> showChampionshipSettingsConfirmation()
+                    10 -> showAboutDialog()
                 }
                 dialog.dismiss()
             }
@@ -3742,6 +3753,115 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
             .setNegativeButton("Cancel", null)
             .showLogged("Default Event Length")
+    }
+
+    private fun showTimedEventDefaultFrequenciesDialog() {
+        val dialogHorizontalPadding = (20 * resources.displayMetrics.density).toInt()
+        val dialogVerticalPadding = (12 * resources.displayMetrics.density).toInt()
+        val currentDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(timedEventDefaultFrequencies)
+
+        fun frequencyField(initialFrequencyHz: Long): EditText {
+            return EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                imeOptions = EditorInfo.IME_ACTION_DONE
+                setText(timedEventDefaultFrequencyText(initialFrequencyHz))
+                setSelection(text.length)
+            }
+        }
+
+        fun frequencyRow(label: String, field: EditText): LinearLayout {
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text = label
+                        textSize = 14f
+                        setTextColor(Color.parseColor("#1F1F1F"))
+                    },
+                )
+                addView(field)
+            }
+        }
+
+        fun parseTimedEventDefaultFrequency(fieldLabel: String, rawValue: String): Long {
+            val parsedFrequencyHz = FrequencySupport.parseFrequencyHz(rawValue)
+                ?: throw IllegalArgumentException("$fieldLabel must be a valid MHz value between 3.50 and 3.70.")
+            require(parsedFrequencyHz in FrequencySupport.minimumTimedEventFrequencyHz..FrequencySupport.maximumTimedEventFrequencyHz) {
+                "$fieldLabel must be between 3.50 and 3.70 MHz."
+            }
+            return parsedFrequencyHz
+        }
+
+        val frequency1Field = frequencyField(currentDefaults.frequency1Hz)
+        val frequency2Field = frequencyField(currentDefaults.frequency2Hz)
+        val frequency3Field = frequencyField(currentDefaults.frequency3Hz)
+        val frequencyBField = frequencyField(currentDefaults.frequencyBHz)
+        val helperText =
+            TextView(this).apply {
+                text = "Enter values from 3.50 to 3.70 MHz. Shared values are allowed."
+                textSize = 13f
+                setTextColor(Color.parseColor("#5F6368"))
+            }
+
+        val contentView =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dialogHorizontalPadding, dialogVerticalPadding, dialogHorizontalPadding, 0)
+                addView(frequencyRow("Frequency 1", frequency1Field))
+                addView(frequencyRow("Frequency 2", frequency2Field))
+                addView(frequencyRow("Frequency 3", frequency3Field))
+                addView(frequencyRow("Frequency B", frequencyBField))
+                addView(helperText)
+            }
+
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Timed Event Default Frequencies")
+                .setView(contentView)
+                .setPositiveButton("Save", null)
+                .setNegativeButton("Cancel", null)
+                .showLogged("Timed Event Default Frequencies")
+
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            try {
+                timedEventDefaultFrequencies =
+                    FrequencySupport.sanitizeTimedEventDefaultFrequencies(
+                        TimedEventDefaultFrequencies(
+                            frequency1Hz = parseTimedEventDefaultFrequency("Frequency 1", frequency1Field.text.toString()),
+                            frequency2Hz = parseTimedEventDefaultFrequency("Frequency 2", frequency2Field.text.toString()),
+                            frequency3Hz = parseTimedEventDefaultFrequency("Frequency 3", frequency3Field.text.toString()),
+                            frequencyBHz = parseTimedEventDefaultFrequency("Frequency B", frequencyBField.text.toString()),
+                        ),
+                    )
+                saveTimedEventDefaultFrequenciesPreference()
+                dialog.dismiss()
+                showStatusPopup("Saved timed event default frequencies.")
+            } catch (exception: IllegalArgumentException) {
+                showStatusPopup(exception.message ?: "Invalid timed event default frequency.")
+            }
+        }
+    }
+
+    private fun applyTimedEventDefaultFrequenciesFromSettings() {
+        val defaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(timedEventDefaultFrequencies)
+        if (displayedTimedEventSettings == null && !isPreviewModeActive()) {
+            showStatusPopup("Load Timed Event Settings first.")
+            return
+        }
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            if (isPreviewModeActive()) {
+                updatePreviewSettings { settings ->
+                    FrequencySupport.applyTimedEventDefaultFrequencies(settings, defaults)
+                }
+                showStatusPopup("Applied default frequencies to preview timed event settings.")
+                return@runTimedEventSettingsChangeWithCloneTemplateGuard
+            }
+            AndroidSessionController.runTimedEventFrequencyDefaultsSubmit(
+                context = this,
+                defaults = defaults,
+                source = "settings-menu",
+            )
+        }
     }
 
     private fun showLastsDurationDialog(
@@ -5381,7 +5501,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         guardCloneTemplate: Boolean = false,
         onSubmit: (Long) -> Unit,
     ) {
-        var currentFrequencyHz = selectedFrequencyHz?.coerceIn(3_501_000L, 3_700_000L) ?: 3_520_000L
+        var currentFrequencyHz =
+            selectedFrequencyHz?.coerceIn(
+                FrequencySupport.minimumTimedEventFrequencyHz,
+                FrequencySupport.maximumTimedEventFrequencyHz,
+            ) ?: 3_520_000L
         lateinit var valueView: EditText
         valueView =
             pickerField(
@@ -5412,7 +5536,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         onSelected: (Long) -> Unit,
     ) {
         val dialogHorizontalPadding = (16 * resources.displayMetrics.density).toInt()
-        val initialKhz = (initialFrequencyHz.coerceIn(3_501_000L, 3_700_000L) / 1_000L).toInt()
+        val initialKhz =
+            (
+                initialFrequencyHz.coerceIn(
+                    FrequencySupport.minimumTimedEventFrequencyHz,
+                    FrequencySupport.maximumTimedEventFrequencyHz,
+                ) / 1_000L
+            ).toInt()
         val previewView =
             sectionBody("").apply {
                 setTextColor(Color.parseColor("#2F5EA6"))
@@ -5453,7 +5583,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         (onesSpinner.selectedItem as Int)
                 }
                 val refreshSelection = {
-                    val boundedKhz = currentKhz().coerceIn(3501, 3700)
+                    val boundedKhz = currentKhz().coerceIn(3500, 3700)
                     if (boundedKhz != currentKhz()) {
                         setSpinnerSelectionByValue(hundredsSpinner, hundredsOptions, (boundedKhz % 1000) / 100)
                         setSpinnerSelectionByValue(tensSpinner, digitOptions, (boundedKhz % 100) / 10)
@@ -5500,7 +5630,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         (onesSpinner.selectedItem as Int)
                 }
                 val refreshSelection = {
-                    val boundedKhz = currentKhz().coerceIn(3501, 3700)
+                    val boundedKhz = currentKhz().coerceIn(3500, 3700)
                     if (boundedKhz != currentKhz()) {
                         setSpinnerSelectionByValue(hundredsSpinner, hundredsOptions, (boundedKhz % 1000) / 100)
                         setSpinnerSelectionByValue(tensSpinner, digitOptions, (boundedKhz % 100) / 10)
@@ -6024,6 +6154,33 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun saveDefaultEventLengthPreference() {
         uiPreferences.edit().putInt(PREF_DEFAULT_EVENT_LENGTH_MINUTES, defaultEventLengthMinutes.coerceIn(10, 24 * 60)).apply()
+    }
+
+    private fun loadTimedEventDefaultFrequenciesPreference(): TimedEventDefaultFrequencies {
+        val defaults = FrequencySupport.defaultTimedEventFrequencies
+        return FrequencySupport.sanitizeTimedEventDefaultFrequencies(
+            TimedEventDefaultFrequencies(
+                frequency1Hz = uiPreferences.getLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_1_HZ, defaults.frequency1Hz),
+                frequency2Hz = uiPreferences.getLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_2_HZ, defaults.frequency2Hz),
+                frequency3Hz = uiPreferences.getLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_3_HZ, defaults.frequency3Hz),
+                frequencyBHz = uiPreferences.getLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_B_HZ, defaults.frequencyBHz),
+            ),
+        )
+    }
+
+    private fun saveTimedEventDefaultFrequenciesPreference() {
+        val sanitizedDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(timedEventDefaultFrequencies)
+        timedEventDefaultFrequencies = sanitizedDefaults
+        uiPreferences.edit()
+            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_1_HZ, sanitizedDefaults.frequency1Hz)
+            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_2_HZ, sanitizedDefaults.frequency2Hz)
+            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_3_HZ, sanitizedDefaults.frequency3Hz)
+            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_B_HZ, sanitizedDefaults.frequencyBHz)
+            .apply()
+    }
+
+    private fun timedEventDefaultFrequencyText(frequencyHz: Long): String {
+        return "%.3f".format(Locale.US, frequencyHz / 1_000_000.0)
     }
 
     private fun relativeEditorSelectionForStart(
@@ -6868,6 +7025,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val PREF_ADVANCED_MODE_ENABLED = "advanced_mode_enabled"
         private const val PREF_SCHEDULE_TIME_INPUT_MODE = "schedule_time_input_mode"
         private const val PREF_DEFAULT_EVENT_LENGTH_MINUTES = "default_event_length_minutes"
+        private const val PREF_TIMED_EVENT_DEFAULT_FREQUENCY_1_HZ = "timed_event_default_frequency_1_hz"
+        private const val PREF_TIMED_EVENT_DEFAULT_FREQUENCY_2_HZ = "timed_event_default_frequency_2_hz"
+        private const val PREF_TIMED_EVENT_DEFAULT_FREQUENCY_3_HZ = "timed_event_default_frequency_3_hz"
+        private const val PREF_TIMED_EVENT_DEFAULT_FREQUENCY_B_HZ = "timed_event_default_frequency_b_hz"
         private const val PREF_FREQUENCY_DISPLAY_UNIT = "frequency_display_unit"
         private const val PREF_TEMPERATURE_DISPLAY_UNIT = "temperature_display_unit"
         private const val PREF_DEVICE_TIME_SET_MODE = "device_time_set_mode"

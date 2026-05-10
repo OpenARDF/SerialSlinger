@@ -25,6 +25,7 @@ import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
 import com.openardf.serialslinger.model.ThermalShutdownSupport
+import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
@@ -2440,6 +2441,156 @@ object AndroidSessionController {
 
             emitCommandLog(
                 command = "set-frequency-bank",
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+            )
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(result) }
+            }
+        }
+    }
+
+    fun runTimedEventFrequencyDefaultsSubmit(
+        context: Context,
+        defaults: TimedEventDefaultFrequencies,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
+    ) {
+        val sanitizedDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(defaults)
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+        val snapshot = sessionState?.snapshot
+        val editableSettings = sessionState?.editableSettings
+        val templateToUpdate = synchronized(this) { cloneTemplateSettings ?: snapshot?.settings }
+
+        if (templateToUpdate == null) {
+            val error = IllegalStateException("Load Timed Event Settings before applying default frequencies.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "Default frequency update failed."
+                statusIsError = true
+            }
+            emitCommandLog("set-frequency-defaults", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(Result.failure(error)) }
+            }
+            return
+        }
+
+        synchronized(this) {
+            cloneTemplateSettings = FrequencySupport.applyTimedEventDefaultFrequencies(templateToUpdate, sanitizedDefaults)
+            cloneTemplateTimedEventEditsLocked = false
+            if (cloneTemplateDaysRemaining == null) {
+                cloneTemplateDaysRemaining = snapshot?.status?.daysRemaining
+            }
+        }
+
+        if (sessionState == null || snapshot == null || editableSettings == null) {
+            synchronized(this) {
+                latestSubmitSummary = "Timed Event default frequencies saved to clone settings."
+                latestProbeSummary = "Latest load remains available above. Clone settings were updated."
+                statusText = "Timed Event default frequencies updated."
+                statusIsError = false
+            }
+            emitCommandLog(
+                "set-frequency-defaults",
+                source,
+                success = true,
+                summary = "Updated clone template timed event frequencies.",
+            )
+            notifyListeners()
+            return
+        }
+
+        if (!snapshot.capabilities.supportsFrequencyProfiles) {
+            val error =
+                IllegalStateException(
+                    "Timed Event default frequencies were saved to clone settings, " +
+                        "but the connected device does not support frequency bank editing.",
+                )
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "Default frequencies saved to clone settings only."
+                statusIsError = true
+            }
+            emitCommandLog("set-frequency-defaults", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post { callback(Result.failure(error)) }
+            }
+            return
+        }
+
+        synchronized(this) {
+            latestSubmitSummary = "Submitting timed event default frequencies..."
+            statusText = "Submitting timed event default frequencies..."
+            statusIsError = false
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-frequency-defaults-submit") {
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                resolvedTarget = target
+                DeviceSessionController.submitEdits(
+                    sessionState,
+                    editableSettingsWithTimedEventDefaultFrequencies(editableSettings, sanitizedDefaults),
+                    transport,
+                )
+            }
+
+            synchronized(this) {
+                if (result.isSuccess) {
+                    val submitResult = result.getOrThrow()
+                    val wasNoOp = submitResult.wasNoOp()
+                    latestSessionViewState = AndroidSessionViewState(
+                        state = submitResult.state,
+                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
+                    )
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
+                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
+                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
+                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
+                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
+                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
+                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
+                    latestSubmitSummary = renderSubmitSummary(submitResult)
+                    latestProbeSummary =
+                        if (wasNoOp) {
+                            "Latest load remains available above. Timed Event frequencies already matched the saved defaults."
+                        } else {
+                            "Latest load remains available above. Timed Event default frequencies were applied."
+                        }
+                    statusText =
+                        if (wasNoOp) {
+                            "Timed Event default frequencies already matched."
+                        } else {
+                            "Timed Event default frequencies updated and verified."
+                        }
+                    statusIsError = false
+                } else {
+                    latestSubmitSummary = buildString {
+                        appendLine("Submit failed.")
+                        append(result.exceptionOrNull()?.message ?: "Unknown error")
+                    }.trim()
+                    statusText = "Default frequencies saved to clone settings only."
+                    statusIsError = true
+                }
+            }
+
+            emitCommandLog(
+                command = "set-frequency-defaults",
                 source = source,
                 success = result.isSuccess,
                 summary = synchronized(this) { latestSubmitSummary },
@@ -5072,6 +5223,19 @@ object AndroidSessionController {
             mediumFrequencyHz = SettingsField("mediumFrequencyHz", "Frequency 2 (FRE 2)", targetBaseSettings.mediumFrequencyHz, templateSettings.mediumFrequencyHz),
             highFrequencyHz = SettingsField("highFrequencyHz", "Frequency 3 (FRE 3)", targetBaseSettings.highFrequencyHz, templateSettings.highFrequencyHz),
             beaconFrequencyHz = SettingsField("beaconFrequencyHz", "Frequency B (FRE B)", targetBaseSettings.beaconFrequencyHz, templateSettings.beaconFrequencyHz),
+        )
+    }
+
+    private fun editableSettingsWithTimedEventDefaultFrequencies(
+        editableSettings: EditableDeviceSettings,
+        defaults: TimedEventDefaultFrequencies,
+    ): EditableDeviceSettings {
+        val sanitizedDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(defaults)
+        return editableSettings.copy(
+            lowFrequencyHz = editableSettings.lowFrequencyHz.copy(editedValue = sanitizedDefaults.frequency1Hz),
+            mediumFrequencyHz = editableSettings.mediumFrequencyHz.copy(editedValue = sanitizedDefaults.frequency2Hz),
+            highFrequencyHz = editableSettings.highFrequencyHz.copy(editedValue = sanitizedDefaults.frequency3Hz),
+            beaconFrequencyHz = editableSettings.beaconFrequencyHz.copy(editedValue = sanitizedDefaults.frequencyBHz),
         )
     }
 

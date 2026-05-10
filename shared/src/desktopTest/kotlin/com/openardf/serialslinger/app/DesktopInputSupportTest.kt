@@ -536,9 +536,9 @@ class DesktopInputSupportTest {
 
     @Test
     fun convertsKhzSpinnerValueToFrequencyHz() {
-        val frequencyHz = DesktopInputSupport.frequencyHzFromSpinnerValue(3501, FrequencyDisplayUnit.KHZ)
+        val frequencyHz = DesktopInputSupport.frequencyHzFromSpinnerValue(3500, FrequencyDisplayUnit.KHZ)
 
-        assertEquals(3_501_000L, frequencyHz)
+        assertEquals(3_500_000L, frequencyHz)
     }
 
     @Test

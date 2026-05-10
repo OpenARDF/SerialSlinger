@@ -126,4 +126,61 @@ class FrequencySupportTest {
     fun rejectsMalformedFrequencyInput() {
         assertNull(FrequencySupport.parseFrequencyHz("three point five MHz"))
     }
+
+    @Test
+    fun sanitizesTimedEventDefaultFrequenciesToSupportedRange() {
+        assertEquals(
+            TimedEventDefaultFrequencies(
+                frequency1Hz = 3_500_000L,
+                frequency2Hz = 3_530_000L,
+                frequency3Hz = 3_700_000L,
+                frequencyBHz = 3_700_000L,
+            ),
+            FrequencySupport.sanitizeTimedEventDefaultFrequencies(
+                TimedEventDefaultFrequencies(
+                    frequency1Hz = 3_490_000L,
+                    frequency2Hz = 3_530_000L,
+                    frequency3Hz = 3_701_000L,
+                    frequencyBHz = 3_900_000L,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun appliesTimedEventDefaultFrequenciesToFrequencyBanksOnly() {
+        val settings = DeviceSettings(
+            stationId = "NZ0I",
+            eventType = EventType.SPRINT,
+            foxRole = FoxRole.SPRINT_SLOW_1,
+            patternText = "MOH",
+            idCodeSpeedWpm = 12,
+            patternCodeSpeedWpm = 15,
+            currentTimeCompact = "20260510120000",
+            startTimeCompact = "20260510130000",
+            finishTimeCompact = "20260510140000",
+            daysToRun = 2,
+            defaultFrequencyHz = 3_520_000L,
+            lowFrequencyHz = 3_520_000L,
+            mediumFrequencyHz = 3_540_000L,
+            highFrequencyHz = 3_560_000L,
+            beaconFrequencyHz = 3_580_000L,
+            lowBatteryThresholdVolts = 3.8,
+            externalBatteryControlMode = ExternalBatteryControlMode.CHARGE_AND_TRANSMIT,
+            transmissionsEnabled = true,
+        )
+
+        assertEquals(
+            settings.copy(
+                lowFrequencyHz = 3_530_000L,
+                mediumFrequencyHz = 3_550_000L,
+                highFrequencyHz = 3_570_000L,
+                beaconFrequencyHz = 3_600_000L,
+            ),
+            FrequencySupport.applyTimedEventDefaultFrequencies(
+                settings,
+                FrequencySupport.defaultTimedEventFrequencies,
+            ),
+        )
+    }
 }

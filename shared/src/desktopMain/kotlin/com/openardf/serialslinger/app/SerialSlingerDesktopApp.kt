@@ -24,6 +24,7 @@ import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
 import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
 import com.openardf.serialslinger.model.ThermalShutdownSupport
+import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.model.hasWallClockTimeSet
@@ -426,8 +427,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private lateinit var advancedModeMenuItem: JMenuItem
     private lateinit var installBootloaderMenuItem: JMenuItem
     private lateinit var installBootloaderBarePcbMenuItem: JMenuItem
+    private lateinit var resetVolatileTemperatureExtremaMenuItem: JMenuItem
+    private lateinit var resetMaximumEverTemperatureMenuItem: JMenuItem
     private lateinit var temperatureLogsMenuItem: JMenuItem
     private lateinit var temperatureLogMenuItem: JCheckBoxMenuItem
+    private var temperatureResetCommandsSupported: Boolean? = null
     private var temperatureLogTimer: Timer? = null
     private val temperatureLogSampleInProgress = AtomicBoolean(false)
     private var advancedDeviceDataTimer: Timer? = null
@@ -778,6 +782,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     updateDefaultEventLengthMenuItem()
                     add(defaultEventLengthMenuItem)
+                    add(
+                        JMenuItem("Timed Event Default Frequencies...").apply {
+                            addActionListener { showTimedEventDefaultFrequenciesDialog() }
+                        },
+                    )
+                    add(
+                        JMenuItem("Set Frequencies to Defaults").apply {
+                            addActionListener { applyTimedEventDefaultFrequenciesFromMenu() }
+                        },
+                    )
                     addSeparator()
                     add(
                         JMenu("Frequency Units").apply {
@@ -879,6 +893,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     add(automaticFirmwareUpdatesMenuItem)
                     addSeparator()
+                    resetVolatileTemperatureExtremaMenuItem = JMenuItem("Reset Volatile Max/Min Temperature...").apply {
+                        addActionListener { confirmAndResetVolatileTemperatureExtrema() }
+                    }
+                    add(resetVolatileTemperatureExtremaMenuItem)
                     add(
                         JMenuItem("Clear Current Log...").apply {
                             addActionListener { confirmAndClearCurrentLog() }
@@ -900,6 +918,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         }
                     }
                     add(advancedModeMenuItem)
+                    resetMaximumEverTemperatureMenuItem = JMenuItem("Reset EEPROM Max Ever Temperature...").apply {
+                        addActionListener { confirmAndResetMaximumEverTemperature() }
+                    }
+                    add(resetMaximumEverTemperatureMenuItem)
                     temperatureLogsMenuItem = JMenuItem("Temperature Logs").apply {
                         addActionListener { showTemperatureLogsDialog() }
                     }
@@ -1052,6 +1074,142 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 exception.message ?: "Invalid Default Event Length.",
                 "Default Event Length",
                 JOptionPane.WARNING_MESSAGE,
+            )
+        }
+    }
+
+    private fun showTimedEventDefaultFrequenciesDialog() {
+        val initialDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(displayPreferences.timedEventDefaultFrequencies)
+        val frequency1Spinner = createFrequencySpinner()
+        val frequency2Spinner = createFrequencySpinner()
+        val frequency3Spinner = createFrequencySpinner()
+        val frequencyBSpinner = createFrequencySpinner()
+        configureFrequencySpinner(frequency1Spinner, initialDefaults.frequency1Hz)
+        configureFrequencySpinner(frequency2Spinner, initialDefaults.frequency2Hz)
+        configureFrequencySpinner(frequency3Spinner, initialDefaults.frequency3Hz)
+        configureFrequencySpinner(frequencyBSpinner, initialDefaults.frequencyBHz)
+
+        val summaryLabel = JLabel().apply {
+            foreground = cloneAccentColor
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+
+        fun selectedDefaults(): TimedEventDefaultFrequencies {
+            return FrequencySupport.sanitizeTimedEventDefaultFrequencies(
+                TimedEventDefaultFrequencies(
+                    frequency1Hz = selectedFrequencyHz(frequency1Spinner),
+                    frequency2Hz = selectedFrequencyHz(frequency2Spinner),
+                    frequency3Hz = selectedFrequencyHz(frequency3Spinner),
+                    frequencyBHz = selectedFrequencyHz(frequencyBSpinner),
+                ),
+            )
+        }
+
+        fun refreshSummary() {
+            val selected = selectedDefaults()
+            summaryLabel.text =
+                "Saved defaults: ${FrequencySupport.formatFrequencyMhz(selected.frequency1Hz)}, " +
+                    "${FrequencySupport.formatFrequencyMhz(selected.frequency2Hz)}, " +
+                    "${FrequencySupport.formatFrequencyMhz(selected.frequency3Hz)}, " +
+                    "${FrequencySupport.formatFrequencyMhz(selected.frequencyBHz)}"
+        }
+
+        listOf(frequency1Spinner, frequency2Spinner, frequency3Spinner, frequencyBSpinner).forEach { spinner ->
+            spinner.addChangeListener { refreshSummary() }
+        }
+        refreshSummary()
+
+        fun frequencyRow(label: String, spinner: JSpinner): JPanel {
+            return JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
+                isOpaque = false
+                alignmentX = Component.LEFT_ALIGNMENT
+                add(JLabel(label))
+                add(Box.createHorizontalStrut(10))
+                add(spinner)
+            }
+        }
+
+        val panel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(summaryLabel)
+            add(Box.createVerticalStrut(10))
+            add(frequencyRow("Frequency 1", frequency1Spinner))
+            add(Box.createVerticalStrut(6))
+            add(frequencyRow("Frequency 2", frequency2Spinner))
+            add(Box.createVerticalStrut(6))
+            add(frequencyRow("Frequency 3", frequency3Spinner))
+            add(Box.createVerticalStrut(6))
+            add(frequencyRow("Frequency B", frequencyBSpinner))
+            add(Box.createVerticalStrut(10))
+            add(JLabel("Range: 3.500 MHz to 3.700 MHz. Shared values are allowed.").apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+        }
+
+        val result = JOptionPane.showConfirmDialog(
+            this,
+            panel,
+            "Timed Event Default Frequencies",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+        )
+        if (result != JOptionPane.OK_OPTION) {
+            return
+        }
+
+        displayPreferences = displayPreferences.copy(timedEventDefaultFrequencies = selectedDefaults())
+        persistDisplayPreferences()
+        setStatus("Saved timed event default frequencies.")
+    }
+
+    private fun applyTimedEventDefaultFrequenciesFromMenu() {
+        val defaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(displayPreferences.timedEventDefaultFrequencies)
+        val existingTemplate = cloneTemplateSettings ?: loadedSnapshot?.settings
+        if (existingTemplate == null) {
+            JOptionPane.showMessageDialog(this, "Load Timed Event Settings first.")
+            return
+        }
+
+        cloneTemplateSettings = FrequencySupport.applyTimedEventDefaultFrequencies(existingTemplate, defaults)
+        setCloneSessionTemplateLocked(false)
+        updateCloneTemplateLabel(
+            "Clone template frequencies set to defaults.",
+            Color(0x0B, 0x3D, 0x91),
+        )
+
+        if (currentTransport == null || currentState == null || loadedSnapshot == null) {
+            setStatus("Applied default frequencies to the clone template.")
+            return
+        }
+
+        applyImmediateEdit("timed event default frequencies", updatesTimedEventTemplate = true) { base ->
+            val updatedSettings = FrequencySupport.applyTimedEventDefaultFrequencies(base, defaults)
+            EditableDeviceSettings.fromDeviceSettings(base).copy(
+                lowFrequencyHz = SettingsField(
+                    "lowFrequencyHz",
+                    "Frequency 1 (FRE 1)",
+                    base.lowFrequencyHz,
+                    updatedSettings.lowFrequencyHz,
+                ),
+                mediumFrequencyHz = SettingsField(
+                    "mediumFrequencyHz",
+                    "Frequency 2 (FRE 2)",
+                    base.mediumFrequencyHz,
+                    updatedSettings.mediumFrequencyHz,
+                ),
+                highFrequencyHz = SettingsField(
+                    "highFrequencyHz",
+                    "Frequency 3 (FRE 3)",
+                    base.highFrequencyHz,
+                    updatedSettings.highFrequencyHz,
+                ),
+                beaconFrequencyHz = SettingsField(
+                    "beaconFrequencyHz",
+                    "Frequency B (FRE B)",
+                    base.beaconFrequencyHz,
+                    updatedSettings.beaconFrequencyHz,
+                ),
             )
         }
     }
@@ -4813,6 +4971,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             updateDisplayedClockFields()
             updateWritableControlAvailability(backgroundWorkInProgress)
+            updateAdvancedMenuItems()
         } finally {
             updatingForm = false
         }
@@ -5598,7 +5757,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val verification = if (serialVerification) {
             val verifiedPort = requireNotNull(port) { "Serial verification requires a serial port." }
             setBusyProgress(94, 100, "Checking installed bootloader")
-            verifySignalSlingerWorkshopSetup(verifiedPort, manifest, logEntries)
+            runRecoverableWorkshopSerialVerification(verifiedPort, manifest, logEntries)
         } else {
             setBusyProgress(100, 100, "Done")
             log("Skipped serial verification because bare-PCB setup was selected.")
@@ -5738,6 +5897,87 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             bootloaderVersion = bootloaderIdentity?.bootloaderVersion ?: manifest.serialSlinger.bootloaderVersion,
             bootloaderProtocolVersion = bootloaderIdentity?.protocolVersion ?: finalAppInfo.bootloaderProtocolVersion ?: manifest.serialSlinger.protocolVersion,
         )
+    }
+
+    private fun runRecoverableWorkshopSerialVerification(
+        port: String,
+        manifest: SignalSlingerReleaseInfo,
+        logEntries: MutableList<DesktopLogEntry>,
+    ): WorkshopSetupVerification {
+        var attempt = 1
+        while (true) {
+            try {
+                return verifySignalSlingerWorkshopSetup(port, manifest, logEntries)
+            } catch (exception: Exception) {
+                if (!isRecoverableWorkshopSerialVerificationFailure(exception)) {
+                    throw exception
+                }
+                logEntries += DesktopLogEntry(
+                    "Serial verification stopped with a recoverable problem; waiting for user to continue or cancel.",
+                    DesktopLogCategory.APP,
+                )
+                val retryException = WorkshopSetupProcessException(
+                    stepName = "serial verification",
+                    userMessage = friendlyWorkshopSerialVerificationFailureMessage(port, exception),
+                    recoverable = true,
+                )
+                if (!confirmRecoverableWorkshopSetupRetry(retryException, attempt)) {
+                    throw IllegalStateException(
+                        "Serial verification cancelled.\n\n${retryException.userMessage}",
+                        exception,
+                    )
+                }
+                attempt += 1
+                logEntries += DesktopLogEntry("Retrying serial verification after user confirmation.", DesktopLogCategory.APP)
+                setBusyProgress(94, 100, "Checking installed bootloader")
+            }
+        }
+    }
+
+    private fun friendlyWorkshopSerialVerificationFailureMessage(
+        port: String,
+        exception: Exception,
+    ): String {
+        val details = firstExceptionMessage(exception)
+            ?.takeIf(String::isNotBlank)
+            ?: exception.toString()
+        return "SerialSlinger could not talk to the SignalSlinger on `$port` after programming.\n\n" +
+            "The bootloader programming step may have completed, but SerialSlinger could not verify the board afterward.\n\n" +
+            "Check that:\n" +
+            "- The USB serial cable is connected.\n" +
+            "- Windows still shows the board on `$port`.\n" +
+            "- The board is powered.\n" +
+            "- Windows has finished detecting the device.\n\n" +
+            "Last error: $details"
+    }
+
+    private fun isRecoverableWorkshopSerialVerificationFailure(exception: Exception): Boolean {
+        val messages = exceptionMessages(exception).joinToString("\n").lowercase()
+        val looksLikeMissingSerialConnection =
+            messages.contains("failed to open serial port") ||
+                messages.contains("serial port `") && messages.contains("is not connected") ||
+                messages.contains("did not respond to") ||
+                messages.contains("did not respond on")
+        val looksLikeIdentityMismatch =
+            messages.contains("reported version") ||
+                messages.contains("reported hw") ||
+                messages.contains("reported app start") ||
+                messages.contains("reported update baud") ||
+                messages.contains("response was not recognized")
+        return looksLikeMissingSerialConnection && !looksLikeIdentityMismatch
+    }
+
+    private fun firstExceptionMessage(exception: Throwable): String? =
+        exceptionMessages(exception).firstOrNull()
+
+    private fun exceptionMessages(exception: Throwable): List<String> {
+        val messages = mutableListOf<String>()
+        var current: Throwable? = exception
+        while (current != null) {
+            current.message?.takeIf(String::isNotBlank)?.let(messages::add)
+            current = current.cause
+        }
+        return messages
     }
 
     private fun readAndValidateWorkshopBootloaderIdentity(
@@ -7461,6 +7701,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val defaultMenuForeground = UIManager.getColor("MenuItem.foreground") ?: Color.BLACK
         val defaultCheckBoxMenuForeground = UIManager.getColor("CheckBoxMenuItem.foreground") ?: defaultMenuForeground
         val advancedEnabled = displayPreferences.advancedModeEnabled
+        val connected = currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
+        val volatileTemperatureResetSupported = supportsVolatileTemperatureExtremaReset()
+        val maximumEverTemperatureResetSupported = supportsMaximumEverTemperatureReset()
         if (::advancedModeMenuItem.isInitialized) {
             advancedModeMenuItem.text =
                 if (advancedEnabled) "Disable Advanced Mode" else "Enable Advanced Mode..."
@@ -7471,6 +7714,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 } else {
                     advancedModeMenuItem.font.deriveFont(java.awt.Font.PLAIN)
                 }
+        }
+        if (::resetVolatileTemperatureExtremaMenuItem.isInitialized) {
+            resetVolatileTemperatureExtremaMenuItem.isVisible = volatileTemperatureResetSupported
+            resetVolatileTemperatureExtremaMenuItem.isEnabled = volatileTemperatureResetSupported && connected
         }
         if (::installBootloaderMenuItem.isInitialized) {
             installBootloaderMenuItem.isVisible = advancedEnabled
@@ -7494,6 +7741,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     installBootloaderBarePcbMenuItem.font.deriveFont(java.awt.Font.PLAIN)
                 }
         }
+        if (::resetMaximumEverTemperatureMenuItem.isInitialized) {
+            resetMaximumEverTemperatureMenuItem.isVisible = advancedEnabled && maximumEverTemperatureResetSupported
+            resetMaximumEverTemperatureMenuItem.isEnabled = advancedEnabled && maximumEverTemperatureResetSupported && connected
+            resetMaximumEverTemperatureMenuItem.foreground = if (advancedEnabled) advancedColor else defaultMenuForeground
+            resetMaximumEverTemperatureMenuItem.font =
+                if (advancedEnabled) {
+                    resetMaximumEverTemperatureMenuItem.font.deriveFont(resetMaximumEverTemperatureMenuItem.font.style or java.awt.Font.BOLD)
+                } else {
+                    resetMaximumEverTemperatureMenuItem.font.deriveFont(java.awt.Font.PLAIN)
+                }
+        }
         if (::temperatureLogsMenuItem.isInitialized) {
             temperatureLogsMenuItem.isVisible = advancedEnabled
             temperatureLogsMenuItem.isEnabled = advancedEnabled
@@ -7515,6 +7773,139 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 } else {
                     temperatureLogMenuItem.font.deriveFont(java.awt.Font.PLAIN)
                 }
+        }
+    }
+
+    private fun supportsVolatileTemperatureExtremaReset(): Boolean {
+        return temperatureResetCommandsSupported == true
+    }
+
+    private fun supportsMaximumEverTemperatureReset(): Boolean {
+        return temperatureResetCommandsSupported == true
+    }
+
+    private fun confirmAndResetVolatileTemperatureExtrema() {
+        loadedSnapshot ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        if (!supportsVolatileTemperatureExtremaReset()) {
+            JOptionPane.showMessageDialog(
+                this,
+                "Resetting volatile maximum and minimum temperatures is not supported by the loaded firmware.",
+            )
+            return
+        }
+        val confirmation = JOptionPane.showConfirmDialog(
+            this,
+            "Reset the volatile maximum and minimum temperatures on this SignalSlinger?\n\nThis does not erase the EEPROM maximum ever temperature.",
+            "Reset Volatile Max/Min Temperature",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (confirmation != JOptionPane.OK_OPTION) {
+            return
+        }
+        submitTemperatureReset(
+            command = "TMP R X",
+            logTitle = "Reset Volatile Max/Min Temperature",
+            busyTitle = "Resetting volatile max/min temperature...",
+            statusMessage = "Volatile maximum and minimum temperatures reset.",
+        )
+    }
+
+    private fun confirmAndResetMaximumEverTemperature() {
+        loadedSnapshot ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        if (!displayPreferences.advancedModeEnabled) {
+            JOptionPane.showMessageDialog(this, "Enable Advanced Mode to reset the EEPROM maximum ever temperature.")
+            return
+        }
+        if (!supportsMaximumEverTemperatureReset()) {
+            JOptionPane.showMessageDialog(
+                this,
+                "Resetting the EEPROM maximum ever temperature is not supported by the loaded firmware.",
+            )
+            return
+        }
+        val confirmation = JOptionPane.showConfirmDialog(
+            this,
+            "Reset the EEPROM maximum ever temperature on this SignalSlinger?\n\nThis cannot be undone.",
+            "Reset EEPROM Max Ever Temperature",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (confirmation != JOptionPane.OK_OPTION) {
+            return
+        }
+        submitTemperatureReset(
+            command = "TMP R E",
+            logTitle = "Reset EEPROM Max Ever Temperature",
+            busyTitle = "Resetting maximum ever temperature...",
+            statusMessage = "EEPROM maximum ever temperature reset.",
+        )
+    }
+
+    private fun submitTemperatureReset(
+        command: String,
+        logTitle: String,
+        busyTitle: String,
+        statusMessage: String,
+    ) {
+        val transport = currentTransport ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        val state = currentState ?: run {
+            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            return
+        }
+        val refreshCommand = "TMP"
+        runInBackground(busyTitle) {
+            setBusyProgress(0, 2, commandProgressLabel(0, 2))
+            val commandSentAtMs = System.currentTimeMillis()
+            transport.sendCommands(listOf(command))
+            val commandResponseLines = transport.readAvailableLines()
+            val commandReceivedAtMs = System.currentTimeMillis()
+            extractDeviceError(commandResponseLines)?.let { error ->
+                throw IllegalStateException(error)
+            }
+            var nextState = if (commandResponseLines.isNotEmpty()) {
+                DeviceSessionWorkflow.ingestReportLines(state, commandResponseLines)
+            } else {
+                state
+            }
+            setBusyProgress(1, 2, commandProgressLabel(1, 2))
+            val refreshSentAtMs = System.currentTimeMillis()
+            transport.sendCommands(listOf(refreshCommand))
+            val refreshResponseLines = transport.readAvailableLines()
+            val refreshReceivedAtMs = System.currentTimeMillis()
+            extractDeviceError(refreshResponseLines)?.let { error ->
+                throw IllegalStateException(error)
+            }
+            nextState = DeviceSessionWorkflow.ingestReportLines(nextState, refreshResponseLines)
+            currentState = nextState
+            loadedSnapshot = nextState.snapshot
+            setBusyProgress(2, 2, commandProgressLabel(2, 2))
+            SwingUtilities.invokeLater {
+                applySnapshotToForm(nextState.snapshot)
+                appendLog(
+                    logTitle,
+                    buildList {
+                        add(DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL, commandSentAtMs))
+                        commandResponseLines.forEach { line ->
+                            add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, commandReceivedAtMs))
+                        }
+                        add(DesktopLogEntry("TX $refreshCommand", DesktopLogCategory.SERIAL, refreshSentAtMs))
+                        refreshResponseLines.forEach { line ->
+                            add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, refreshReceivedAtMs))
+                        }
+                    },
+                )
+                setStatus(statusMessage)
+            }
         }
     }
 
@@ -8285,10 +8676,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 afterCommand = ::drainResidualStartupReportAfterVer,
             )
             requireLoadResponses(portPath, initialRefresh)
+            setBusyProgress(88, 100, "Checking temperature reset support")
+            val temperatureResetProbe = probeTemperatureResetSupport(initialRefresh, requireNotNull(currentTransport))
             setBusyProgress(92, 100, "Checking device time")
-            val finalClockSample = postLoadClockSample(requireNotNull(currentTransport), initialRefresh.state.snapshot)
+            val finalClockSample = postLoadClockSample(requireNotNull(currentTransport), temperatureResetProbe.result.state.snapshot)
             setBusyProgress(100, 100, "Done")
-            val finalResult = mergeLoadResults(initialRefresh, finalClockSample?.first)
+            val finalResult = mergeLoadResults(temperatureResetProbe.result, finalClockSample?.first)
             return LoadedConnection(
                 portPath = portPath,
                 transport = requireNotNull(currentTransport),
@@ -8298,6 +8691,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 loadLogTitle = "Load",
                 loadLogLeadEntries = emptyList(),
                 clockAnchor = finalClockSample?.second,
+                temperatureResetCommandsSupported = temperatureResetProbe.supported,
             )
         }
 
@@ -8312,10 +8706,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             afterCommand = ::drainResidualStartupReportAfterVer,
         )
         requireLoadResponses(portPath, initialLoad)
+        setBusyProgress(88, 100, "Checking temperature reset support")
+        val temperatureResetProbe = probeTemperatureResetSupport(initialLoad, transport)
         setBusyProgress(92, 100, "Checking device time")
-        val finalClockSample = postLoadClockSample(transport, initialLoad.state.snapshot)
+        val finalClockSample = postLoadClockSample(transport, temperatureResetProbe.result.state.snapshot)
         setBusyProgress(100, 100, "Done")
-        val finalResult = mergeLoadResults(initialLoad, finalClockSample?.first)
+        val finalResult = mergeLoadResults(temperatureResetProbe.result, finalClockSample?.first)
 
         return LoadedConnection(
             portPath = portPath,
@@ -8326,6 +8722,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             loadLogTitle = "Load",
             loadLogLeadEntries = emptyList(),
             clockAnchor = finalClockSample?.second,
+            temperatureResetCommandsSupported = temperatureResetProbe.supported,
         )
     }
 
@@ -8391,6 +8788,29 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             commandsSent = base.commandsSent + additional.commandsSent,
             linesReceived = base.linesReceived + additional.linesReceived,
             traceEntries = base.traceEntries + additional.traceEntries,
+        )
+    }
+
+    private fun probeTemperatureResetSupport(
+        base: DeviceLoadResult,
+        transport: DeviceTransport,
+    ): TemperatureResetCapabilityLoadResult {
+        val command = TemperatureResetSupport.probeCommand
+        val sentAtMs = System.currentTimeMillis()
+        transport.sendCommands(listOf(command))
+        val responseLines = transport.readAvailableLines()
+        val receivedAtMs = System.currentTimeMillis()
+        return TemperatureResetCapabilityLoadResult(
+            result = base.copy(
+                commandsSent = base.commandsSent + command,
+                linesReceived = base.linesReceived + responseLines,
+                traceEntries = base.traceEntries +
+                    SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command) +
+                    responseLines.map { line ->
+                        SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+                    },
+            ),
+            supported = TemperatureResetSupport.isSupportedProbeResponse(responseLines),
         )
     }
 
@@ -8525,6 +8945,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentState = connection.result.state
         currentConnectedPortPath = connection.portPath
         loadedSnapshot = connection.result.state.snapshot
+        temperatureResetCommandsSupported = connection.temperatureResetCommandsSupported
         consecutiveDeviceTimeCheckNoResponseCount = 0
         setCloneSessionTemplateLocked(false)
         connection.result.state.snapshot?.settings?.let { loadedSettings ->
@@ -9402,6 +9823,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun clearFormForUnread() {
         loadedSnapshot = null
+        temperatureResetCommandsSupported = null
         clearRelativeScheduleDisplayOverrides()
         deviceTimeOffset = null
         cachedManualWriteDelayMillis = null
@@ -9440,6 +9862,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         lastsRowLabel.foreground = defaultRowLabelForeground
         updateDisplayedClockFields()
         updateWritableControlAvailability(backgroundWorkInProgress)
+        updateAdvancedMenuItems()
     }
 
     private fun canEditLastsDuration(): Boolean {
@@ -9754,14 +10177,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 val displayValue = (frequencyHz?.let {
                     DesktopInputSupport.frequencySpinnerValue(it, FrequencyDisplayUnit.KHZ)
                 } ?: DesktopInputSupport.defaultFrequencySpinnerValue(FrequencyDisplayUnit.KHZ)).toInt()
-                spinner.model = SpinnerNumberModel(displayValue, 3501, 3700, 1)
+                spinner.model = SpinnerNumberModel(displayValue, 3500, 3700, 1)
                 spinner.editor = JSpinner.NumberEditor(spinner, "0' kHz'")
             }
             FrequencyDisplayUnit.MHZ -> {
                 val displayValue = (frequencyHz?.let {
                     DesktopInputSupport.frequencySpinnerValue(it, FrequencyDisplayUnit.MHZ)
                 } ?: DesktopInputSupport.defaultFrequencySpinnerValue(FrequencyDisplayUnit.MHZ)).toDouble()
-                spinner.model = SpinnerNumberModel(displayValue, 3.501, 3.700, 0.001)
+                spinner.model = SpinnerNumberModel(displayValue, 3.500, 3.700, 0.001)
                 spinner.editor = JSpinner.NumberEditor(spinner, "0.000' MHz'")
             }
         }
@@ -10631,6 +11054,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val loadLogTitle: String,
         val loadLogLeadEntries: List<DesktopLogEntry>,
         val clockAnchor: ClockDisplayAnchor?,
+        val temperatureResetCommandsSupported: Boolean?,
+    )
+
+    private data class TemperatureResetCapabilityLoadResult(
+        val result: DeviceLoadResult,
+        val supported: Boolean,
     )
 
     private data class PreferredProbeAttempt(

@@ -23,8 +23,8 @@ object DesktopInputSupport {
     private const val syncLeadSeconds = 2L
     private val minimumValidTimestamp = LocalDateTime.of(2021, 1, 1, 0, 0, 0)
     private const val waitingForReadPlaceholder = "Waiting for read"
-    private const val minimumSupportedFrequencyHz = 3_501_000L
-    private const val maximumSupportedFrequencyHz = 3_700_000L
+    private const val minimumSupportedFrequencyHz = FrequencySupport.minimumTimedEventFrequencyHz
+    private const val maximumSupportedFrequencyHz = FrequencySupport.maximumTimedEventFrequencyHz
 
     data class ClockPhaseSample(
         val midpointAt: LocalDateTime,
@@ -385,7 +385,7 @@ object DesktopInputSupport {
             FrequencyDisplayUnit.MHZ -> (value.toDouble() * 1_000_000.0).roundToLong()
         }
         require(frequencyHz in minimumSupportedFrequencyHz..maximumSupportedFrequencyHz) {
-            "Frequency must be between 3501 kHz and 3700 kHz."
+            "Frequency must be between 3500 kHz and 3700 kHz."
         }
         return frequencyHz
     }
