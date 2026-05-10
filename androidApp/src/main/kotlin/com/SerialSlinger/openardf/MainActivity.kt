@@ -3835,9 +3835,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     )
                 saveTimedEventDefaultFrequenciesPreference()
                 dialog.dismiss()
-                showStatusPopup("Saved timed event default frequencies.")
+                maybeShowStatusPopup("Saved timed event default frequencies.", isError = false)
             } catch (exception: IllegalArgumentException) {
-                showStatusPopup(exception.message ?: "Invalid timed event default frequency.")
+                maybeShowStatusPopup(exception.message ?: "Invalid timed event default frequency.", isError = true)
             }
         }
     }
@@ -3845,7 +3845,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun applyTimedEventDefaultFrequenciesFromSettings() {
         val defaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(timedEventDefaultFrequencies)
         if (displayedTimedEventSettings == null && !isPreviewModeActive()) {
-            showStatusPopup("Load Timed Event Settings first.")
+            maybeShowStatusPopup("Load Timed Event Settings first.", isError = true)
             return
         }
         runTimedEventSettingsChangeWithCloneTemplateGuard {
@@ -3853,7 +3853,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 updatePreviewSettings { settings ->
                     FrequencySupport.applyTimedEventDefaultFrequencies(settings, defaults)
                 }
-                showStatusPopup("Applied default frequencies to preview timed event settings.")
+                maybeShowStatusPopup("Applied default frequencies to preview timed event settings.", isError = false)
                 return@runTimedEventSettingsChangeWithCloneTemplateGuard
             }
             AndroidSessionController.runTimedEventFrequencyDefaultsSubmit(
