@@ -63,6 +63,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
 import com.openardf.serialslinger.model.ConnectionState
+import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.DeviceStatus
 import com.openardf.serialslinger.model.DeviceSettings
@@ -1784,17 +1785,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         deviceDataCard.addView(
             compactLabeledRow(
                 "Version",
-                readOnlyField(
-                    listOfNotNull(
-                        loadedInfo?.softwareVersion?.takeIf { it.isNotBlank() },
-                        loadedInfo?.hardwareBuild?.takeIf { it.isNotBlank() }?.let { "HW $it" },
-                        loadedInfo?.bootloaderVersion?.takeIf { it.isNotBlank() }?.let { version ->
-                            loadedInfo.bootloaderProtocolVersion?.let { protocol ->
-                                "Bootloader $version protocol $protocol"
-                            } ?: "Bootloader $version"
-                        },
-                    ).joinToString(" / ").ifBlank { "<unknown>" },
-                ),
+                readOnlyField(formatReportedVersion(loadedInfo)),
             ),
         )
 
@@ -2919,6 +2910,27 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("Scheduling: ${capabilities.supportsScheduling}")
             appendLine("Frequency profiles: ${capabilities.supportsFrequencyProfiles}")
         }.trim()
+    }
+
+    private fun formatReportedVersion(info: DeviceInfo?): String {
+        val softwareVersion = info?.softwareVersion?.trim().orEmpty()
+        val hardwareBuild = info?.hardwareBuild?.trim().orEmpty()
+        if (softwareVersion.isBlank() || hardwareBuild.isBlank()) {
+            return "Not Available"
+        }
+        return buildString {
+            append("SW Ver: $softwareVersion HW Build: $hardwareBuild")
+            append(" Bootloader: ")
+            val bootloaderVersion = info?.bootloaderVersion?.trim()?.takeIf { it.isNotBlank() }
+            if (bootloaderVersion == null) {
+                append("Not Available")
+            } else {
+                append(bootloaderVersion)
+                info.bootloaderProtocolVersion?.let { protocol ->
+                    append(" protocol $protocol")
+                }
+            }
+        }
     }
 
     private fun renderTrace(traceEntries: List<com.openardf.serialslinger.session.SerialTraceEntry>): String {
@@ -4440,7 +4452,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun showSignalSlingerUpdateConfirmation(uiState: AndroidUiState) {
         val version = uiState.sessionViewState?.state?.snapshot?.info?.softwareVersion?.takeIf { it.isNotBlank() } ?: "unknown"
         val hardware = uiState.sessionViewState?.state?.snapshot?.info?.hardwareBuild?.takeIf { it.isNotBlank() } ?: "unknown"
-        val modeLabels = arrayOf("Update Connected Device", "Hardware Override", "Recovery Update")
+        val forcedHardwareBoard = forcedHardwareUpdateBoard(hardware)
+        val forcedHardwareLabel =
+            forcedHardwareBoard?.let { board -> "Force ${forcedHardwareDisplayName(board)} Update" } ?: "Force Hardware Update"
+        val modeLabels = arrayOf("Update Connected Device", forcedHardwareLabel)
         val density = resources.displayMetrics.density
         val modeGroup =
             RadioGroup(this).apply {
@@ -4469,7 +4484,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 "Current firmware: $version\n" +
                                 "Hardware: $hardware\n\n" +
                                 "If the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n" +
-                                "Use Recovery Update only when SignalSlinger no longer loads normally after an interrupted update."
+                                forcedHardwareUpdateHelpText(forcedHardwareBoard)
                         textSize = 15f
                         setTextColor(Color.parseColor("#1F2937"))
                     },
@@ -4482,24 +4497,30 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     },
                 )
             }
+        val scrollableContent =
+            ScrollView(this).apply {
+                isFillViewport = false
+                addView(content)
+            }
         AlertDialog.Builder(this)
             .setTitle("Update SignalSlinger")
-            .setView(content)
+            .setView(scrollableContent)
             .setPositiveButton("Update") { _, _ ->
                 val selectedMode =
                     modeGroup.findViewById<RadioButton>(modeGroup.checkedRadioButtonId)?.tag as? Int ?: 0
                 when (selectedMode) {
                     1 -> {
-                        chooseSignalSlingerHardwareOverrideBoard("Hardware Override") { overrideBoard ->
-                            chooseSignalSlingerUpdateSource { requestedVersion ->
-                                startAndroidSignalSlingerUpdate(overrideBoard, recoverAlreadyWaiting = false, requestedVersion = requestedVersion)
+                        if (forcedHardwareBoard == null) {
+                            chooseSignalSlingerHardwareOverrideBoard("Force Hardware Update") { overrideBoard ->
+                                chooseSignalSlingerUpdateSource { requestedVersion ->
+                                    startAndroidSignalSlingerUpdate(overrideBoard, recoverAlreadyWaiting = true, requestedVersion = requestedVersion)
+                                }
                             }
-                        }
-                    }
-                    2 -> {
-                        chooseSignalSlingerHardwareOverrideBoard("Recovery Update") { overrideBoard ->
-                            chooseSignalSlingerUpdateSource { requestedVersion ->
-                                startAndroidSignalSlingerUpdate(overrideBoard, recoverAlreadyWaiting = true, requestedVersion = requestedVersion)
+                        } else {
+                            confirmForcedHardwareUpdate(forcedHardwareBoard) {
+                                chooseSignalSlingerUpdateSource { requestedVersion ->
+                                    startAndroidSignalSlingerUpdate(forcedHardwareBoard, recoverAlreadyWaiting = true, requestedVersion = requestedVersion)
+                                }
                             }
                         }
                     }
@@ -4509,6 +4530,42 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         }
                     }
                 }
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update SignalSlinger")
+    }
+
+    private fun forcedHardwareUpdateBoard(hardwareBuild: String): String? =
+        when {
+            SignalSlingerFirmwareUpdate.hardwareMatchesBoard(hardwareBuild, "HW-3.4") -> "HW-3.5"
+            SignalSlingerFirmwareUpdate.hardwareMatchesBoard(hardwareBuild, "HW-3.5") -> "HW-3.4"
+            else -> null
+        }
+
+    private fun forcedHardwareUpdateHelpText(forcedHardwareBoard: String?): String =
+        if (forcedHardwareBoard == null) {
+            "Use Force Hardware Update only when SignalSlinger no longer loads normally after an interrupted update."
+        } else {
+            "Use Force ${forcedHardwareDisplayName(forcedHardwareBoard)} Update only when SignalSlinger no longer loads normally after an interrupted update. " +
+                "SerialSlinger will use the opposite hardware update because the connected device reports the other hardware version."
+        }
+
+    private fun forcedHardwareDisplayName(board: String): String =
+        "${board.removePrefix("HW-")} HW"
+
+    private fun confirmForcedHardwareUpdate(
+        board: String,
+        onConfirmed: () -> Unit,
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle("Update SignalSlinger")
+            .setMessage(
+                "Force ${forcedHardwareDisplayName(board)} Update will install the update for physical hardware $board.\n\n" +
+                    "SerialSlinger selected this because the connected device reports the other hardware version. " +
+                    "Only continue if SignalSlinger no longer loads normally after an interrupted update.",
+            )
+            .setPositiveButton("Force ${forcedHardwareDisplayName(board)} Update") { _, _ ->
+                onConfirmed()
             }
             .setNegativeButton("Cancel", null)
             .showLogged("Update SignalSlinger")

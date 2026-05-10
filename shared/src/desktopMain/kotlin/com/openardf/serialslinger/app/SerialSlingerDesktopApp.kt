@@ -5437,6 +5437,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun chooseSignalSlingerWorkshopSetupBoard(): String? {
         val options = arrayOf("HW-3.5", "HW-3.4", "Cancel")
+        val likelyBoard =
+            options
+                .take(2)
+                .firstOrNull { board ->
+                    SignalSlingerFirmwareUpdate.hardwareMatchesBoard(
+                        loadedSnapshot?.info?.hardwareBuild,
+                        board,
+                    )
+                }
+                ?: options.first()
         val choice = JOptionPane.showOptionDialog(
             this,
             "Select the physical SignalSlinger hardware variant.\n\nUse the marking on the board. Installed firmware may report the wrong variant.",
@@ -5445,7 +5455,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             JOptionPane.WARNING_MESSAGE,
             null,
             options,
-            options.first(),
+            likelyBoard,
         )
         return when (choice) {
             0, 1 -> options[choice]

@@ -4119,6 +4119,8 @@ object AndroidSessionController {
             appendLine("connectionState=${sessionViewState.state.connectionState}")
             appendLine("softwareVersion=${snapshot.info.softwareVersion ?: "<unknown>"}")
             appendLine("hardwareBuild=${snapshot.info.hardwareBuild ?: "<unknown>"}")
+            appendLine("bootloaderVersion=${snapshot.info.bootloaderVersion ?: "<unknown>"}")
+            appendLine("bootloaderProtocol=${snapshot.info.bootloaderProtocolVersion ?: "<unknown>"}")
             appendLine("productName=${snapshot.info.productName ?: "<unknown>"}")
             appendLine("stationId=${snapshot.settings.stationId}")
             appendLine("eventType=${snapshot.settings.eventType}")
