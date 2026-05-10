@@ -5533,7 +5533,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             stepName = "Checking tools",
         )
 
-        setBusyProgress(32, 100, "Checking programmer")
+        setBusyProgress(32, 100, "Searching for attached programmer...")
         runWorkshopSetupProcess(
             command = buildList {
                 addAll(
@@ -6109,13 +6109,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun stableWorkshopSetupFailureReason(tokens: Map<String, String>): String {
         return when (tokens["code"]) {
             "no_programmer" -> {
-                val supportedTools = tokens["detail"]
-                    ?.removePrefix("tools_")
-                    ?.replace(',', ' ')
-                    ?.split(Regex("[^A-Za-z0-9_-]+"))
-                    ?.filter(String::isNotBlank)
-                    ?.joinToString(", ")
-                    ?.takeIf(String::isNotBlank)
+                val supportedTools = formatSupportedProgrammerList(tokens["detail"])
                 buildString {
                     append("No compatible programmer and target were detected.")
                     if (supportedTools != null) {
@@ -6135,6 +6129,34 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 "The programmer was found, but the SignalSlinger target did not respond. Check target power and the UPDI connection, then try again."
             else ->
                 "SignalSlinger setup stopped during ${tokens["step"] ?: "setup"}. See the session log for details."
+        }
+    }
+
+    private fun formatSupportedProgrammerList(detail: String?): String? {
+        val tools = detail
+            ?.removePrefix("tools_")
+            ?.substringBefore("_exit_")
+            ?.split(Regex("[,_]+"))
+            ?.mapNotNull { tool ->
+                when (tool.lowercase()) {
+                    "atmelice" -> "Atmel-ICE"
+                    "pickit4" -> "MPLAB PICkit 4"
+                    "snap" -> "MPLAB Snap"
+                    "powerdebugger" -> "Power Debugger"
+                    "edbg" -> "EDBG"
+                    "medbg" -> "mEDBG"
+                    "nedbg" -> "nEDBG"
+                    else -> tool.takeIf(String::isNotBlank)
+                }
+            }
+            ?.filter(String::isNotBlank)
+            .orEmpty()
+
+        return when (tools.size) {
+            0 -> null
+            1 -> tools.single()
+            2 -> tools.joinToString(" and ")
+            else -> tools.dropLast(1).joinToString(", ") + ", and " + tools.last()
         }
     }
 
@@ -7747,7 +7769,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             total = safeTotal,
             label = label,
         )
-        SwingUtilities.invokeLater { updateBusyDialogProgressUi() }
+        SwingUtilities.invokeLater {
+            label?.let { busyDialogStatusLabel?.text = formatBusyDialogStatus(it) }
+            updateBusyDialogProgressUi()
+        }
     }
 
     private fun setBusyProgressRange(
