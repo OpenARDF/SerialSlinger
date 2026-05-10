@@ -2763,10 +2763,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         runInBackground("Loading settings from ${probe.portInfo.systemPortPath}...") {
-            val loadResult = loadPort(probe.portInfo.systemPortPath)
+            val loadResult = loadPortWithAliasFallback(probe.portInfo.systemPortPath)
             SwingUtilities.invokeLater {
                 applyLoadedConnection(loadResult)
-                setStatus("Loaded settings from ${probe.portInfo.systemPortPath}.")
+                setStatus("Loaded settings from ${loadResult.portPath}.")
             }
         }
     }
@@ -8724,6 +8724,28 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             clockAnchor = finalClockSample?.second,
             temperatureResetCommandsSupported = temperatureResetProbe.supported,
         )
+    }
+
+    private fun loadPortWithAliasFallback(portPath: String): LoadedConnection {
+        var lastFailure: Exception? = null
+        DesktopSmartPollingPolicy.aliasCandidates(portPath).forEach { candidatePort ->
+            try {
+                return loadPort(candidatePort)
+            } catch (exception: Exception) {
+                lastFailure = exception
+                if (!isTransientPortLoadFailure(exception)) {
+                    throw exception
+                }
+            }
+        }
+        throw lastFailure ?: IllegalStateException("No serial port candidate was available for `$portPath`.")
+    }
+
+    private fun isTransientPortLoadFailure(exception: Exception): Boolean {
+        val message = exception.message.orEmpty().lowercase()
+        return message.contains("error code 2") ||
+            message.contains("failed to write complete payload") ||
+            message.contains("invalid port descriptor")
     }
 
     private fun requireLoadResponses(
