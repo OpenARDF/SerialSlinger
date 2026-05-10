@@ -1,5 +1,7 @@
 package com.openardf.serialslinger.protocol
 
+import com.openardf.serialslinger.platform.platformSleep
+
 private const val DefaultFlashBytes = 0x20000
 private const val DefaultPageBytes = 512
 private const val MaxTransferAttempts = 2
@@ -731,7 +733,7 @@ object SignalSlingerFirmwareUpdate {
             } catch (_: Throwable) {
             }
             try {
-                Thread.sleep(UpdateModeReconnectSettleMs)
+                platformSleep(UpdateModeReconnectSettleMs)
                 transport.connect(release.serialSlinger.updateBaud)
                 waitForBootloaderIdentity(transport, release)?.let { return it }
                 if (attempt == 0) {

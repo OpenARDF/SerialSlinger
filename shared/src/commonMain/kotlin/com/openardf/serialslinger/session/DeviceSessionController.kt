@@ -7,6 +7,7 @@ import com.openardf.serialslinger.model.EditableDeviceSettings
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.WritePlan
+import com.openardf.serialslinger.platform.platformCurrentTimeMillis
 import com.openardf.serialslinger.protocol.DeviceReportUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareSupport
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
@@ -110,11 +111,11 @@ object DeviceSessionController {
         progress?.invoke(0, bootstrapCommands.size.coerceAtLeast(1))
 
         for (command in bootstrapCommands) {
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             commands += command
             lines += responseLines
             traceEntries += responseLines.map { line ->
@@ -145,11 +146,11 @@ object DeviceSessionController {
                 command = command,
                 eventType = updatedState.snapshot?.settings?.eventType,
             )
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(resolvedCommand))
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, resolvedCommand)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             commands += resolvedCommand
             lines += responseLines
             traceEntries += responseLines.map { line ->
@@ -169,11 +170,11 @@ object DeviceSessionController {
 
         if (updatedState.snapshot?.info?.bootloaderVersion.isNullOrBlank()) {
             val command = "INF"
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             commands += command
             lines += responseLines
             traceEntries += responseLines.map { line ->
@@ -237,11 +238,11 @@ object DeviceSessionController {
         ).coerceAtLeast(1)
         progress?.invoke(0, totalCommands)
         for (command in submission.commands) {
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             submitTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             submitLines += responseLines
             submitTraceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
@@ -271,11 +272,11 @@ object DeviceSessionController {
 
         for (command in readbackCommands) {
             reportedReadbackCommands += command
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             readbackTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             readbackLines += responseLines
             readbackTraceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)

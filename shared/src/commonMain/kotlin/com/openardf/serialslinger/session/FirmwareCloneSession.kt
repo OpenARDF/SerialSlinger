@@ -1,6 +1,7 @@
 package com.openardf.serialslinger.session
 
 import com.openardf.serialslinger.model.DeviceSettings
+import com.openardf.serialslinger.platform.platformCurrentTimeMillis
 import com.openardf.serialslinger.protocol.FirmwareClonePlan
 import com.openardf.serialslinger.protocol.FirmwareCloneProtocol
 import com.openardf.serialslinger.transport.DeviceTransport
@@ -69,12 +70,12 @@ object FirmwareCloneSession {
         val traceEntries = mutableListOf<SerialTraceEntry>()
 
         fun sendAndRead(command: String): List<String> {
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             commands += command
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
             val responseLines = transport.readAvailableLines()
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             lines += responseLines
             traceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
@@ -86,7 +87,7 @@ object FirmwareCloneSession {
             command: String,
             expectedReply: String,
         ): List<String> {
-            val sentAtMs = System.currentTimeMillis()
+            val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             commands += command
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
@@ -95,7 +96,7 @@ object FirmwareCloneSession {
             repeat(CloneReplyReadAttempts) {
                 val attemptLines = transport.readAvailableLines()
                 if (attemptLines.isNotEmpty()) {
-                    val receivedAtMs = System.currentTimeMillis()
+                    val receivedAtMs = platformCurrentTimeMillis()
                     responseLines += attemptLines
                     lines += attemptLines
                     traceEntries += attemptLines.map { line ->
@@ -113,7 +114,7 @@ object FirmwareCloneSession {
         sendAndRead(PreCloneStopCommand)
         val preCloneStopLines = afterPreCloneStop()
         if (preCloneStopLines.isNotEmpty()) {
-            val receivedAtMs = System.currentTimeMillis()
+            val receivedAtMs = platformCurrentTimeMillis()
             lines += preCloneStopLines
             traceEntries += preCloneStopLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
