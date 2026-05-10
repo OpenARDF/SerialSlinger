@@ -876,7 +876,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     add(
                         JMenuItem("Install Bootloader on SignalSlinger...").apply {
                             installBootloaderMenuItem = this
-                            addActionListener { chooseSignalSlingerWorkshopSetupPackage() }
+                            addActionListener { readDeviceThenChooseSignalSlingerWorkshopSetupPackage() }
                         },
                     )
                     add(
@@ -5338,9 +5338,54 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun chooseSignalSlingerWorkshopSetupPackage(serialVerification: Boolean = true) {
+    private fun readDeviceThenChooseSignalSlingerWorkshopSetupPackage() {
+        val selectedPath = preferredReloadPortPath()
+        if (selectedPath == null) {
+            JOptionPane.showMessageDialog(this, "Select or connect a serial port first.")
+            return
+        }
+
+        showConnectionIndicator(
+            ConnectionIndicatorState.SEARCHING,
+            "Reading SignalSlinger data before bootloader installation...",
+        )
+        runInBackground(
+            status = "Reading SignalSlinger data before bootloader installation...",
+            busyDialogTitle = "Install Bootloader on SignalSlinger",
+        ) {
+            val refreshedConnection = loadPortWithAliasFallback(selectedPath).copy(
+                loadLogTitle = "Install Bootloader",
+                loadLogLeadEntries = listOf(
+                    DesktopLogEntry(
+                        "Reading current SignalSlinger data before choosing a bootloader package.",
+                        DesktopLogCategory.APP,
+                    ),
+                ),
+            )
+            SwingUtilities.invokeLater {
+                autoDetectNoDeviceFound = false
+                selectPort(refreshedConnection.portPath)
+                applyLoadedConnection(refreshedConnection)
+                setStatus("Read SignalSlinger data before bootloader installation.")
+                Timer(1) {
+                    chooseSignalSlingerWorkshopSetupPackage(
+                        serialVerification = true,
+                        verifiedPort = refreshedConnection.portPath,
+                    )
+                }.apply {
+                    isRepeats = false
+                    start()
+                }
+            }
+        }
+    }
+
+    private fun chooseSignalSlingerWorkshopSetupPackage(
+        serialVerification: Boolean = true,
+        verifiedPort: String? = null,
+    ) {
         val board = chooseSignalSlingerWorkshopSetupBoard() ?: return
-        val port = if (serialVerification) chooseSignalSlingerWorkshopSetupPort() ?: return else null
+        val port = if (serialVerification) verifiedPort ?: chooseSignalSlingerWorkshopSetupPort() ?: return else null
         val sourceChoice = JOptionPane.showOptionDialog(
             this,
             if (serialVerification) {
