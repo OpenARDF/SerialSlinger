@@ -56,6 +56,7 @@ Windows:
 - PowerShell 7 with pymcuprog, or Windows PowerShell with Microchip Studio
 - For Microchip Studio path: install Microchip Studio 7 so `atprogram.exe` is available
 - For pymcuprog path: install Python 3, then run `python -m pip install pymcuprog pyusb`
+- If SerialSlinger is already open when you install or expose new command-line tools, close and reopen the app before trying **Install Bootloader** again so it picks up the updated tool paths
 - Optional pipx path:
 
 ```powershell

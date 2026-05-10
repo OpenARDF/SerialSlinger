@@ -947,6 +947,42 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
     }
 
+    private fun showAppMessageDialog(
+        message: String,
+        title: String = this.title,
+        messageType: Int = JOptionPane.INFORMATION_MESSAGE,
+    ) {
+        if (!messageContainsSelectableCommandSuggestions(message)) {
+            JOptionPane.showMessageDialog(this, message, title, messageType)
+            return
+        }
+
+        val textArea =
+            JTextArea(message).apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+                rows = 14
+                columns = 76
+                caretPosition = 0
+                font = java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, font.size)
+                border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
+            }
+        val scrollPane =
+            JScrollPane(textArea).apply {
+                preferredSize = Dimension(760, 320)
+            }
+        JOptionPane.showMessageDialog(this, scrollPane, title, messageType)
+    }
+
+    private fun messageContainsSelectableCommandSuggestions(message: String): Boolean {
+        val commandPattern = Regex("^(python(?:3)?|pipx|pip|brew|adb|pwsh|powershell)(\\s|$)", RegexOption.IGNORE_CASE)
+        return message
+            .lineSequence()
+            .map(String::trim)
+            .any { line -> commandPattern.containsMatchIn(line) }
+    }
+
     private fun showDefaultEventLengthDialog() {
         val initialMinutes = displayPreferences.defaultEventLengthMinutes
         val initialHours = initialMinutes / 60
@@ -5620,7 +5656,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             } else {
                 "SignalSlinger bootloader installed.\n\nProgramming was verified through the programmer. Serial communication was not checked because bare-PCB setup was selected."
             }
-            JOptionPane.showMessageDialog(this, message)
+            showAppMessageDialog(message)
         }
     }
 
@@ -5969,25 +6005,25 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             trimmed.contains("No module named 'usb'", ignoreCase = true) ||
             trimmed.contains("No module named usb", ignoreCase = true)
         ) {
-            return "The pymcuprog Python environment is missing USB support.\n\nRecommended install path:\npython -m pip install pyusb\n\nIf you installed pymcuprog with pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx inject pymcuprog pyusb"
+            return "The pymcuprog Python environment is missing USB support.\n\nRecommended install path:\npython -m pip install pyusb\n\nIf you installed pymcuprog with pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx inject pymcuprog pyusb\n\nIf you had to add or change command-line tools, close and reopen SerialSlinger before trying Install Bootloader again."
         }
         if (trimmed.contains("pymcuprog command not found", ignoreCase = true)) {
-            return "The pymcuprog programmer tool was not found.\n\nRecommended install path:\npython -m pip install pymcuprog pyusb\n\nIf you prefer pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx install pymcuprog\npipx inject pymcuprog pyusb"
+            return "The pymcuprog programmer tool was not found.\n\nRecommended install path:\npython -m pip install pymcuprog pyusb\n\nIf you prefer pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx install pymcuprog\npipx inject pymcuprog pyusb\n\nAfter installing, close and reopen SerialSlinger before trying Install Bootloader again so it picks up the new command-line tools."
         }
         if (trimmed.contains("No programming backend found", ignoreCase = true)) {
-            return "No supported programming tool was found.\n\nOn macOS or Linux, install Python, pymcuprog, and pyusb.\nOn Windows, install Microchip Studio or install pymcuprog and PowerShell 7."
+            return "No supported programming tool was found.\n\nOn macOS or Linux, install Python, pymcuprog, and pyusb.\nOn Windows, install Microchip Studio or install pymcuprog and PowerShell 7.\n\nIf you install new command-line tools while SerialSlinger is already open, close and reopen the app before trying again."
         }
         if (trimmed.startsWith("- pymcuprog:", ignoreCase = true)) {
-            return "The pymcuprog programmer tool is required for this setup path.\n\nRecommended install path:\npython -m pip install pymcuprog pyusb\n\nIf you prefer pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx install pymcuprog\npipx inject pymcuprog pyusb"
+            return "The pymcuprog programmer tool is required for this setup path.\n\nRecommended install path:\npython -m pip install pymcuprog pyusb\n\nIf you prefer pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx install pymcuprog\npipx inject pymcuprog pyusb\n\nAfter installing, close and reopen SerialSlinger before trying Install Bootloader again so it picks up the new command-line tools."
         }
         if (trimmed.startsWith("- Python:", ignoreCase = true)) {
-            return "Python is required before SerialSlinger can install the bootloader with pymcuprog.\n\nInstall Python 3, then install pymcuprog and pyusb."
+            return "Python is required before SerialSlinger can install the bootloader with pymcuprog.\n\nInstall Python 3, then install pymcuprog and pyusb.\n\nIf SerialSlinger is already open after the install finishes, close and reopen it before trying Install Bootloader again."
         }
         if (trimmed.startsWith("- atprogram:", ignoreCase = true)) {
-            return "Microchip Studio atprogram.exe was not found.\n\nInstall Microchip Studio 7 on Windows, or use PowerShell 7 with pymcuprog."
+            return "Microchip Studio atprogram.exe was not found.\n\nInstall Microchip Studio 7 on Windows, or use PowerShell 7 with pymcuprog.\n\nIf SerialSlinger is already open after installing tools, close and reopen it before trying again."
         }
         if (trimmed.startsWith("- PowerShell:", ignoreCase = true)) {
-            return "PowerShell is required for the SignalSlinger setup scripts.\n\nInstall PowerShell 7, then try again."
+            return "PowerShell is required for the SignalSlinger setup scripts.\n\nInstall PowerShell 7, then close and reopen SerialSlinger before trying again."
         }
         if (trimmed.contains("parameter name 'CheckProgrammer'", ignoreCase = true)) {
             return "The selected SignalSlinger setup package has out-of-date setup scripts. Choose Download Latest to refresh the saved package, then try again."
@@ -6051,9 +6087,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
             }
             "missing_pymcuprog" ->
-                "The pymcuprog programmer tool was not found.\n\nInstall Python and pymcuprog, then try again:\npython -m pip install pymcuprog pyusb"
+                "The pymcuprog programmer tool was not found.\n\nInstall Python and pymcuprog, then try again:\npython -m pip install pymcuprog pyusb\n\nAfter installing, close and reopen SerialSlinger before trying Install Bootloader again so it picks up the new command-line tools."
             "missing_pyusb" ->
-                "The pymcuprog Python environment is missing USB support.\n\nRecommended install path:\npython -m pip install pyusb\n\nIf you installed pymcuprog with pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx inject pymcuprog pyusb"
+                "The pymcuprog Python environment is missing USB support.\n\nRecommended install path:\npython -m pip install pyusb\n\nIf you installed pymcuprog with pipx instead:\npython -m pip install --user pipx\npython -m pipx ensurepath\n\nRestart PowerShell, then run:\npipx inject pymcuprog pyusb\n\nIf you had to add or change command-line tools, close and reopen SerialSlinger before trying Install Bootloader again."
             "usb_access_denied" ->
                 "The programmer was found but could not be opened over USB. Unplug/replug the programmer and check USB permissions, then try again."
             "target_not_detected" ->
@@ -6205,7 +6241,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     SwingUtilities.invokeLater {
                         appendLog("Update SignalSlinger", logEntries)
                         setStatus("SignalSlinger is already up to date.")
-                        JOptionPane.showMessageDialog(this, message)
+                        showAppMessageDialog(message)
                     }
                     return@runInBackground
                 }
@@ -6964,7 +7000,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         )
                     } else {
                         if (showErrorDialog) {
-                            JOptionPane.showMessageDialog(this, exception.message ?: exception.toString())
+                            showAppMessageDialog(
+                                exception.message ?: exception.toString(),
+                                title = busyDialogTitleText,
+                                messageType = JOptionPane.WARNING_MESSAGE,
+                            )
                         }
                         appendLog(
                             "Error",
@@ -9666,7 +9706,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             setDateTimeSpinnerValue(spinner, minimum)
             SwingUtilities.invokeLater {
                 try {
-                    JOptionPane.showMessageDialog(this, message)
+                    showAppMessageDialog(message)
                 } finally {
                     spinner.putClientProperty(DATE_TIME_COMMIT_SUPPRESSED_KEY, false)
                 }
