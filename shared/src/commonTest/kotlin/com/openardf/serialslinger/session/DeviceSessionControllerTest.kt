@@ -161,6 +161,45 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun connectAndLoadSetsClassicWhenDeviceReportsNoEvent() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "VER" to listOf("* SW Ver: 2.0.0 HW Build: 3.4"),
+                "ID" to listOf("* ID:"),
+                "FOX" to listOf("""* Fox:Classic Fox 5 "MO5""""),
+                "PAT" to listOf("* PAT:MO5"),
+                "SPD I" to listOf("* ID SPD:10 WPM"),
+                "SPD P" to listOf("* PAT SPD:8 WPM"),
+                "CLK" to listOf("* Days to run: 1"),
+                "FRE" to listOf("* FRE=3530.0 kHz"),
+                "FRE 1" to listOf("* FRE 1=3530.0 kHz"),
+                "FRE 2" to listOf("* FRE 2=3550.0 kHz"),
+                "FRE 3" to listOf("* FRE 3=3570.0 kHz"),
+                "FRE B" to listOf("* FRE B=3600.0 kHz"),
+                "BAT" to listOf("* Transmitter = Enabled"),
+                "TMP" to listOf("* Temp: 24.2C"),
+                "INF" to listOf("* INF bl=BL0.13 proto=1"),
+                "EVT C" to listOf("* Event:Classic"),
+            ),
+            scriptedResponseSequences = mapOf(
+                "EVT" to listOf(
+                    listOf("* Event:None Set", "* Not scheduled"),
+                    listOf("* Event:Classic", "* Not scheduled"),
+                ),
+            ),
+        )
+
+        val result = DeviceSessionController.connectAndLoad(transport)
+
+        assertTrue("EVT C" in result.commandsSent)
+        assertEquals(EventType.CLASSIC, result.state.snapshot?.settings?.eventType)
+        assertEquals(FoxRole.CLASSIC_5, result.state.snapshot?.settings?.foxRole)
+        assertEquals("MO5", result.state.snapshot?.settings?.patternText)
+        assertFalse(result.state.editableSettings?.hasDirtyFields ?: true)
+        assertEquals(transport.sentCommands, result.commandsSent)
+    }
+
+    @Test
     fun submitEditsSendsMinimalCommandsAndRefreshesState() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(

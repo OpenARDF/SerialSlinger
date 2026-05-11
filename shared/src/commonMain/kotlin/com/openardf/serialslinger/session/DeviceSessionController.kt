@@ -111,18 +111,15 @@ object DeviceSessionController {
         progress?.invoke(0, bootstrapCommands.size.coerceAtLeast(1))
 
         for (command in bootstrapCommands) {
-            val sentAtMs = platformCurrentTimeMillis()
-            transport.sendCommands(listOf(command))
-            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
-            val responseLines = transport.readAvailableLines()
-            val receivedAtMs = platformCurrentTimeMillis()
-            commands += command
-            lines += responseLines
-            traceEntries += responseLines.map { line ->
-                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
-            }
-            notifyReportReceived(responseLines)
-            updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
+            updatedState = sendCommandAndIngest(
+                command = command,
+                state = updatedState,
+                transport = transport,
+                commands = commands,
+                lines = lines,
+                traceEntries = traceEntries,
+                notifyReportReceived = ::notifyReportReceived,
+            )
             afterCommand?.invoke(command, updatedState, transport)?.let { intervention ->
                 commands += intervention.commandsSent
                 lines += intervention.linesReceived
@@ -146,18 +143,15 @@ object DeviceSessionController {
                 command = command,
                 eventType = updatedState.snapshot?.settings?.eventType,
             )
-            val sentAtMs = platformCurrentTimeMillis()
-            transport.sendCommands(listOf(resolvedCommand))
-            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, resolvedCommand)
-            val responseLines = transport.readAvailableLines()
-            val receivedAtMs = platformCurrentTimeMillis()
-            commands += resolvedCommand
-            lines += responseLines
-            traceEntries += responseLines.map { line ->
-                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
-            }
-            notifyReportReceived(responseLines)
-            updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
+            updatedState = sendCommandAndIngest(
+                command = resolvedCommand,
+                state = updatedState,
+                transport = transport,
+                commands = commands,
+                lines = lines,
+                traceEntries = traceEntries,
+                notifyReportReceived = ::notifyReportReceived,
+            )
             afterCommand?.invoke(resolvedCommand, updatedState, transport)?.let { intervention ->
                 commands += intervention.commandsSent
                 lines += intervention.linesReceived
@@ -170,18 +164,15 @@ object DeviceSessionController {
 
         if (updatedState.snapshot?.info?.bootloaderVersion.isNullOrBlank()) {
             val command = "INF"
-            val sentAtMs = platformCurrentTimeMillis()
-            transport.sendCommands(listOf(command))
-            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
-            val responseLines = transport.readAvailableLines()
-            val receivedAtMs = platformCurrentTimeMillis()
-            commands += command
-            lines += responseLines
-            traceEntries += responseLines.map { line ->
-                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
-            }
-            notifyReportReceived(responseLines)
-            updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, responseLines)
+            updatedState = sendCommandAndIngest(
+                command = command,
+                state = updatedState,
+                transport = transport,
+                commands = commands,
+                lines = lines,
+                traceEntries = traceEntries,
+                notifyReportReceived = ::notifyReportReceived,
+            )
             afterCommand?.invoke(command, updatedState, transport)?.let { intervention ->
                 commands += intervention.commandsSent
                 lines += intervention.linesReceived
@@ -191,6 +182,15 @@ object DeviceSessionController {
             }
             progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
         }
+
+        updatedState = normalizeMissingEventType(
+            state = updatedState,
+            transport = transport,
+            commands = commands,
+            lines = lines,
+            traceEntries = traceEntries,
+            notifyReportReceived = ::notifyReportReceived,
+        )
 
         if (startEditing && updatedState.editableSettings == null) {
             updatedState = DeviceSessionWorkflow.startEditing(updatedState)
@@ -202,6 +202,77 @@ object DeviceSessionController {
             linesReceived = lines,
             traceEntries = traceEntries,
         )
+    }
+
+    private fun normalizeMissingEventType(
+        state: DeviceSessionState,
+        transport: DeviceTransport,
+        commands: MutableList<String>,
+        lines: MutableList<String>,
+        traceEntries: MutableList<SerialTraceEntry>,
+        notifyReportReceived: (List<String>) -> Unit,
+    ): DeviceSessionState {
+        if (state.snapshot?.settings?.eventType != EventType.NONE || !observedEventTypeNone(lines)) {
+            return state
+        }
+
+        var updatedState = sendCommandAndIngest(
+            command = "EVT C",
+            state = state,
+            transport = transport,
+            commands = commands,
+            lines = lines,
+            traceEntries = traceEntries,
+            notifyReportReceived = notifyReportReceived,
+        )
+
+        val readbackCommands = listOf("EVT", "FOX", "PAT", "SPD P", "FRE")
+        for (command in readbackCommands) {
+            val resolvedCommand = resolvePatternSpeedReadCommand(
+                command = command,
+                eventType = updatedState.snapshot?.settings?.eventType,
+            )
+            updatedState = sendCommandAndIngest(
+                command = resolvedCommand,
+                state = updatedState,
+                transport = transport,
+                commands = commands,
+                lines = lines,
+                traceEntries = traceEntries,
+                notifyReportReceived = notifyReportReceived,
+            )
+        }
+
+        return updatedState
+    }
+
+    private fun observedEventTypeNone(lines: List<String>): Boolean {
+        return lines.any { line ->
+            SignalSlingerProtocolCodec.parseReportLine(line)?.settingsPatch?.eventType == EventType.NONE
+        }
+    }
+
+    private fun sendCommandAndIngest(
+        command: String,
+        state: DeviceSessionState,
+        transport: DeviceTransport,
+        commands: MutableList<String>,
+        lines: MutableList<String>,
+        traceEntries: MutableList<SerialTraceEntry>,
+        notifyReportReceived: (List<String>) -> Unit,
+    ): DeviceSessionState {
+        val sentAtMs = platformCurrentTimeMillis()
+        transport.sendCommands(listOf(command))
+        traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+        val responseLines = transport.readAvailableLines()
+        val receivedAtMs = platformCurrentTimeMillis()
+        commands += command
+        lines += responseLines
+        traceEntries += responseLines.map { line ->
+            SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+        }
+        notifyReportReceived(responseLines)
+        return DeviceSessionWorkflow.ingestReportLines(state, responseLines)
     }
 
     fun submitEdits(

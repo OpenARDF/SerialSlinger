@@ -171,7 +171,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var rawSerialVisible: Boolean = true
     private var systemTimeVisible: Boolean = false
     private var deviceDataVisible: Boolean = true
-    private var automaticFirmwareUpdatesEnabled: Boolean = false
+    private var automaticFirmwareUpdatesEnabled: Boolean = true
     private var automaticFirmwareUpdateCheckInProgress: Boolean = false
     private var automaticFirmwareUpdatePromptVisible: Boolean = false
     private var advancedModeEnabled: Boolean = false
@@ -354,7 +354,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         rawSerialVisible = uiPreferences.getBoolean(PREF_RAW_SERIAL_VISIBLE, true)
         systemTimeVisible = uiPreferences.getBoolean(PREF_SYSTEM_TIME_VISIBLE, false)
         deviceDataVisible = uiPreferences.getBoolean(PREF_DEVICE_DATA_VISIBLE, true)
-        automaticFirmwareUpdatesEnabled = uiPreferences.getBoolean(PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED, false)
+        automaticFirmwareUpdatesEnabled = uiPreferences.getBoolean(PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED, true)
         advancedModeEnabled = uiPreferences.getBoolean(PREF_ADVANCED_MODE_ENABLED, false)
         frequencyDisplayUnit =
             AndroidFrequencyDisplayUnit.valueOf(
@@ -549,6 +549,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     context = applicationContext,
                     requestedDeviceName = targetDevice.deviceName,
                     source = "auto",
+                    failureStatusText =
+                        if (attempt < AUTO_DETECT_MAX_RETRIES) {
+                            "Still connecting to SignalSlinger..."
+                        } else {
+                            "Could not connect to SignalSlinger. Check that it is powered and firmly connected."
+                        },
+                    failureStatusIsError = attempt >= AUTO_DETECT_MAX_RETRIES,
                 ) { result ->
                     autoProbeInFlightDeviceName = null
                     if (result.isSuccess || attempt >= AUTO_DETECT_MAX_RETRIES) {
@@ -561,7 +568,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     } else if (attempt >= AUTO_DETECT_MAX_RETRIES) {
                         autoDetectSearchingForHeader = false
                         if (AndroidSessionController.snapshotUiState().sessionViewState == null) {
-                            AndroidSessionController.recordStatus("No SignalSlinger found.", isError = true)
+                            AndroidSessionController.recordStatus(
+                                "Could not connect to SignalSlinger. Check that it is powered and firmly connected.",
+                                isError = true,
+                            )
                         }
                     }
                     renderContent()
@@ -2952,9 +2962,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val disconnectedLocked = uiState.sessionViewState == null && !previewModeEnabled
         val thermalWarningActive = thermalHeaderWarningText != null
         val readingData = uiState.signalSlingerReadInFlight
+        val connectingToDetectedDevice = autoProbeInFlightDeviceName != null
         val connectionText =
             thermalHeaderWarningText ?: when {
                 readingData -> "Reading data..."
+                connectingToDetectedDevice -> "Connecting to SignalSlinger..."
                 autoDetectSearchingForHeader -> "Searching for SignalSlinger..."
                 else -> "Reload SignalSlinger Data"
             }
@@ -2962,12 +2974,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             when {
                 thermalWarningActive -> Color.parseColor("#9E1C1C")
                 readingData -> Color.parseColor("#B45309")
-                autoDetectSearchingForHeader -> Color.parseColor("#9E1C1C")
+                connectingToDetectedDevice || autoDetectSearchingForHeader -> Color.parseColor("#B45309")
                 uiState.sessionViewState != null -> Color.parseColor("#1F5F2C")
                 else -> Color.parseColor("#9E1C1C")
             }
         val connectionClick =
-            if (!thermalWarningActive && !readingData && !autoDetectSearchingForHeader) {
+            if (!thermalWarningActive && !readingData && !connectingToDetectedDevice && !autoDetectSearchingForHeader) {
                 { requestSignalSlingerReload() }
             } else {
                 null
@@ -4390,11 +4402,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
                 if (advancedModeEnabled) {
                     add(
-                        ToolOption("Disable Advanced Mode", advancedModeItem = true) {
-                            setAdvancedModeEnabled(false)
-                        },
-                    )
-                    add(
                         ToolOption("Temperature Logs", advancedModeItem = true) {
                             showTemperatureLogsDialog()
                         },
@@ -4420,6 +4427,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             renderContent()
                         },
                     )
+                    add(
+                        ToolOption("Disable Advanced Mode", advancedModeItem = true) {
+                            setAdvancedModeEnabled(false)
+                        },
+                    )
                 } else {
                     add(
                         ToolOption("Enable Advanced Mode...") {
@@ -4436,7 +4448,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     val option = getItem(position)
                     textView.text = option?.label.orEmpty()
                     if (advancedModeEnabled && option?.advancedModeItem == true) {
-                        textView.setTextColor(Color.parseColor("#9E1C1C"))
+                        textView.setTextColor(Color.parseColor("#2F5EA6"))
                         textView.setTypeface(Typeface.DEFAULT_BOLD)
                     } else {
                         textView.setTextColor(Color.parseColor("#1F1F1F"))

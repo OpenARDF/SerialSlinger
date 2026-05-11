@@ -1048,6 +1048,8 @@ object AndroidSessionController {
         requestedTarget: AndroidConnectionTarget? = null,
         requestedTargets: List<AndroidConnectionTarget>? = null,
         source: String = "ui",
+        failureStatusText: String = "No SignalSlinger found.",
+        failureStatusIsError: Boolean = true,
         onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
     ) {
         val probeStart =
@@ -1221,11 +1223,11 @@ object AndroidSessionController {
                     statusIsError = false
                 } else {
                     latestProbeSummary = buildString {
-                        appendLine("No SignalSlinger found.")
+                        appendLine(failureStatusText)
                         append(result.exceptionOrNull()?.message ?: "Unknown error")
                     }.trim()
-                    statusText = "No SignalSlinger found."
-                    statusIsError = true
+                    statusText = failureStatusText
+                    statusIsError = failureStatusIsError
                 }
                 probeInFlight = false
                 signalSlingerReadInFlight = false

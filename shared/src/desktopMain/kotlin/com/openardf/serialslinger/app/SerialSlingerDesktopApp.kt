@@ -854,6 +854,31 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         addActionListener { setRawSerialVisible(isSelected) }
                     }
                     add(showRawSerialMenuItem)
+                    add(
+                        JMenuItem("Update SignalSlinger...").apply {
+                            addActionListener { chooseSignalSlingerUpdatePackage() }
+                        },
+                    )
+                    automaticFirmwareUpdatesMenuItem = JCheckBoxMenuItem(
+                        "Automatic SignalSlinger Firmware Updates",
+                        displayPreferences.automaticFirmwareUpdatesEnabled,
+                    ).apply {
+                        addActionListener { setAutomaticFirmwareUpdatesEnabled(isSelected) }
+                    }
+                    add(automaticFirmwareUpdatesMenuItem)
+                    add(
+                        JMenuItem("Install Bootloader on SignalSlinger...").apply {
+                            installBootloaderMenuItem = this
+                            addActionListener { readDeviceThenChooseSignalSlingerWorkshopSetupPackage() }
+                        },
+                    )
+                    add(
+                        JMenuItem("Install Bootloader on Bare PCB...").apply {
+                            installBootloaderBarePcbMenuItem = this
+                            addActionListener { chooseSignalSlingerWorkshopSetupPackage(serialVerification = false) }
+                        },
+                    )
+                    addSeparator()
                     showLogMenuItem = JCheckBoxMenuItem("Show Session Log", displayPreferences.logVisible).apply {
                         addActionListener { setLogVisible(isSelected) }
                     }
@@ -869,35 +894,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         },
                     )
                     add(
-                        JMenuItem("Update SignalSlinger...").apply {
-                            addActionListener { chooseSignalSlingerUpdatePackage() }
-                        },
-                    )
-                    add(
-                        JMenuItem("Install Bootloader on SignalSlinger...").apply {
-                            installBootloaderMenuItem = this
-                            addActionListener { readDeviceThenChooseSignalSlingerWorkshopSetupPackage() }
-                        },
-                    )
-                    add(
-                        JMenuItem("Install Bootloader on Bare PCB...").apply {
-                            installBootloaderBarePcbMenuItem = this
-                            addActionListener { chooseSignalSlingerWorkshopSetupPackage(serialVerification = false) }
-                        },
-                    )
-                    automaticFirmwareUpdatesMenuItem = JCheckBoxMenuItem(
-                        "Automatic SignalSlinger Firmware Updates",
-                        displayPreferences.automaticFirmwareUpdatesEnabled,
-                    ).apply {
-                        addActionListener { setAutomaticFirmwareUpdatesEnabled(isSelected) }
-                    }
-                    add(automaticFirmwareUpdatesMenuItem)
-                    addSeparator()
-                    resetVolatileTemperatureExtremaMenuItem = JMenuItem("Reset Volatile Max/Min Temperature...").apply {
-                        addActionListener { confirmAndResetVolatileTemperatureExtrema() }
-                    }
-                    add(resetVolatileTemperatureExtremaMenuItem)
-                    add(
                         JMenuItem("Clear Current Log...").apply {
                             addActionListener { confirmAndClearCurrentLog() }
                         },
@@ -907,7 +903,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                             addActionListener { confirmAndDeleteAllLogs() }
                         },
                     )
+                    temperatureLogsMenuItem = JMenuItem("Temperature Logs").apply {
+                        addActionListener { showTemperatureLogsDialog() }
+                    }
+                    add(temperatureLogsMenuItem)
+                    temperatureLogMenuItem = JCheckBoxMenuItem("Log Temperature").apply {
+                        addActionListener { setTemperatureLoggingEnabled(isSelected) }
+                    }
+                    add(temperatureLogMenuItem)
                     addSeparator()
+                    resetVolatileTemperatureExtremaMenuItem = JMenuItem("Reset Volatile Max/Min Temperature...").apply {
+                        addActionListener { confirmAndResetVolatileTemperatureExtrema() }
+                    }
+                    add(resetVolatileTemperatureExtremaMenuItem)
                     advancedModeMenuItem = JMenuItem().apply {
                         addActionListener {
                             if (displayPreferences.advancedModeEnabled) {
@@ -922,14 +930,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         addActionListener { confirmAndResetMaximumEverTemperature() }
                     }
                     add(resetMaximumEverTemperatureMenuItem)
-                    temperatureLogsMenuItem = JMenuItem("Temperature Logs").apply {
-                        addActionListener { showTemperatureLogsDialog() }
-                    }
-                    add(temperatureLogsMenuItem)
-                    temperatureLogMenuItem = JCheckBoxMenuItem("Log Temperature").apply {
-                        addActionListener { setTemperatureLoggingEnabled(isSelected) }
-                    }
-                    add(temperatureLogMenuItem)
                     updateAdvancedMenuItems()
                 },
             )
@@ -7761,7 +7761,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun updateAdvancedMenuItems() {
-        val advancedColor = Color(0x9E, 0x1C, 0x1C)
+        val advancedColor = cloneAccentColor
         val defaultMenuForeground = UIManager.getColor("MenuItem.foreground") ?: Color.BLACK
         val defaultCheckBoxMenuForeground = UIManager.getColor("CheckBoxMenuItem.foreground") ?: defaultMenuForeground
         val advancedEnabled = displayPreferences.advancedModeEnabled

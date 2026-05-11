@@ -33,7 +33,7 @@ data class DesktopDisplayPreferences(
     val scheduleTimeInputMode: ScheduleTimeInputMode = ScheduleTimeInputMode.ABSOLUTE,
     val defaultEventLengthMinutes: Int = 6 * 60,
     val advancedModeEnabled: Boolean = false,
-    val automaticFirmwareUpdatesEnabled: Boolean = false,
+    val automaticFirmwareUpdatesEnabled: Boolean = true,
     val timedEventDefaultFrequencies: TimedEventDefaultFrequencies = FrequencySupport.defaultTimedEventFrequencies,
 )
 
@@ -82,7 +82,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
             ),
             defaultEventLengthMinutes = preferences.getInt(keyDefaultEventLengthMinutes, 6 * 60).coerceIn(10, 24 * 60),
             advancedModeEnabled = preferences.getBoolean(keyAdvancedModeEnabled, false),
-            automaticFirmwareUpdatesEnabled = preferences.getBoolean(keyAutomaticFirmwareUpdatesEnabled, false),
+            automaticFirmwareUpdatesEnabled = preferences.getBoolean(keyAutomaticFirmwareUpdatesEnabled, true),
             timedEventDefaultFrequencies =
                 FrequencySupport.sanitizeTimedEventDefaultFrequencies(
                     TimedEventDefaultFrequencies(
