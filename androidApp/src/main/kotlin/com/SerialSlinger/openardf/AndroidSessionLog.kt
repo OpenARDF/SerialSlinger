@@ -21,6 +21,13 @@ data class AndroidLogEntry(
     val timestampMs: Long = System.currentTimeMillis(),
 )
 
+data class AndroidSessionLogFile(
+    val file: File,
+    val name: String,
+    val sizeBytes: Long,
+    val lastModifiedMs: Long,
+)
+
 data class AndroidTemperatureLogFile(
     val file: File,
     val name: String,
@@ -166,6 +173,20 @@ class AndroidSessionLog(
         return if (text.length <= maxChars) text else text.takeLast(maxChars)
     }
 
+    fun listSessionLogFiles(): List<AndroidSessionLogFile> {
+        ensureCurrentLogFile()
+        return sessionLogFiles()
+            .sortedByDescending { it.lastModified() }
+            .map { file ->
+                AndroidSessionLogFile(
+                    file = file,
+                    name = file.name,
+                    sizeBytes = file.length(),
+                    lastModifiedMs = file.lastModified(),
+                )
+            }
+    }
+
     fun listTemperatureLogFiles(): List<AndroidTemperatureLogFile> {
         return temperatureLogFiles()
             .sortedByDescending { it.lastModified() }
@@ -184,6 +205,11 @@ class AndroidSessionLog(
         if (temperatureLogFile?.canonicalPath == file.canonicalPath) {
             return false
         }
+        return file.delete()
+    }
+
+    fun deleteSessionLog(name: String): Boolean {
+        val file = sessionLogFileByName(name) ?: return false
         return file.delete()
     }
 
@@ -263,8 +289,26 @@ class AndroidSessionLog(
             .toList()
     }
 
+    private fun sessionLogFiles(): List<File> {
+        return logDirectory()
+            .listFiles { file ->
+                file.isFile &&
+                    file.name.startsWith("serialslinger-") &&
+                    file.name.endsWith(".log")
+            }.orEmpty()
+            .toList()
+    }
+
     private fun temperatureLogFileByName(name: String): File? {
         if (!name.startsWith("serialslinger-temperature-") || !name.endsWith(".csv") || name.contains('/')) {
+            return null
+        }
+        val file = File(logDirectory(), name)
+        return file.takeIf { it.isFile }
+    }
+
+    private fun sessionLogFileByName(name: String): File? {
+        if (!name.startsWith("serialslinger-") || !name.endsWith(".log") || name.contains('/')) {
             return null
         }
         val file = File(logDirectory(), name)

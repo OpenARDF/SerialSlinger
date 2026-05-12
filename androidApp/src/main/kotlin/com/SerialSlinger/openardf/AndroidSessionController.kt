@@ -4189,12 +4189,28 @@ object AndroidSessionController {
         return log.listTemperatureLogFiles()
     }
 
+    fun sessionLogFiles(): List<AndroidSessionLogFile> {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return emptyList()
+        return log.listSessionLogFiles()
+    }
+
     fun deleteTemperatureLog(name: String): Boolean {
         val log =
             synchronized(this) {
                 sessionLog
             } ?: return false
         return log.deleteTemperatureLog(name)
+    }
+
+    fun deleteSessionLog(name: String): Boolean {
+        val log =
+            synchronized(this) {
+                sessionLog
+            } ?: return false
+        return log.deleteSessionLog(name)
     }
 
     fun deleteAllTemperatureLogs(): Int {

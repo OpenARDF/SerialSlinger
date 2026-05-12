@@ -3,7 +3,6 @@ package com.SerialSlinger.openardf
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.ActivityNotFoundException
 import android.app.AlertDialog
 import android.app.DatePickerDialog
 import android.app.Dialog
@@ -15,7 +14,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -43,11 +41,14 @@ import android.view.Window
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.ViewGroup
+import android.widget.AbsListView
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckedTextView
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.PopupWindow
 import android.widget.ProgressBar
 import android.widget.RadioButton
@@ -3525,7 +3526,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             "Frequency Units (${if (frequencyDisplayUnit == AndroidFrequencyDisplayUnit.MHZ) "MHz" else "kHz"})",
             "Temperature Units (${if (temperatureDisplayUnit == AndroidTemperatureDisplayUnit.CELSIUS) "Celsius" else "Fahrenheit"})",
             "Device Time Setting (${if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) "Manual" else "Automatic"})",
-            "Schedule Time Setting (${if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"})",
+            "Event Schedule Setting Method (${if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"})",
             "Default Event Length (${formatDefaultEventLength(defaultEventLengthMinutes)})",
             "Timed Event Default Frequencies",
             "Set Frequencies to Defaults",
@@ -4357,7 +4358,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     },
                 )
                 add(
-                    ToolOption("Update SignalSlinger") {
+                    ToolOption("Update SignalSlinger Firmware") {
                         showSignalSlingerUpdateConfirmation(uiState)
                     },
                 )
@@ -4373,31 +4374,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     },
                 )
                 add(
-                    ToolOption("View Android Session Log") {
-                        showLargeTextDialog(
-                            title = "Android Session Log",
-                            text = AndroidSessionController.debugSessionLogSummary(),
-                            colorizeLogCategories = true,
-                        )
-                    },
-                )
-                add(
-                    ToolOption("Email Android Session Log") {
-                        emailAndroidSessionLog()
-                    },
-                )
-                add(
-                    ToolOption("Clear Android Session Logs") {
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle("Clear Android Session Logs")
-                            .setMessage("Delete all current SerialSlinger log files stored by this Android app?")
-                            .setPositiveButton("Delete") { _, _ ->
-                                val message = AndroidSessionController.clearSessionLogs()
-                                AndroidSessionController.recordStatus(message, isError = false)
-                                showLargeTextDialog("Android Session Logs", message)
-                            }
-                            .setNegativeButton("Cancel", null)
-                            .showLogged("Clear Android Session Logs")
+                    ToolOption("Android Session Logs") {
+                        showAndroidSessionLogsDialog()
                     },
                 )
                 if (advancedModeEnabled) {
@@ -4412,7 +4390,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 if (uiState.temperatureLoggingEnabled) {
                                     "Stop Logging Temperature"
                                 } else {
-                                    "Log Temperature"
+                                    "Start New Temperature Log"
                                 },
                             advancedModeItem = true,
                         ) {
@@ -4900,50 +4878,299 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         renderContent()
     }
 
-    private fun showTemperatureLogsDialog() {
-        val logs = AndroidSessionController.temperatureLogFiles()
-        if (logs.isEmpty()) {
-            AlertDialog.Builder(this)
-                .setTitle("Temperature Logs")
-                .setMessage("No saved temperature logs were found.")
-                .setPositiveButton("Close", null)
-                .showLogged("Temperature Logs")
-            return
-        }
-        val options =
-            listOf("Share All Temperature Logs") +
-                logs.map { log -> formatTemperatureLogListLabel(log) } +
-                listOf("Delete All Temperature Logs...")
-        AlertDialog.Builder(this)
-            .setTitle("Temperature Logs")
-            .setItems(options.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> shareTemperatureLogs(logs.map { it.file })
-                    logs.size + 1 -> confirmDeleteAllTemperatureLogs()
-                    else -> showTemperatureLogActions(logs[which - 1])
-                }
-            }
-            .setNegativeButton("Close", null)
-            .showLogged("Temperature Logs")
+    private fun showAndroidSessionLogsDialog() {
+        val logs = AndroidSessionController.sessionLogFiles()
+        showLogFileSelectorDialog(
+            title = "Android Session Logs",
+            emptyMessage = "No saved Android session logs were found.",
+            labels = logs.map { log -> formatAndroidSessionLogListLabel(log) }.toTypedArray(),
+            onView = { index -> showAndroidSessionLog(logs[index]) },
+            onSend = { indices -> shareAndroidSessionLogs(indices.map { logs[it].file }) },
+            onDelete = { indices -> confirmDeleteAndroidSessionLogs(indices.map { logs[it] }) },
+        )
     }
 
-    private fun showTemperatureLogActions(log: AndroidTemperatureLogFile) {
-        AlertDialog.Builder(this)
-            .setTitle(log.name)
-            .setMessage(
-                buildString {
-                    appendLine("Modified: ${formatLogTimestamp(log.lastModifiedMs)}")
-                    append("Size: ${formatByteCount(log.sizeBytes)}")
-                },
-            )
-            .setItems(arrayOf("Share Temperature Log", "Delete Temperature Log")) { _, which ->
-                when (which) {
-                    0 -> shareTemperatureLogs(listOf(log.file))
-                    1 -> confirmDeleteTemperatureLog(log.name)
+    private fun showAndroidSessionLog(log: AndroidSessionLogFile) {
+        val text =
+            runCatching { log.file.readText() }
+                .getOrElse { error -> "Could not read ${log.name}: ${error.message ?: "unknown error"}" }
+        showLargeTextDialog(
+            title = log.name,
+            text = text,
+            colorizeLogCategories = true,
+            monospace = true,
+            minimumVisibleLines = 12,
+        )
+    }
+
+    private fun shareAndroidSessionLogs(files: List<File>) {
+        val attachmentUris =
+            files.mapNotNull { file ->
+                runCatching {
+                    FileProvider.getUriForFile(
+                        this,
+                        "${BuildConfig.APPLICATION_ID}.fileprovider",
+                        file,
+                    )
+                }.getOrNull()
+            }
+
+        if (attachmentUris.size != files.size || attachmentUris.isEmpty()) {
+            AndroidSessionController.recordStatus("Could not prepare Android session log for sharing.", isError = true)
+            renderContent()
+            return
+        }
+
+        val intent =
+            if (attachmentUris.size == 1) {
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Android Session Log")
+                    putExtra(Intent.EXTRA_TEXT, "Android session log attached.")
+                    putExtra(Intent.EXTRA_STREAM, attachmentUris.first())
+                    clipData = ClipData.newRawUri("SerialSlinger Android Session Log", attachmentUris.first())
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            } else {
+                Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Android Session Logs")
+                    putExtra(Intent.EXTRA_TEXT, "Android session logs attached.")
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(attachmentUris))
+                    clipData = ClipData.newUri(contentResolver, "SerialSlinger Android Session Logs", attachmentUris.first())
+                    attachmentUris.drop(1).forEach { uri ->
+                        clipData?.addItem(ClipData.Item(uri))
+                    }
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
             }
-            .setNegativeButton("Back") { _, _ -> showTemperatureLogsDialog() }
-            .showLogged("Temperature Log")
+        try {
+            startActivity(Intent.createChooser(intent, "Share Android Session Logs"))
+        } catch (_: Throwable) {
+            AndroidSessionController.recordStatus("No app is available to share the Android session log.", isError = true)
+            renderContent()
+        }
+    }
+
+    private fun showTemperatureLogsDialog() {
+        val logs = AndroidSessionController.temperatureLogFiles()
+        showLogFileSelectorDialog(
+            title = "Temperature Logs",
+            emptyMessage = "No saved temperature logs were found.",
+            labels = logs.map { log -> formatTemperatureLogListLabel(log) }.toTypedArray(),
+            onView = { index -> showTemperatureLog(logs[index]) },
+            onSend = { indices -> shareTemperatureLogs(indices.map { logs[it].file }) },
+            onDelete = { indices -> confirmDeleteTemperatureLogs(indices.map { logs[it] }) },
+        )
+    }
+
+    private fun showLogFileSelectorDialog(
+        title: String,
+        emptyMessage: String,
+        labels: Array<String>,
+        onView: (Int) -> Unit,
+        onSend: (List<Int>) -> Unit,
+        onDelete: (List<Int>) -> Unit,
+    ) {
+        if (labels.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(emptyMessage)
+                .setPositiveButton("Close", null)
+                .showLogged(title)
+            return
+        }
+        val density = resources.displayMetrics.density
+        val horizontalPadding = (16 * density).toInt()
+        val verticalPadding = (8 * density).toInt()
+        val rowHeight = (76 * density).toInt()
+        val rowHorizontalPadding = (18 * density).toInt()
+        val rowVerticalPadding = (6 * density).toInt()
+        val maxListHeight = ((resources.configuration.screenHeightDp * density) * 0.42f)
+            .toInt()
+            .coerceAtLeast(rowHeight * 2)
+        val listHeight = (labels.size * rowHeight)
+            .coerceAtMost(maxListHeight)
+        val checkMarkAttribute = TypedValue()
+        theme.resolveAttribute(android.R.attr.listChoiceIndicatorMultiple, checkMarkAttribute, true)
+        val listView =
+            ListView(this).apply {
+                choiceMode = ListView.CHOICE_MODE_MULTIPLE
+                adapter =
+                    object : ArrayAdapter<String>(this@MainActivity, 0, labels) {
+                        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                            val row =
+                                (convertView as? CheckedTextView) ?: CheckedTextView(this@MainActivity).apply {
+                                    id = android.R.id.text1
+                                    setCheckMarkDrawable(checkMarkAttribute.resourceId)
+                                    textSize = 16f
+                                    setTextColor(Color.parseColor("#1F1F1F"))
+                                    gravity = Gravity.CENTER_VERTICAL
+                                    minLines = 2
+                                    maxLines = 3
+                                    setSingleLine(false)
+                                    setLineSpacing(0f, 1.05f)
+                                    setPadding(rowHorizontalPadding, rowVerticalPadding, rowHorizontalPadding, rowVerticalPadding)
+                                }
+                            row.apply {
+                                text = getItem(position).orEmpty()
+                                layoutParams = AbsListView.LayoutParams(MATCH_PARENT, rowHeight)
+                            }
+                            return row
+                        }
+                    }
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        MATCH_PARENT,
+                        listHeight,
+                    )
+            }
+        val viewButton = Button(this).apply { text = "View" }
+        val sendButton = Button(this).apply { text = "Send" }
+        val deleteButton = Button(this).apply { text = "Delete" }
+        val selectAllButton = Button(this).apply { text = "Select All" }
+        fun buttonLayoutParams(): LinearLayout.LayoutParams =
+            LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
+                val margin = (4 * density).toInt()
+                setMargins(margin, margin, margin, margin)
+            }
+        val content =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(horizontalPadding, verticalPadding, horizontalPadding, 0)
+                addView(
+                    LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        addView(viewButton, buttonLayoutParams())
+                        addView(sendButton, buttonLayoutParams())
+                    },
+                )
+                addView(
+                    LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        addView(deleteButton, buttonLayoutParams())
+                        addView(selectAllButton, buttonLayoutParams())
+                    },
+                )
+                addView(listView)
+            }
+        lateinit var dialog: AlertDialog
+        val selectedIndices = {
+            labels.indices.filter { index -> listView.isItemChecked(index) }
+        }
+        val updateActionButtons = {
+            val selectedCount = selectedIndices().size
+            viewButton.isEnabled = selectedCount == 1
+            sendButton.isEnabled = selectedCount >= 1
+            deleteButton.isEnabled = selectedCount >= 1
+            selectAllButton.isEnabled = labels.size > 1
+            selectAllButton.text = if (selectedCount == labels.size) "Deselect All" else "Select All"
+        }
+        dialog = AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(content)
+            .setNegativeButton("Close", null)
+            .showLogged(title)
+        listView.setOnItemClickListener { _, _, _, _ -> updateActionButtons() }
+        viewButton.setOnClickListener {
+            selectedIndices().singleOrNull()?.let { index ->
+                dialog.dismiss()
+                onView(index)
+            }
+        }
+        sendButton.setOnClickListener {
+            val selected = selectedIndices()
+            if (selected.isNotEmpty()) {
+                dialog.dismiss()
+                onSend(selected)
+            }
+        }
+        deleteButton.setOnClickListener {
+            val selected = selectedIndices()
+            if (selected.isNotEmpty()) {
+                dialog.dismiss()
+                onDelete(selected)
+            }
+        }
+        selectAllButton.setOnClickListener {
+            val shouldSelectAll = selectedIndices().size != labels.size
+            labels.indices.forEach { index -> listView.setItemChecked(index, shouldSelectAll) }
+            updateActionButtons()
+        }
+        dialog.setOnShowListener {
+            updateActionButtons()
+        }
+        listView.post {
+            updateActionButtons()
+        }
+    }
+
+    private fun confirmDeleteAndroidSessionLogs(logs: List<AndroidSessionLogFile>) {
+        if (logs.isEmpty()) {
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (logs.size == 1) "Delete Android Session Log" else "Delete Android Session Logs")
+            .setMessage(
+                if (logs.size == 1) {
+                    "Delete ${logs.single().name}?"
+                } else {
+                    "Delete ${logs.size} selected Android session logs?"
+                },
+            )
+            .setPositiveButton("Delete") { _, _ ->
+                val deletedCount = logs.count { AndroidSessionController.deleteSessionLog(it.name) }
+                val message =
+                    when (deletedCount) {
+                        0 -> "No Android session logs were deleted."
+                        1 -> "Deleted 1 Android session log."
+                        else -> "Deleted $deletedCount Android session logs."
+                    }
+                AndroidSessionController.recordStatus(message, isError = deletedCount == 0)
+                showLargeTextDialog("Android Session Logs", message)
+            }
+            .setNegativeButton("Cancel") { _, _ -> showAndroidSessionLogsDialog() }
+            .showLogged("Delete Android Session Logs")
+    }
+
+    private fun confirmDeleteTemperatureLogs(logs: List<AndroidTemperatureLogFile>) {
+        if (logs.isEmpty()) {
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (logs.size == 1) "Delete Temperature Log" else "Delete Temperature Logs")
+            .setMessage(
+                if (logs.size == 1) {
+                    "Delete ${logs.single().name}?"
+                } else {
+                    "Delete ${logs.size} selected temperature logs?"
+                },
+            )
+            .setPositiveButton("Delete") { _, _ ->
+                val deletedCount = logs.count { AndroidSessionController.deleteTemperatureLog(it.name) }
+                val message =
+                    when (deletedCount) {
+                        0 -> "No temperature logs were deleted. Stop temperature logging first if the selected file is active."
+                        1 -> "Deleted 1 temperature log."
+                        else -> "Deleted $deletedCount temperature logs."
+                    }
+                AndroidSessionController.recordStatus(message, isError = deletedCount == 0)
+                showLargeTextDialog("Temperature Logs", message)
+            }
+            .setNegativeButton("Cancel") { _, _ -> showTemperatureLogsDialog() }
+            .showLogged("Delete Temperature Logs")
+    }
+
+    private fun showTemperatureLog(log: AndroidTemperatureLogFile) {
+        val text =
+            runCatching { log.file.readText() }
+                .getOrElse { error -> "Could not read ${log.name}: ${error.message ?: "unknown error"}" }
+        showLargeTextDialog(
+            title = log.name,
+            text = text,
+            monospace = true,
+            minimumVisibleLines = 12,
+        )
     }
 
     private fun shareTemperatureLogs(files: List<File>) {
@@ -5016,45 +5243,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             .showLogged("Thermal Shutdown Threshold")
     }
 
-    private fun confirmDeleteTemperatureLog(name: String) {
-        AlertDialog.Builder(this)
-            .setTitle("Delete Temperature Log")
-            .setMessage("Delete $name?")
-            .setPositiveButton("Delete") { _, _ ->
-                val deleted = AndroidSessionController.deleteTemperatureLog(name)
-                val message =
-                    if (deleted) {
-                        "Deleted $name."
-                    } else {
-                        "Could not delete $name. Stop temperature logging first if this file is active."
-                    }
-                AndroidSessionController.recordStatus(message, isError = !deleted)
-                showLargeTextDialog("Temperature Logs", message)
-            }
-            .setNegativeButton("Cancel") { _, _ -> showTemperatureLogsDialog() }
-            .showLogged("Delete Temperature Log")
-    }
-
-    private fun confirmDeleteAllTemperatureLogs() {
-        AlertDialog.Builder(this)
-            .setTitle("Delete All Temperature Logs")
-            .setMessage("Delete all saved SerialSlinger temperature CSV files stored by this Android app?")
-            .setPositiveButton("Delete") { _, _ ->
-                val deletedCount = AndroidSessionController.deleteAllTemperatureLogs()
-                val message =
-                    when (deletedCount) {
-                        0 -> "No saved temperature logs were deleted. Stop temperature logging first if the only file is active."
-                        1 -> "Deleted 1 temperature log."
-                        else -> "Deleted $deletedCount temperature logs."
-                    }
-                AndroidSessionController.recordStatus(message, isError = false)
-                showLargeTextDialog("Temperature Logs", message)
-            }
-            .setNegativeButton("Cancel") { _, _ -> showTemperatureLogsDialog() }
-            .showLogged("Delete All Temperature Logs")
-    }
-
     private fun formatTemperatureLogListLabel(log: AndroidTemperatureLogFile): String {
+        return "${log.name}\n${formatLogTimestamp(log.lastModifiedMs)} - ${formatByteCount(log.sizeBytes)}"
+    }
+
+    private fun formatAndroidSessionLogListLabel(log: AndroidSessionLogFile): String {
         return "${log.name}\n${formatLogTimestamp(log.lastModifiedMs)} - ${formatByteCount(log.sizeBytes)}"
     }
 
@@ -5069,66 +5262,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             sizeBytes >= mb -> String.format(Locale.US, "%.1f MB", sizeBytes / mb)
             sizeBytes >= kb -> String.format(Locale.US, "%.1f KB", sizeBytes / kb)
             else -> "$sizeBytes B"
-        }
-    }
-
-    private fun emailAndroidSessionLog() {
-        val candidates =
-            buildList {
-                currentSessionLogAttachmentUriOrNull()?.let { add(createAndroidSessionLogAttachmentIntent(it)) }
-                add(createAndroidSessionLogFallbackIntent())
-            }
-
-        candidates.forEach { intent ->
-            try {
-                startActivity(Intent.createChooser(intent, "Email Android Session Log"))
-                return
-            } catch (_: ActivityNotFoundException) {
-                // Try the next export path before reporting failure.
-            } catch (_: Throwable) {
-                // Some vendor builds throw non-standard activity launch errors here.
-            }
-        }
-
-        AndroidSessionController.recordStatus(
-            "No app is available to send the Android session log.",
-            isError = true,
-        )
-        renderContent()
-    }
-
-    private fun androidSessionLogEmailBody(): String {
-        return "Log file attached. Problem description:"
-    }
-
-    private fun currentSessionLogAttachmentUriOrNull(): Uri? {
-        val logFile = AndroidSessionController.currentSessionLogFile() ?: return null
-        return runCatching {
-            FileProvider.getUriForFile(
-                this,
-                "${BuildConfig.APPLICATION_ID}.fileprovider",
-                logFile,
-            )
-        }.getOrNull()
-    }
-
-    private fun createAndroidSessionLogAttachmentIntent(attachmentUri: Uri): Intent {
-        return Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_EMAIL, arrayOf("openardf@gmail.com"))
-            putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Android Session Log")
-            putExtra(Intent.EXTRA_TEXT, androidSessionLogEmailBody())
-            putExtra(Intent.EXTRA_STREAM, attachmentUri)
-            clipData = ClipData.newRawUri("SerialSlinger Android Session Log", attachmentUri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-    }
-
-    private fun createAndroidSessionLogFallbackIntent(): Intent {
-        return Intent(Intent.ACTION_SENDTO).apply {
-            data = Uri.parse("mailto:openardf@gmail.com")
-            putExtra(Intent.EXTRA_SUBJECT, "SerialSlinger Android Session Log")
-            putExtra(Intent.EXTRA_TEXT, androidSessionLogEmailBody())
         }
     }
 

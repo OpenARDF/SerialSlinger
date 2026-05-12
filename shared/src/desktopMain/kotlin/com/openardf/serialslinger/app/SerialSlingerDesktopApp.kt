@@ -757,7 +757,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         },
                     )
                     add(
-                        JMenu("Schedule Time Setting").apply {
+                        JMenu("Event Schedule Setting Method").apply {
                             val group = ButtonGroup()
                             scheduleTimeAbsoluteMenuItem = JRadioButtonMenuItem(
                                 "Absolute",
@@ -855,7 +855,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     add(showRawSerialMenuItem)
                     add(
-                        JMenuItem("Update SignalSlinger...").apply {
+                        JMenuItem("Update SignalSlinger Firmware...").apply {
                             addActionListener { chooseSignalSlingerUpdatePackage() }
                         },
                     )
@@ -907,7 +907,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         addActionListener { showTemperatureLogsDialog() }
                     }
                     add(temperatureLogsMenuItem)
-                    temperatureLogMenuItem = JCheckBoxMenuItem("Log Temperature").apply {
+                    temperatureLogMenuItem = JCheckBoxMenuItem("Start New Temperature Log").apply {
                         addActionListener { setTemperatureLoggingEnabled(isSelected) }
                     }
                     add(temperatureLogMenuItem)
@@ -8066,7 +8066,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         updateWritableControlAvailability(backgroundWorkInProgress)
         formScroll.revalidate()
         formScroll.repaint()
-        setStatus("Schedule Time Setting is now ${if (mode == ScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"}.")
+        setStatus("Event Schedule Setting Method is now ${if (mode == ScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"}.")
     }
 
     private fun setDefaultEventLengthMinutes(minutes: Int) {
