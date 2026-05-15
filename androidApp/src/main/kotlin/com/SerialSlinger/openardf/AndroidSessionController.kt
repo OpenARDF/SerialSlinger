@@ -42,6 +42,7 @@ import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateProgress
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
 import com.openardf.serialslinger.protocol.SignalSlingerAlreadyCurrentException
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
+import com.openardf.serialslinger.protocol.SignalSlingerReleaseInfo
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
 import com.openardf.serialslinger.transport.AndroidFirmwareUpdateTransport
 import com.openardf.serialslinger.transport.AndroidDirectSerialTransport
@@ -5680,7 +5681,19 @@ object AndroidSessionController {
                     } finally {
                         transport.disconnect()
                     }
-                    selection.release
+                    val reloadResult = reloadSignalSlingerAfterFirmwareUpdate(
+                        context = context,
+                        deviceName = start.deviceName,
+                    ).onFailure { failure ->
+                        updateLog += AndroidLogEntry(
+                            "SignalSlinger update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}",
+                            AndroidLogCategory.APP,
+                        )
+                    }.getOrNull()
+                    FirmwareUpdateOutcome(
+                        release = selection.release,
+                        reloadResult = reloadResult,
+                    )
                 }
             val alreadyCurrent = result.exceptionOrNull()?.isAlreadyCurrentUpdate() == true
             if (result.isFailure) {
@@ -5701,16 +5714,33 @@ object AndroidSessionController {
             synchronized(this) {
                 signalSlingerReadInFlight = false
                 if (result.isSuccess) {
-                    val release = result.getOrThrow()
+                    val outcome = result.getOrThrow()
+                    val release = outcome.release
                     pendingBootloaderVersion = PendingBootloaderVersion(
                         firmwareVersion = release.version,
                         board = release.board,
                         bootloaderVersion = release.serialSlinger.bootloaderVersion,
                         bootloaderProtocolVersion = release.serialSlinger.protocolVersion,
                     )
-                    latestSessionViewState = null
+                    val displayedReloadResult = outcome.reloadResult?.let(::applyPendingBootloaderVersion)
+                    if (displayedReloadResult != null) {
+                        latestSessionViewState = AndroidSessionViewState(
+                            state = displayedReloadResult.state,
+                            traceEntries = displayedReloadResult.traceEntries,
+                        )
+                        rememberLoadedTargetLocked(AndroidConnectionTarget.Usb(startState.getOrThrow().deviceName))
+                        displayedReloadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
+                        applySnapshotDrafts(displayedReloadResult.state.snapshot)
+                    } else {
+                        latestSessionViewState = null
+                    }
                     latestSubmitSummary = "SignalSlinger update completed: ${release.product} ${release.version} ${release.board}."
-                    latestProbeSummary = "Reload SignalSlinger after update."
+                    latestProbeSummary =
+                        if (displayedReloadResult != null) {
+                            "Reloaded SignalSlinger after update."
+                        } else {
+                            "Reload SignalSlinger after update."
+                        }
                     statusText = "SignalSlinger update completed."
                     statusIsError = false
                     firmwareUpdateProgress = null
@@ -5745,6 +5775,42 @@ object AndroidSessionController {
                     )
                 }
             }
+        }
+    }
+
+    private fun reloadSignalSlingerAfterFirmwareUpdate(
+        context: Context,
+        deviceName: String,
+    ): Result<DeviceLoadResult> {
+        synchronized(this) {
+            statusText = "Reloading SignalSlinger..."
+            statusIsError = false
+            latestProbeSummary = "Reloading SignalSlinger after update..."
+        }
+        notifyListeners()
+        return runWithResolvedTransport(
+            context = context,
+            requestedDeviceName = deviceName,
+            requestedTarget = AndroidConnectionTarget.Usb(deviceName),
+            allowUsbAutoDetect = true,
+            missingMessage = "SignalSlinger is no longer connected.",
+        ) { _, transport ->
+            val initialLoad = connectAndLoadAfterUsbStartupWarmup(
+                transport = transport,
+                onReportReceived = ::markSignalSlingerReadInFlight,
+                afterCommand = { command, state, activeTransport ->
+                    drainResidualStartupReportAfterVer(
+                        command = command,
+                        state = state,
+                        transport = activeTransport,
+                    )
+                },
+            )
+            require(hasSignalSlingerReportLine(initialLoad.linesReceived)) {
+                "No SignalSlinger response was received."
+            }
+            val postLoadClockSample = postLoadClockSample(transport, initialLoad)
+            mergeLoadResults(initialLoad, postLoadClockSample?.first)
         }
     }
 
@@ -5904,6 +5970,11 @@ object AndroidSessionController {
         val overrideBoard: String?,
         val recoverAlreadyWaiting: Boolean,
         val requestedVersion: String?,
+    )
+
+    private data class FirmwareUpdateOutcome(
+        val release: SignalSlingerReleaseInfo,
+        val reloadResult: DeviceLoadResult?,
     )
 
     private data class PendingBootloaderVersion(

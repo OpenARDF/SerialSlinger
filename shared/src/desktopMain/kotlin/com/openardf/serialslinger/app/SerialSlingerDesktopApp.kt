@@ -6901,11 +6901,37 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         log("SignalSlinger update completed: ${manifest.product} ${manifest.version} ${manifest.board}.")
+        setBusyProgress(96, 100, "Reloading SignalSlinger")
+        val refreshedConnection = runCatching {
+            loadPortWithAliasFallback(portPath)
+        }.onFailure { failure ->
+            log("SignalSlinger update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}")
+        }.getOrNull()
         SwingUtilities.invokeLater {
             appendLog("Update SignalSlinger", logEntries)
-            clearFormForUnread()
+            if (refreshedConnection != null) {
+                selectPort(refreshedConnection.portPath)
+                applyLoadedConnection(
+                    refreshedConnection.copy(
+                        loadLogTitle = "Update SignalSlinger",
+                        loadLogLeadEntries = listOf(
+                            DesktopLogEntry(
+                                "Reloaded SignalSlinger after firmware update so the visible device information reflects the installed firmware.",
+                                DesktopLogCategory.APP,
+                            ),
+                        ),
+                    ),
+                )
+            } else {
+                clearFormForUnread()
+            }
             setStatus("SignalSlinger update completed.")
-            JOptionPane.showMessageDialog(this, "SignalSlinger update completed.")
+            val message = if (refreshedConnection != null) {
+                "SignalSlinger update completed.\n\nThe displayed device information has been refreshed."
+            } else {
+                "SignalSlinger update completed.\n\nSerialSlinger could not refresh the displayed device information. Use Reload SignalSlinger Data to refresh it."
+            }
+            JOptionPane.showMessageDialog(this, message)
         }
     }
 

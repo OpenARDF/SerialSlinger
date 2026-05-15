@@ -4652,7 +4652,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             result.exceptionOrNull()?.let { error ->
                 showLargeTextDialog("Update SignalSlinger", error.message ?: error.toString())
             }
-            if (result.isSuccess) {
+            if (result.isSuccess && AndroidSessionController.snapshotUiState().sessionViewState == null) {
                 scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
             }
         }
@@ -4790,7 +4790,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             result.exceptionOrNull()?.let { error ->
                 showLargeTextDialog("Update SignalSlinger", error.message ?: error.toString())
             }
-            if (result.isSuccess) {
+            if (result.isSuccess && AndroidSessionController.snapshotUiState().sessionViewState == null) {
                 scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
             }
         }
