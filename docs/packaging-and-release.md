@@ -73,9 +73,10 @@ The intended release flow is:
    - either carry the needed changes across or explicitly record why no cross-platform change is needed
 5. run the automated Android tablet regression: `./scripts/android-regression.sh --serial <adb-serial>`
 6. run the desktop app regression series on macOS with a real attached SignalSlinger
-7. merge the desired release state to `main`
-8. create and push a tag like `v1.0.93`
-9. let the GitHub Actions workflow publish the release artifacts
+7. generate terse Android release notes in plain language and provide them in a copyable text block for Play Console use
+8. merge the desired release state to `main`
+9. create and push a tag like `v1.0.93`
+10. let the GitHub Actions workflow publish the release artifacts
 
 Keep desktop and Android releases in sync by default. Do not run a separate Android-only release flow with different versioning, tests, or parity checks unless that difference is explicitly requested for the release.
 
