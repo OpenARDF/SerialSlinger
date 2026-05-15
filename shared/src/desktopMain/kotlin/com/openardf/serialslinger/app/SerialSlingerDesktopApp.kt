@@ -5245,22 +5245,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         val modeChoice = JOptionPane.showOptionDialog(
             this,
-            "Choose the update mode.\n\nUse hardware override only when the installed firmware build is known to be wrong for the physical board.",
+            "Choose the update mode.\n\nIf the connected device is not responding normally, SerialSlinger will offer to try Recovery Update before writing.",
             "Update SignalSlinger",
             JOptionPane.DEFAULT_OPTION,
             JOptionPane.PLAIN_MESSAGE,
             null,
-            arrayOf("Update Connected Device", "Hardware Override", "Recovery Update", "Cancel"),
+            arrayOf("Update Connected Device", "Hardware Override", "Cancel"),
             "Update Connected Device",
         )
-        if (modeChoice == 3 || modeChoice == JOptionPane.CLOSED_OPTION) {
+        if (modeChoice == 2 || modeChoice == JOptionPane.CLOSED_OPTION) {
             return
         }
         val allowAppHardwareMismatch = modeChoice == 1
-        val recoverAlreadyWaiting = modeChoice == 2
-        if (!recoverAlreadyWaiting && !confirmLoadedFirmwareSupportsUpdate()) {
-            return
-        }
+        val recoverAlreadyWaiting = false
         val overrideBoard =
             if (allowAppHardwareMismatch) {
                 chooseSignalSlingerHardwareOverrideBoard() ?: return
@@ -6673,29 +6670,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return confirmed.get()
     }
 
-    private fun confirmLoadedFirmwareSupportsUpdate(): Boolean {
-        val version = loadedSnapshot?.info?.softwareVersion?.trim().orEmpty()
-        if (SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(version)) {
-            return true
-        }
-
-        val message =
-            if (version.isBlank()) {
-                "Load the attached SignalSlinger before starting an update so SerialSlinger can confirm firmware update support."
-            } else {
-                "The attached SignalSlinger is running firmware $version.\n\nFirmware updates require SignalSlinger firmware 2.0.0 or newer."
-            }
-        JOptionPane.showMessageDialog(this, message, "Update SignalSlinger", JOptionPane.WARNING_MESSAGE)
-        setStatus(
-            if (version.isBlank()) {
-                "Update not started; load the attached SignalSlinger first."
-            } else {
-                "Update not started; attached firmware $version does not support firmware updates."
-            },
-        )
-        return false
-    }
-
     private fun setAutomaticFirmwareUpdatesEnabled(enabled: Boolean) {
         if (displayPreferences.automaticFirmwareUpdatesEnabled == enabled) {
             return
@@ -6728,7 +6702,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
-                performSignalSlingerUpdate(
+                performSignalSlingerUpdateWithRecoveryFallback(
                     portPath = portPath,
                     manifestFile = manifestFile,
                     recoverAlreadyWaiting = recoverAlreadyWaiting,
@@ -6786,7 +6760,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         "Update cancelled."
                     }
                 }
-                performSignalSlingerUpdate(
+                performSignalSlingerUpdateWithRecoveryFallback(
                     portPath = portPath,
                     manifestFile = selection.manifestFile,
                     recoverAlreadyWaiting = recoverAlreadyWaiting,
@@ -6826,7 +6800,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     overrideBoard = overrideBoard,
                 )
                 logEntries += DesktopLogEntry(selection.message, DesktopLogCategory.APP)
-                performSignalSlingerUpdate(
+                performSignalSlingerUpdateWithRecoveryFallback(
                     portPath = portPath,
                     manifestFile = selection.manifestFile,
                     recoverAlreadyWaiting = recoverAlreadyWaiting,
@@ -6839,6 +6813,45 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
                 throw IllegalStateException(friendlyUpdateFailureMessage(exception), exception)
             }
+        }
+    }
+
+    private fun performSignalSlingerUpdateWithRecoveryFallback(
+        portPath: String,
+        manifestFile: File,
+        recoverAlreadyWaiting: Boolean,
+        allowAppHardwareMismatch: Boolean = false,
+        logEntries: MutableList<DesktopLogEntry>,
+    ) {
+        try {
+            performSignalSlingerUpdate(
+                portPath = portPath,
+                manifestFile = manifestFile,
+                recoverAlreadyWaiting = recoverAlreadyWaiting,
+                allowAppHardwareMismatch = allowAppHardwareMismatch,
+                logEntries = logEntries,
+            )
+        } catch (exception: Exception) {
+            if (
+                recoverAlreadyWaiting ||
+                allowAppHardwareMismatch ||
+                exception.isAlreadyCurrentUpdate() ||
+                !isRecoverableNormalUpdateEntryFailure(exception) ||
+                !confirmSignalSlingerRecoveryUpdateRetry(exception)
+            ) {
+                throw exception
+            }
+            logEntries += DesktopLogEntry(
+                "Normal update startup failed; retrying as Recovery Update at user request.",
+                DesktopLogCategory.APP,
+            )
+            performSignalSlingerUpdate(
+                portPath = portPath,
+                manifestFile = manifestFile,
+                recoverAlreadyWaiting = true,
+                allowAppHardwareMismatch = false,
+                logEntries = logEntries,
+            )
         }
     }
 
@@ -6970,19 +6983,52 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return confirmed.get()
     }
 
+    private fun confirmSignalSlingerRecoveryUpdateRetry(exception: Exception): Boolean {
+        val confirmed = AtomicBoolean(false)
+        val details = rootMessage(exception)
+        SwingUtilities.invokeAndWait {
+            val choice = JOptionPane.showOptionDialog(
+                this,
+                "SerialSlinger could not confirm that SignalSlinger is running normally.\n\n" +
+                    "It may already be waiting for a recovery update after an interrupted update.\n\n" +
+                    "$details\n\n" +
+                    "Try Recovery Update now?",
+                "Update SignalSlinger",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                arrayOf("Try Recovery Update", "Cancel"),
+                "Try Recovery Update",
+            )
+            confirmed.set(choice == 0)
+        }
+        return confirmed.get()
+    }
+
     private fun desktopSignalSlingerReleaseCacheDirectory(): File {
         val home = System.getProperty("user.home").orEmpty().ifBlank { "." }
         return File(home, ".serialslinger/signalslinger-updates")
     }
 
-    private fun friendlyUpdateFailureMessage(exception: Exception): String {
+    private fun isRecoverableNormalUpdateEntryFailure(exception: Exception): Boolean {
+        val failureDetails = rootMessage(exception)
+        return failureDetails.contains("could not confirm SignalSlinger firmware update support", ignoreCase = true) ||
+            failureDetails.contains("did not enter update mode", ignoreCase = true) ||
+            failureDetails.contains("did not respond in update mode", ignoreCase = true) ||
+            failureDetails.contains("No response", ignoreCase = true)
+    }
+
+    private fun rootMessage(exception: Exception): String {
         var cause: Throwable? = exception
-        var details: String? = null
-        while (cause != null && details.isNullOrBlank()) {
-            details = cause.message
+        while (cause != null) {
+            cause.message?.takeIf { it.isNotBlank() }?.let { return it }
             cause = cause.cause
         }
-        val failureDetails = details?.takeIf { it.isNotBlank() } ?: exception.toString()
+        return exception.toString()
+    }
+
+    private fun friendlyUpdateFailureMessage(exception: Exception): String {
+        val failureDetails = rootMessage(exception)
         return when {
             exception.isAlreadyCurrentUpdate() -> failureDetails
             failureDetails.contains("does not support firmware updates", ignoreCase = true) ->
@@ -6996,7 +7042,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             failureDetails.contains("could not confirm the updated firmware", ignoreCase = true) ||
                 failureDetails.contains("did not enter update mode", ignoreCase = true) ||
                 failureDetails.contains("did not respond in update mode", ignoreCase = true) ->
-                "The update was interrupted or SignalSlinger did not restart as expected.\n\nReconnect the device and try Recovery Update.\n\n$failureDetails"
+                "The update was interrupted or SignalSlinger did not restart as expected.\n\nReconnect SignalSlinger and try Update Connected Device again.\n\n$failureDetails"
             else -> "SignalSlinger update failed.\n\n$failureDetails"
         }
     }

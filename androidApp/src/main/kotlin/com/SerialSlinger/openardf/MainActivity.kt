@@ -4648,6 +4648,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             recoverAlreadyWaiting = recoverAlreadyWaiting,
             requestedVersion = requestedVersion,
             confirmResidentFallback = ::confirmResidentSignalSlingerUpdate,
+            confirmRecoveryFallback = ::confirmSignalSlingerRecoveryUpdate,
         ) { result ->
             result.exceptionOrNull()?.let { error ->
                 showLargeTextDialog("Update SignalSlinger", error.message ?: error.toString())
@@ -4656,6 +4657,34 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
             }
         }
+    }
+
+    private fun confirmSignalSlingerRecoveryUpdate(failureDetails: String): Boolean {
+        val latch = CountDownLatch(1)
+        var confirmed = false
+        Handler(Looper.getMainLooper()).post {
+            AlertDialog.Builder(this)
+                .setTitle("Update SignalSlinger")
+                .setMessage(
+                    "SerialSlinger could not confirm that SignalSlinger is running normally.\n\n" +
+                        "It may already be waiting for a recovery update after an interrupted update.\n\n" +
+                        "$failureDetails\n\n" +
+                        "Try Recovery Update now?",
+                )
+                .setPositiveButton("Try Recovery Update") { _, _ ->
+                    confirmed = true
+                    latch.countDown()
+                }
+                .setNegativeButton("Cancel") { _, _ ->
+                    latch.countDown()
+                }
+                .setOnCancelListener {
+                    latch.countDown()
+                }
+                .showLogged("Update SignalSlinger")
+        }
+        latch.await()
+        return confirmed
     }
 
     private fun confirmResidentSignalSlingerUpdate(

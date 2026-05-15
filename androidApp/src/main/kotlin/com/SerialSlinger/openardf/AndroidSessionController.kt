@@ -5568,6 +5568,7 @@ object AndroidSessionController {
         recoverAlreadyWaiting: Boolean = false,
         requestedVersion: String? = null,
         confirmResidentFallback: ((version: String, board: String, downloadFailure: String) -> Boolean)? = null,
+        confirmRecoveryFallback: ((failureDetails: String) -> Boolean)? = null,
         onComplete: ((Result<Unit>) -> Unit)? = null,
     ) {
         val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
@@ -5665,21 +5666,42 @@ object AndroidSessionController {
                     selection.downloadFailure?.let { failure ->
                         updateLog += AndroidLogEntry("GitHub update check failed: $failure", AndroidLogCategory.APP)
                     }
-                    val transport = loggingFirmwareUpdateTransport(
-                        AndroidFirmwareUpdateTransport(usbManager, usbDevice),
-                        updateLog,
-                    )
-                    try {
-                        SignalSlingerFirmwareUpdate.performUpdate(
-                            transport = transport,
-                            release = selection.release,
-                            hexText = hexBytes.decodeToString(),
-                            recoverAlreadyWaiting = start.recoverAlreadyWaiting,
-                            allowAppHardwareMismatch = start.overrideBoard != null,
-                            progress = ::recordFirmwareUpdateProgress,
+                    val hexText = hexBytes.decodeToString()
+                    fun performSelectedUpdate(recoverAlreadyWaitingForAttempt: Boolean) {
+                        val transport = loggingFirmwareUpdateTransport(
+                            AndroidFirmwareUpdateTransport(usbManager, usbDevice),
+                            updateLog,
                         )
-                    } finally {
-                        transport.disconnect()
+                        try {
+                            SignalSlingerFirmwareUpdate.performUpdate(
+                                transport = transport,
+                                release = selection.release,
+                                hexText = hexText,
+                                recoverAlreadyWaiting = recoverAlreadyWaitingForAttempt,
+                                allowAppHardwareMismatch = start.overrideBoard != null,
+                                progress = ::recordFirmwareUpdateProgress,
+                            )
+                        } finally {
+                            transport.disconnect()
+                        }
+                    }
+                    try {
+                        performSelectedUpdate(start.recoverAlreadyWaiting)
+                    } catch (failure: Throwable) {
+                        if (
+                            start.recoverAlreadyWaiting ||
+                            start.overrideBoard != null ||
+                            failure.isAlreadyCurrentUpdate() ||
+                            !isRecoverableNormalUpdateEntryFailure(failure) ||
+                            confirmRecoveryFallback?.invoke(rootMessage(failure)) != true
+                        ) {
+                            throw failure
+                        }
+                        updateLog += AndroidLogEntry(
+                            "Normal update startup failed; retrying as Recovery Update at user request.",
+                            AndroidLogCategory.APP,
+                        )
+                        performSelectedUpdate(recoverAlreadyWaitingForAttempt = true)
                     }
                     val reloadResult = reloadSignalSlingerAfterFirmwareUpdate(
                         context = context,
@@ -5926,11 +5948,23 @@ object AndroidSessionController {
         }
     }
 
-    private fun friendlyUpdateFailureMessage(error: Throwable?): String {
-        val details = generateSequence(error) { it.cause }
+    private fun isRecoverableNormalUpdateEntryFailure(error: Throwable): Boolean {
+        val details = rootMessage(error)
+        return details.contains("could not confirm SignalSlinger firmware update support", ignoreCase = true) ||
+            details.contains("did not enter update mode", ignoreCase = true) ||
+            details.contains("did not respond in update mode", ignoreCase = true) ||
+            details.contains("No SignalSlinger response", ignoreCase = true)
+    }
+
+    private fun rootMessage(error: Throwable?): String {
+        return generateSequence(error) { it.cause }
             .mapNotNull { it.message }
             .firstOrNull { it.isNotBlank() }
             ?: "Unknown error"
+    }
+
+    private fun friendlyUpdateFailureMessage(error: Throwable?): String {
+        val details = rootMessage(error)
         return when {
             details.contains("does not support firmware updates", ignoreCase = true) ->
                 "This SignalSlinger is too old to update automatically.\n\n$details"
@@ -5947,7 +5981,7 @@ object AndroidSessionController {
             details.contains("USB connection was interrupted", ignoreCase = true) ||
                 details.contains("Error writing", ignoreCase = true) ||
                 details.contains("rc=-1", ignoreCase = true) ->
-                "The USB connection was interrupted during the update.\n\nReconnect SignalSlinger and try Recovery Update.\n\n$details"
+                "The USB connection was interrupted during the update.\n\nReconnect SignalSlinger and try Update Connected Device again.\n\n$details"
             else -> details
         }
     }
