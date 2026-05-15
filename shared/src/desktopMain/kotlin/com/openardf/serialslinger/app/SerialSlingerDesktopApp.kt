@@ -6229,7 +6229,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun findPowerShellExecutable(): String {
-        return listOf("pwsh", "powershell").firstOrNull { command ->
+        return powershellExecutableCandidates().firstOrNull { command ->
             runCatching {
                 val process = ProcessBuilder(command, "-NoProfile", "-Command", "\$PSVersionTable.PSVersion.ToString()")
                     .redirectErrorStream(true)
@@ -6240,10 +6240,24 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         } ?: error(
             "PowerShell was not found.\n\n" +
                 "Install PowerShell 7 (`pwsh`), then try Install Bootloader again.\n\n" +
-                "macOS: brew install --cask powershell\n" +
+                "macOS: brew install powershell\n" +
                 "Windows: install PowerShell 7, or use Windows PowerShell with Microchip Studio.\n" +
                 "Linux: install PowerShell 7 from Microsoft packages for your distribution.",
         )
+    }
+
+    private fun powershellExecutableCandidates(): List<String> {
+        val candidates = mutableListOf("pwsh", "powershell")
+        val isMac = System.getProperty("os.name").orEmpty().contains("Mac", ignoreCase = true)
+        if (isMac) {
+            candidates += listOf(
+                "/opt/homebrew/bin/pwsh",
+                "/usr/local/bin/pwsh",
+                "/opt/homebrew/bin/powershell",
+                "/usr/local/bin/powershell",
+            )
+        }
+        return candidates.distinct()
     }
 
     private fun runWorkshopSetupProcess(

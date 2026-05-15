@@ -36,7 +36,7 @@ Current complete release packages also report supported programmers in the relea
 
 macOS:
 
-- PowerShell 7: `brew install --cask powershell`
+- PowerShell 7: `brew install powershell`
 - Python 3
 - pymcuprog and USB support:
 
