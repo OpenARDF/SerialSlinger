@@ -5243,28 +5243,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
-        val modeChoice = JOptionPane.showOptionDialog(
-            this,
-            "Choose the update mode.\n\nIf the connected device is not responding normally, SerialSlinger will offer to try Recovery Update before writing.",
-            "Update SignalSlinger",
-            JOptionPane.DEFAULT_OPTION,
-            JOptionPane.PLAIN_MESSAGE,
-            null,
-            arrayOf("Update Connected Device", "Hardware Override", "Cancel"),
-            "Update Connected Device",
-        )
-        if (modeChoice == 2 || modeChoice == JOptionPane.CLOSED_OPTION) {
-            return
-        }
-        val allowAppHardwareMismatch = modeChoice == 1
-        val recoverAlreadyWaiting = false
-        val overrideBoard =
-            if (allowAppHardwareMismatch) {
-                chooseSignalSlingerHardwareOverrideBoard() ?: return
-            } else {
-                null
-            }
-
         val sourceChoice = JOptionPane.showOptionDialog(
             this,
             "Choose the update package.",
@@ -5282,16 +5260,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             1 -> {
                 updateSignalSlingerFromLatestGitHubRelease(
                     portPath = portPath,
-                    recoverAlreadyWaiting = recoverAlreadyWaiting,
-                    overrideBoard = overrideBoard,
+                    recoverAlreadyWaiting = false,
+                    overrideBoard = null,
                 )
             }
             2 -> {
                 val version = chooseSignalSlingerGitHubReleaseVersion() ?: return
                 updateSignalSlingerFromGitHubReleaseVersion(
                     portPath = portPath,
-                    recoverAlreadyWaiting = recoverAlreadyWaiting,
-                    overrideBoard = overrideBoard,
+                    recoverAlreadyWaiting = false,
+                    overrideBoard = null,
                     requestedVersion = version,
                 )
             }
@@ -5299,6 +5277,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 val chooser = JFileChooser().apply {
                     dialogTitle = "Update SignalSlinger"
                     fileSelectionMode = JFileChooser.FILES_ONLY
+                    isFileHidingEnabled = false
+                    currentDirectory = desktopSignalSlingerReleaseCacheDirectory()
                     fileFilter = FileNameExtensionFilter("SignalSlinger release info (*.json)", "json")
                 }
                 if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
@@ -5307,8 +5287,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 updateSignalSlingerFromReleaseInfo(
                     portPath = portPath,
                     manifestFile = chooser.selectedFile,
-                    recoverAlreadyWaiting = recoverAlreadyWaiting,
-                    allowAppHardwareMismatch = allowAppHardwareMismatch,
+                    recoverAlreadyWaiting = false,
+                    allowAppHardwareMismatch = false,
                 )
             }
         }
@@ -5321,24 +5301,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "2.0.2",
         ) ?: return null
         return input.trim().removePrefix("v").takeIf(String::isNotBlank)
-    }
-
-    private fun chooseSignalSlingerHardwareOverrideBoard(): String? {
-        val options = arrayOf("HW-3.5", "HW-3.4", "Cancel")
-        val choice = JOptionPane.showOptionDialog(
-            this,
-            "Select the physical SignalSlinger hardware variant.\n\nThis intentionally ignores the installed firmware build reported by INF.",
-            "Update SignalSlinger",
-            JOptionPane.DEFAULT_OPTION,
-            JOptionPane.WARNING_MESSAGE,
-            null,
-            options,
-            options.first(),
-        )
-        return when (choice) {
-            0, 1 -> options[choice]
-            else -> null
-        }
     }
 
     private fun readDeviceThenChooseSignalSlingerWorkshopSetupPackage() {
