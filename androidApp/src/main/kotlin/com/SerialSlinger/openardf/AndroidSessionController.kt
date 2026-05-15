@@ -103,6 +103,8 @@ data class AndroidFirmwareUpdateProgress(
     val detail: String?,
 )
 
+private class SignalSlingerUpdateCancelledException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
 private data class ScheduleImpactSummary(
     val summaryLines: List<String>,
     val statusText: String?,
@@ -5569,6 +5571,7 @@ object AndroidSessionController {
         requestedVersion: String? = null,
         confirmResidentFallback: ((version: String, board: String, downloadFailure: String) -> Boolean)? = null,
         confirmRecoveryFallback: ((failureDetails: String) -> Boolean)? = null,
+        confirmHardwareMismatch: ((failureDetails: String) -> Boolean)? = null,
         onComplete: ((Result<Unit>) -> Unit)? = null,
     ) {
         val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
@@ -5667,7 +5670,10 @@ object AndroidSessionController {
                         updateLog += AndroidLogEntry("GitHub update check failed: $failure", AndroidLogCategory.APP)
                     }
                     val hexText = hexBytes.decodeToString()
-                    fun performSelectedUpdate(recoverAlreadyWaitingForAttempt: Boolean) {
+                    fun performSelectedUpdate(
+                        recoverAlreadyWaitingForAttempt: Boolean,
+                        allowHardwareMismatch: Boolean = start.overrideBoard != null,
+                    ) {
                         val transport = loggingFirmwareUpdateTransport(
                             AndroidFirmwareUpdateTransport(usbManager, usbDevice),
                             updateLog,
@@ -5678,7 +5684,7 @@ object AndroidSessionController {
                                 release = selection.release,
                                 hexText = hexText,
                                 recoverAlreadyWaiting = recoverAlreadyWaitingForAttempt,
-                                allowAppHardwareMismatch = start.overrideBoard != null,
+                                allowAppHardwareMismatch = allowHardwareMismatch,
                                 progress = ::recordFirmwareUpdateProgress,
                             )
                         } finally {
@@ -5688,6 +5694,35 @@ object AndroidSessionController {
                     try {
                         performSelectedUpdate(start.recoverAlreadyWaiting)
                     } catch (failure: Throwable) {
+                        if (
+                            !start.recoverAlreadyWaiting &&
+                            start.overrideBoard == null &&
+                            isHardwarePackageMismatchFailure(failure)
+                        ) {
+                            if (confirmHardwareMismatch?.invoke(rootMessage(failure)) != true) {
+                                throw SignalSlingerUpdateCancelledException(friendlyUpdateFailureMessage(failure), failure)
+                            }
+                            updateLog += AndroidLogEntry(
+                                "Connected firmware hardware did not match the selected update package; continuing at user request.",
+                                AndroidLogCategory.APP,
+                            )
+                            performSelectedUpdate(
+                                recoverAlreadyWaitingForAttempt = start.recoverAlreadyWaiting,
+                                allowHardwareMismatch = true,
+                            )
+                            return@runCatching FirmwareUpdateOutcome(
+                                release = selection.release,
+                                reloadResult = reloadSignalSlingerAfterFirmwareUpdate(
+                                    context = context,
+                                    deviceName = start.deviceName,
+                                ).onFailure { reloadFailure ->
+                                    updateLog += AndroidLogEntry(
+                                        "SignalSlinger update completed, but the visible device information could not be refreshed: ${reloadFailure.message ?: reloadFailure::class.simpleName}",
+                                        AndroidLogCategory.APP,
+                                    )
+                                }.getOrNull(),
+                            )
+                        }
                         if (
                             start.recoverAlreadyWaiting ||
                             start.overrideBoard != null ||
@@ -5718,11 +5753,14 @@ object AndroidSessionController {
                     )
                 }
             val alreadyCurrent = result.exceptionOrNull()?.isAlreadyCurrentUpdate() == true
+            val cancelledUpdate = result.exceptionOrNull() is SignalSlingerUpdateCancelledException
             if (result.isFailure) {
                 val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
                 updateLog += AndroidLogEntry(
                     if (alreadyCurrent) {
                         "No update needed: $message"
+                    } else if (cancelledUpdate) {
+                        message
                     } else {
                         "Update failed: $message"
                     },
@@ -5772,6 +5810,12 @@ object AndroidSessionController {
                     statusText = "SignalSlinger is already up to date."
                     statusIsError = false
                     firmwareUpdateProgress = null
+                } else if (cancelledUpdate) {
+                    val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
+                    latestSubmitSummary = message
+                    statusText = message.lineSequence().firstOrNull().orEmpty().ifBlank { "Update cancelled." }
+                    statusIsError = true
+                    firmwareUpdateProgress = null
                 } else {
                     val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
                     latestSubmitSummary = "SignalSlinger update failed.\n$message"
@@ -5787,7 +5831,7 @@ object AndroidSessionController {
                         result.fold(
                             onSuccess = { Result.success(Unit) },
                             onFailure = { failure ->
-                                if (failure.isAlreadyCurrentUpdate()) {
+                                if (failure.isAlreadyCurrentUpdate() || failure is SignalSlingerUpdateCancelledException) {
                                     Result.success(Unit)
                                 } else {
                                     Result.failure(IllegalStateException(friendlyUpdateFailureMessage(failure), failure))
@@ -5954,6 +5998,11 @@ object AndroidSessionController {
             details.contains("did not enter update mode", ignoreCase = true) ||
             details.contains("did not respond in update mode", ignoreCase = true) ||
             details.contains("No SignalSlinger response", ignoreCase = true)
+    }
+
+    private fun isHardwarePackageMismatchFailure(error: Throwable): Boolean {
+        val details = rootMessage(error)
+        return details.contains("does not match package board", ignoreCase = true)
     }
 
     private fun rootMessage(error: Throwable?): String {

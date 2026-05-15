@@ -179,6 +179,8 @@ private data class StartTimeFinishAdjustmentChoice(
     val disablesEvent: Boolean = false,
 )
 
+private class SignalSlingerUpdateCancelledException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
 private class FieldAwareSpinnerDateModel(
     initialValue: Date,
     private val defaultCalendarField: Int,
@@ -6682,6 +6684,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     return@runInBackground
                 }
+                if (handleSignalSlingerUpdateCancellation(exception, logEntries)) {
+                    return@runInBackground
+                }
                 SwingUtilities.invokeLater {
                     appendLog("Update SignalSlinger", logEntries)
                 }
@@ -6730,6 +6735,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     logEntries = logEntries,
                 )
             } catch (exception: Exception) {
+                if (handleSignalSlingerUpdateCancellation(exception, logEntries)) {
+                    return@runInBackground
+                }
                 SwingUtilities.invokeLater {
                     appendLog("Update SignalSlinger", logEntries)
                 }
@@ -6770,6 +6778,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     logEntries = logEntries,
                 )
             } catch (exception: Exception) {
+                if (handleSignalSlingerUpdateCancellation(exception, logEntries)) {
+                    return@runInBackground
+                }
                 SwingUtilities.invokeLater {
                     appendLog("Update SignalSlinger", logEntries)
                 }
@@ -6795,6 +6806,27 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
         } catch (exception: Exception) {
             if (
+                !recoverAlreadyWaiting &&
+                !allowAppHardwareMismatch &&
+                isHardwarePackageMismatchFailure(exception)
+            ) {
+                if (!confirmSignalSlingerHardwarePackageMismatch(exception)) {
+                    throw SignalSlingerUpdateCancelledException(friendlyUpdateFailureMessage(exception), exception)
+                }
+                logEntries += DesktopLogEntry(
+                    "Connected firmware hardware did not match the selected update package; continuing at user request.",
+                    DesktopLogCategory.APP,
+                )
+                performSignalSlingerUpdate(
+                    portPath = portPath,
+                    manifestFile = manifestFile,
+                    recoverAlreadyWaiting = recoverAlreadyWaiting,
+                    allowAppHardwareMismatch = true,
+                    logEntries = logEntries,
+                )
+                return
+            }
+            if (
                 recoverAlreadyWaiting ||
                 allowAppHardwareMismatch ||
                 exception.isAlreadyCurrentUpdate() ||
@@ -6815,6 +6847,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 logEntries = logEntries,
             )
         }
+    }
+
+    private fun handleSignalSlingerUpdateCancellation(
+        exception: Exception,
+        logEntries: MutableList<DesktopLogEntry>,
+    ): Boolean {
+        if (exception !is SignalSlingerUpdateCancelledException) {
+            return false
+        }
+        val message = exception.message ?: "Update cancelled."
+        logEntries += DesktopLogEntry(message, DesktopLogCategory.APP)
+        SwingUtilities.invokeLater {
+            appendLog("Update SignalSlinger", logEntries)
+            setStatus("Error: ${message.lineSequence().firstOrNull().orEmpty().ifBlank { "Update cancelled." }}")
+        }
+        return true
     }
 
     private fun performSignalSlingerUpdate(
@@ -6967,9 +7015,35 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return confirmed.get()
     }
 
+    private fun confirmSignalSlingerHardwarePackageMismatch(exception: Exception): Boolean {
+        val confirmed = AtomicBoolean(false)
+        val details = rootMessage(exception)
+        SwingUtilities.invokeAndWait {
+            val choice = JOptionPane.showOptionDialog(
+                this,
+                "The selected update package is for different SignalSlinger hardware than the firmware currently reports.\n\n" +
+                    "$details\n\n" +
+                    "Only continue if you intentionally want to change the installed firmware hardware version.",
+                "Update SignalSlinger",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                arrayOf("Continue", "Cancel"),
+                "Cancel",
+            )
+            confirmed.set(choice == 0)
+        }
+        return confirmed.get()
+    }
+
     private fun desktopSignalSlingerReleaseCacheDirectory(): File {
         val home = System.getProperty("user.home").orEmpty().ifBlank { "." }
         return File(home, ".serialslinger/signalslinger-updates")
+    }
+
+    private fun isHardwarePackageMismatchFailure(exception: Exception): Boolean {
+        val failureDetails = rootMessage(exception)
+        return failureDetails.contains("does not match package board", ignoreCase = true)
     }
 
     private fun isRecoverableNormalUpdateEntryFailure(exception: Exception): Boolean {

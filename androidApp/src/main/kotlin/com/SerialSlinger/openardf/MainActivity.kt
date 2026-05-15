@@ -4649,6 +4649,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             requestedVersion = requestedVersion,
             confirmResidentFallback = ::confirmResidentSignalSlingerUpdate,
             confirmRecoveryFallback = ::confirmSignalSlingerRecoveryUpdate,
+            confirmHardwareMismatch = ::confirmSignalSlingerHardwarePackageMismatch,
         ) { result ->
             result.exceptionOrNull()?.let { error ->
                 showLargeTextDialog("Update SignalSlinger", error.message ?: error.toString())
@@ -4672,6 +4673,33 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         "Try Recovery Update now?",
                 )
                 .setPositiveButton("Try Recovery Update") { _, _ ->
+                    confirmed = true
+                    latch.countDown()
+                }
+                .setNegativeButton("Cancel") { _, _ ->
+                    latch.countDown()
+                }
+                .setOnCancelListener {
+                    latch.countDown()
+                }
+                .showLogged("Update SignalSlinger")
+        }
+        latch.await()
+        return confirmed
+    }
+
+    private fun confirmSignalSlingerHardwarePackageMismatch(failureDetails: String): Boolean {
+        val latch = CountDownLatch(1)
+        var confirmed = false
+        Handler(Looper.getMainLooper()).post {
+            AlertDialog.Builder(this)
+                .setTitle("Update SignalSlinger")
+                .setMessage(
+                    "The selected update package is for different SignalSlinger hardware than the firmware currently reports.\n\n" +
+                        "$failureDetails\n\n" +
+                        "Only continue if you intentionally want to change the installed firmware hardware version.",
+                )
+                .setPositiveButton("Continue") { _, _ ->
                     confirmed = true
                     latch.countDown()
                 }
