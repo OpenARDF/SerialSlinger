@@ -7,6 +7,7 @@ This document collects the build, packaging, and release details that are useful
 From the repository root:
 
 - `npm install`
+- increment Android `versionCode` in `androidApp/build.gradle.kts` from the previously deployed build
 - `npm run jdeploy:prepare`
 - `npm run jdeploy:package`
 - `npm run jdeploy:install-local`
@@ -46,8 +47,9 @@ Current workflow:
 
 1. leave `serialSlingerVersion` in [build.gradle.kts](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/build.gradle.kts) at the intended release version
 2. increment `serialSlingerVersionSuffix` for each new test build: `a`, `b`, `c`, ... then `aa`, `ab`, ...
-3. keep `package.json` and `package-lock.json` aligned to the npm-safe form with a hyphen before the suffix
-4. clear the suffix before a full release so both app-visible and package versions return to plain `x.y.z`
+3. increment Android `versionCode` in [androidApp/build.gradle.kts](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/androidApp/build.gradle.kts) from the previously deployed build
+4. keep `package.json` and `package-lock.json` aligned to the npm-safe form with a hyphen before the suffix
+5. clear the suffix before a full release so both app-visible and package versions return to plain `x.y.z`
 
 This keeps Android and desktop builds visibly distinct during testing without accidentally rolling the release version forward.
 

@@ -6378,9 +6378,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun augmentWorkshopToolEnvironment(environment: MutableMap<String, String>) {
-        if (!System.getProperty("os.name").orEmpty().contains("Windows", ignoreCase = true)) {
-            return
-        }
         val pathKey = environment.keys.firstOrNull { it.equals("Path", ignoreCase = true) } ?: "Path"
         val existingEntries = environment[pathKey]
             .orEmpty()
@@ -6389,9 +6386,31 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             .filter(String::isNotBlank)
         val augmentedEntries = buildList {
             addAll(existingEntries)
-            addAll(windowsPythonScriptsDirectories())
+            addAll(workshopToolDirectories())
         }.distinctBy { it.lowercase() }
         environment[pathKey] = augmentedEntries.joinToString(File.pathSeparator)
+    }
+
+    private fun workshopToolDirectories(): List<String> {
+        val osName = System.getProperty("os.name").orEmpty()
+        if (osName.contains("Windows", ignoreCase = true)) {
+            return windowsPythonScriptsDirectories()
+        }
+
+        val home = System.getProperty("user.home").orEmpty()
+        val candidates = buildList {
+            if (home.isNotBlank()) {
+                add(File(home, ".local/bin").absolutePath)
+                add(File(home, "bin").absolutePath)
+            }
+            if (osName.contains("Mac", ignoreCase = true)) {
+                add("/opt/homebrew/bin")
+                add("/usr/local/bin")
+            }
+        }
+        return candidates
+            .filter { path -> File(path).isDirectory }
+            .distinct()
     }
 
     private fun windowsPythonScriptsDirectories(): List<String> {
@@ -6400,7 +6419,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             System.getenv("LOCALAPPDATA")?.let { File(it, "Python") },
             System.getenv("LOCALAPPDATA")?.let { File(it, "Programs\\Python") },
         )
-        return roots
+        val pythonScriptDirectories = roots
             .asSequence()
             .filter(File::isDirectory)
             .flatMap { root ->
@@ -6413,6 +6432,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             .distinctBy { it.lowercase() }
             .toList()
+        val userBinDirectories = listOfNotNull(
+            System.getenv("USERPROFILE")?.let { File(it, ".local\\bin").absolutePath },
+        ).filter { path -> File(path).isDirectory }
+
+        return (pythonScriptDirectories + userBinDirectories)
+            .distinctBy { it.lowercase() }
     }
 
     private data class WorkshopSetupProgress(

@@ -11,7 +11,7 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
 }
 
-val desktopPackageVersion = rootProject.extra["serialSlingerVersion"].toString()
+val desktopPackageVersion = rootProject.extra["serialSlingerPackageVersion"].toString()
 val desktopDisplayVersion = rootProject.extra["serialSlingerDisplayVersion"].toString()
 val desktopPackageVendor = rootProject.extra["serialSlingerVendor"].toString()
 val desktopPackageDescription = rootProject.extra["serialSlingerDescription"].toString()
