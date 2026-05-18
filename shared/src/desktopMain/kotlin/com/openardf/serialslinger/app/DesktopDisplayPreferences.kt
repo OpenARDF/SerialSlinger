@@ -15,8 +15,9 @@ enum class TemperatureDisplayUnit {
 }
 
 enum class TimeSetMode {
+    AUTOMATIC,
+    SEMI_AUTOMATIC,
     MANUAL,
-    SYSTEM_CLOCK,
 }
 
 enum class ScheduleTimeInputMode {
@@ -29,7 +30,7 @@ data class DesktopDisplayPreferences(
     val temperatureDisplayUnit: TemperatureDisplayUnit = TemperatureDisplayUnit.CELSIUS,
     val logVisible: Boolean = false,
     val rawSerialVisible: Boolean = true,
-    val timeSetMode: TimeSetMode = TimeSetMode.SYSTEM_CLOCK,
+    val timeSetMode: TimeSetMode = TimeSetMode.SEMI_AUTOMATIC,
     val scheduleTimeInputMode: ScheduleTimeInputMode = ScheduleTimeInputMode.ABSOLUTE,
     val defaultEventLengthMinutes: Int = 6 * 60,
     val advancedModeEnabled: Boolean = false,
@@ -74,7 +75,8 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
             rawSerialVisible = preferences.getBoolean(keyRawSerialVisible, true),
             timeSetMode = loadEnum(
                 key = keyTimeSetMode,
-                defaultValue = TimeSetMode.SYSTEM_CLOCK,
+                defaultValue = TimeSetMode.SEMI_AUTOMATIC,
+                legacyNames = mapOf("SYSTEM_CLOCK" to TimeSetMode.SEMI_AUTOMATIC),
             ),
             scheduleTimeInputMode = loadEnum(
                 key = keyScheduleTimeInputMode,
@@ -126,8 +128,13 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
         this.preferences.flush()
     }
 
-    private inline fun <reified T : Enum<T>> loadEnum(key: String, defaultValue: T): T {
+    private inline fun <reified T : Enum<T>> loadEnum(
+        key: String,
+        defaultValue: T,
+        legacyNames: Map<String, T> = emptyMap(),
+    ): T {
         val raw = preferences.get(key, defaultValue.name) ?: return defaultValue
+        legacyNames[raw]?.let { return it }
         return runCatching { enumValueOf<T>(raw) }.getOrDefault(defaultValue)
     }
 }

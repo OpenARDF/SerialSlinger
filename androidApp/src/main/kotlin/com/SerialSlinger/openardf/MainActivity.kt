@@ -122,8 +122,9 @@ class MainActivity : Activity() {
     }
 
     private enum class AndroidDeviceTimeSetMode {
-        MANUAL,
         AUTOMATIC,
+        SEMI_AUTOMATIC,
+        MANUAL,
     }
 
     private enum class AndroidScheduleTimeInputMode {
@@ -165,7 +166,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var developerDiagnosticsExpanded: Boolean = false
     private var frequencyDisplayUnit: AndroidFrequencyDisplayUnit = AndroidFrequencyDisplayUnit.MHZ
     private var temperatureDisplayUnit: AndroidTemperatureDisplayUnit = AndroidTemperatureDisplayUnit.CELSIUS
-    private var deviceTimeSetMode: AndroidDeviceTimeSetMode = AndroidDeviceTimeSetMode.AUTOMATIC
+    private var deviceTimeSetMode: AndroidDeviceTimeSetMode = AndroidDeviceTimeSetMode.SEMI_AUTOMATIC
     private var scheduleTimeInputMode: AndroidScheduleTimeInputMode = AndroidScheduleTimeInputMode.ABSOLUTE
     private var defaultEventLengthMinutes: Int = 6 * 60
     private var timedEventDefaultFrequencies: TimedEventDefaultFrequencies = FrequencySupport.defaultTimedEventFrequencies
@@ -219,6 +220,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var previewSessionViewState: AndroidSessionViewState? = null
     private var previewUnlockStep: Int = 0
     private var previewUnlockStartedAtMillis: Long = 0L
+    private var lastAutomaticDeviceTimeSyncAtMillis: Long = 0L
     private val loggedWindows = WeakHashMap<Window, Boolean>()
 
     private val refreshListener: () -> Unit = {
@@ -229,6 +231,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             showStartupDeviceStatusModalIfNeeded()
             showOrUpdateFirmwareUpdateModal()
             showPendingTimelyReplyWarning()
+            maybeTriggerAutomaticDeviceTimeSync()
         }
     }
     private val clockTickRunnable =
@@ -368,9 +371,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     ?: AndroidTemperatureDisplayUnit.CELSIUS.name,
             )
         deviceTimeSetMode =
-            AndroidDeviceTimeSetMode.valueOf(
-                uiPreferences.getString(PREF_DEVICE_TIME_SET_MODE, AndroidDeviceTimeSetMode.AUTOMATIC.name)
-                    ?: AndroidDeviceTimeSetMode.AUTOMATIC.name,
+            loadDeviceTimeSetModePreference(
+                uiPreferences.getString(PREF_DEVICE_TIME_SET_MODE, AndroidDeviceTimeSetMode.SEMI_AUTOMATIC.name),
             )
         scheduleTimeInputMode =
             AndroidScheduleTimeInputMode.valueOf(
@@ -934,7 +936,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         currentTimeField.setText(formattedTimestamp)
                         runCurrentTimeSubmitOrPreview(formattedTimestamp)
                     }
-                } else {
+                } else if (deviceTimeSetMode == AndroidDeviceTimeSetMode.SEMI_AUTOMATIC) {
                     runCurrentTimeSystemSyncOrPreview()
                 }
             }
@@ -967,7 +969,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
             }
         deviceSettingsCard.addView(currentTimeRow)
-        if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) {
+        if (deviceTimeSetMode == AndroidDeviceTimeSetMode.SEMI_AUTOMATIC) {
             currentTimeLabelField?.apply {
                 isClickable = true
                 isFocusable = true
@@ -2388,6 +2390,32 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.runCurrentTimeSystemSync(context = applicationContext)
     }
 
+    private fun maybeTriggerAutomaticDeviceTimeSync() {
+        if (deviceTimeSetMode != AndroidDeviceTimeSetMode.AUTOMATIC || isPreviewModeActive()) {
+            return
+        }
+        val uiState = AndroidSessionController.snapshotUiState()
+        if (
+            uiState.currentTimeSyncInFlight ||
+            uiState.sessionViewState?.state?.snapshot?.capabilities?.supportsScheduling != true
+        ) {
+            return
+        }
+        val phaseErrorMillis = uiState.clockPhaseErrorMillis ?: return
+        if (abs(phaseErrorMillis) <= AndroidSessionController.CLOCK_PHASE_WARNING_THRESHOLD_MILLIS) {
+            return
+        }
+        val nowMillis = System.currentTimeMillis()
+        if ((nowMillis - lastAutomaticDeviceTimeSyncAtMillis) < AUTOMATIC_DEVICE_TIME_SYNC_RETRY_INTERVAL_MS) {
+            return
+        }
+        lastAutomaticDeviceTimeSyncAtMillis = nowMillis
+        AndroidSessionController.runCurrentTimeSystemSync(
+            context = applicationContext,
+            source = "automatic-device-time-setting",
+        )
+    }
+
     private fun runExternalBatteryControlSubmitOrPreview(selectedMode: ExternalBatteryControlMode) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings -> settings.copy(externalBatteryControlMode = selectedMode) }
@@ -2633,14 +2661,18 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val deviceTimeNotSet =
             !uiState.currentTimeSyncInFlight &&
                 uiState.sessionViewState?.state?.snapshot?.settings?.currentTimeCompact == null
+        val automaticOrSemiAutomaticMode = deviceTimeSetMode != AndroidDeviceTimeSetMode.MANUAL
+        val deviceTimeWithinTarget =
+            deviceTimeSkewMillis?.let { abs(it) <= AndroidSessionController.CLOCK_PHASE_WARNING_THRESHOLD_MILLIS } == true
         val deviceTimeColor =
             when {
                 uiState.currentTimeSyncInFlight -> Color.parseColor("#B45309")
                 deviceTimeNotSet -> Color.parseColor("#9E1C1C")
+                deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL -> null
                 deviceTimeSyncFailed -> Color.parseColor("#9E1C1C")
-                deviceTimeSkewMillis == null -> null
-                abs(deviceTimeSkewMillis) > AndroidSessionController.CLOCK_PHASE_WARNING_THRESHOLD_MILLIS -> Color.parseColor("#9E1C1C")
-                else -> Color.parseColor("#166534")
+                automaticOrSemiAutomaticMode && deviceTimeWithinTarget -> Color.parseColor("#166534")
+                automaticOrSemiAutomaticMode -> Color.parseColor("#9E1C1C")
+                else -> null
             }
         val normalLabelColor = Color.parseColor("#1F1F1F")
         val normalFieldColor = Color.parseColor("#1F2937")
@@ -2664,8 +2696,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         }
         currentTimeDisplayField?.hint =
-            if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) {
+            if (deviceTimeSetMode == AndroidDeviceTimeSetMode.SEMI_AUTOMATIC) {
                 "Tap to sync Device Time"
+            } else if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) {
+                "Auto"
             } else {
                 "Device Time"
             }
@@ -3525,7 +3559,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val labels = listOf(
             "Frequency Units (${if (frequencyDisplayUnit == AndroidFrequencyDisplayUnit.MHZ) "MHz" else "kHz"})",
             "Temperature Units (${if (temperatureDisplayUnit == AndroidTemperatureDisplayUnit.CELSIUS) "Celsius" else "Fahrenheit"})",
-            "Device Time Setting (${if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) "Manual" else "Automatic"})",
+            "Device Time Setting (${deviceTimeSetModeDisplayName()})",
             "Event Schedule Setting Method (${if (scheduleTimeInputMode == AndroidScheduleTimeInputMode.RELATIVE) "Relative" else "Absolute"})",
             "Default Event Length (${formatDefaultEventLength(defaultEventLengthMinutes)})",
             "Timed Event Default Frequencies",
@@ -3666,16 +3700,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun showDeviceTimeSettingDialog() {
-        val labels = arrayOf("Automatic", "Manual")
+        val labels = arrayOf("Automatic", "Semi-Automatic", "Manual")
         AlertDialog.Builder(this)
             .setTitle("Device Time Setting")
-            .setSingleChoiceItems(labels, if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) 0 else 1) { dialog, which ->
+            .setSingleChoiceItems(labels, deviceTimeSetMode.ordinal) { dialog, which ->
                 setDeviceTimeSetMode(
-                    if (which == 0) {
-                        AndroidDeviceTimeSetMode.AUTOMATIC
-                    } else {
-                        AndroidDeviceTimeSetMode.MANUAL
-                    },
+                    AndroidDeviceTimeSetMode.entries[which],
                 )
                 dialog.dismiss()
             }
@@ -4212,7 +4242,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         deviceTimeSetMode = mode
         saveDeviceTimeSetModePreference()
         AndroidSessionController.recordStatus(
-            "Device Time Setting is now ${if (mode == AndroidDeviceTimeSetMode.AUTOMATIC) "Automatic" else "Manual"}.",
+            "Device Time Setting is now ${deviceTimeSetModeDisplayName(mode)}.",
             isError = false,
         )
         renderContent()
@@ -4221,10 +4251,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun toggleDeviceTimeSetMode() {
         setDeviceTimeSetMode(
-            if (deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC) {
-                AndroidDeviceTimeSetMode.MANUAL
-            } else {
-                AndroidDeviceTimeSetMode.AUTOMATIC
+            when (deviceTimeSetMode) {
+                AndroidDeviceTimeSetMode.AUTOMATIC -> AndroidDeviceTimeSetMode.SEMI_AUTOMATIC
+                AndroidDeviceTimeSetMode.SEMI_AUTOMATIC -> AndroidDeviceTimeSetMode.MANUAL
+                AndroidDeviceTimeSetMode.MANUAL -> AndroidDeviceTimeSetMode.SEMI_AUTOMATIC
             },
         )
     }
@@ -6210,7 +6240,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val actionText =
             when {
                 syncInProgress -> "Sync in Progress..."
-                deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC -> "Tap to Sync"
+                deviceTimeSetMode == AndroidDeviceTimeSetMode.AUTOMATIC -> "Auto"
+                deviceTimeSetMode == AndroidDeviceTimeSetMode.SEMI_AUTOMATIC -> "Tap to Sync"
                 else -> "Manual"
             }
         return if (skewText == null) {
@@ -6837,7 +6868,37 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun saveDeviceTimeSetModePreference() {
-        uiPreferences.edit().putString(PREF_DEVICE_TIME_SET_MODE, deviceTimeSetMode.name).apply()
+        uiPreferences.edit()
+            .putString(PREF_DEVICE_TIME_SET_MODE, deviceTimeSetMode.name)
+            .putBoolean(PREF_DEVICE_TIME_SET_MODE_MIGRATED, true)
+            .apply()
+    }
+
+    private fun loadDeviceTimeSetModePreference(rawValue: String?): AndroidDeviceTimeSetMode {
+        return when (rawValue) {
+            AndroidDeviceTimeSetMode.AUTOMATIC.name -> {
+                if (uiPreferences.getBoolean(PREF_DEVICE_TIME_SET_MODE_MIGRATED, false)) {
+                    AndroidDeviceTimeSetMode.AUTOMATIC
+                } else {
+                    uiPreferences.edit()
+                        .putString(PREF_DEVICE_TIME_SET_MODE, AndroidDeviceTimeSetMode.SEMI_AUTOMATIC.name)
+                        .putBoolean(PREF_DEVICE_TIME_SET_MODE_MIGRATED, true)
+                        .apply()
+                    AndroidDeviceTimeSetMode.SEMI_AUTOMATIC
+                }
+            }
+            AndroidDeviceTimeSetMode.SEMI_AUTOMATIC.name -> AndroidDeviceTimeSetMode.SEMI_AUTOMATIC
+            AndroidDeviceTimeSetMode.MANUAL.name -> AndroidDeviceTimeSetMode.MANUAL
+            else -> AndroidDeviceTimeSetMode.SEMI_AUTOMATIC
+        }
+    }
+
+    private fun deviceTimeSetModeDisplayName(mode: AndroidDeviceTimeSetMode = deviceTimeSetMode): String {
+        return when (mode) {
+            AndroidDeviceTimeSetMode.AUTOMATIC -> "Automatic"
+            AndroidDeviceTimeSetMode.SEMI_AUTOMATIC -> "Semi-Automatic"
+            AndroidDeviceTimeSetMode.MANUAL -> "Manual"
+        }
     }
 
     private fun cardLayout(): LinearLayout {
@@ -7316,11 +7377,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val PREF_FREQUENCY_DISPLAY_UNIT = "frequency_display_unit"
         private const val PREF_TEMPERATURE_DISPLAY_UNIT = "temperature_display_unit"
         private const val PREF_DEVICE_TIME_SET_MODE = "device_time_set_mode"
+        private const val PREF_DEVICE_TIME_SET_MODE_MIGRATED = "device_time_set_mode_migrated"
         private const val CLONE_THEME_BLUE = -14_794_577
         private const val STATUS_POPUP_DURATION_MS = 3_000L
         private const val FOX_ROLE_PICKER_FEEDBACK_DELAY_MS = 180L
         private const val AUTO_DETECT_ATTACH_DELAY_MS = 180L
         private const val AUTO_DETECT_RETRY_DELAY_MS = 350L
         private const val AUTO_DETECT_MAX_RETRIES = 4
+        private const val AUTOMATIC_DEVICE_TIME_SYNC_RETRY_INTERVAL_MS = 30_000L
     }
 }

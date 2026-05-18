@@ -234,6 +234,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val unreadFieldForeground = Color(0x6B, 0x72, 0x80)
     private val warningForeground = Color(0x9A, 0x34, 0x12)
     private val alertForeground = Color(0xB9, 0x1C, 0x1C)
+    private val synchronizedForeground = Color(0x16, 0x65, 0x34)
     private val portModel = DefaultComboBoxModel<SignalSlingerPortProbe>()
     private val portComboBox = JComboBox(portModel)
     private val autoDetectButton = JButton("Find Device")
@@ -421,6 +422,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private lateinit var temperatureCMenuItem: JRadioButtonMenuItem
     private lateinit var temperatureFMenuItem: JRadioButtonMenuItem
     private lateinit var timeSetAutomaticMenuItem: JRadioButtonMenuItem
+    private lateinit var timeSetSemiAutomaticMenuItem: JRadioButtonMenuItem
     private lateinit var timeSetManualMenuItem: JRadioButtonMenuItem
     private lateinit var scheduleTimeAbsoluteMenuItem: JRadioButtonMenuItem
     private lateinit var scheduleTimeRelativeMenuItem: JRadioButtonMenuItem
@@ -742,9 +744,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                             val group = ButtonGroup()
                             timeSetAutomaticMenuItem = JRadioButtonMenuItem(
                                 "Automatic",
-                                displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK,
+                                displayPreferences.timeSetMode == TimeSetMode.AUTOMATIC,
                             ).apply {
-                                addActionListener { setTimeSetMode(TimeSetMode.SYSTEM_CLOCK) }
+                                addActionListener { setTimeSetMode(TimeSetMode.AUTOMATIC) }
+                            }
+                            timeSetSemiAutomaticMenuItem = JRadioButtonMenuItem(
+                                "Semi-Automatic",
+                                displayPreferences.timeSetMode == TimeSetMode.SEMI_AUTOMATIC,
+                            ).apply {
+                                addActionListener { setTimeSetMode(TimeSetMode.SEMI_AUTOMATIC) }
                             }
                             timeSetManualMenuItem = JRadioButtonMenuItem(
                                 "Manual",
@@ -753,8 +761,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                                 addActionListener { setTimeSetMode(TimeSetMode.MANUAL) }
                             }
                             group.add(timeSetAutomaticMenuItem)
+                            group.add(timeSetSemiAutomaticMenuItem)
                             group.add(timeSetManualMenuItem)
                             add(timeSetAutomaticMenuItem)
+                            add(timeSetSemiAutomaticMenuItem)
                             add(timeSetManualMenuItem)
                         },
                     )
@@ -7760,7 +7770,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         syncTimeButton.isEnabled =
             writableEnabled &&
             schedulingSupported &&
-            displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK &&
+            displayPreferences.timeSetMode == TimeSetMode.SEMI_AUTOMATIC &&
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED
         if (::championshipSettingsMenuItem.isInitialized) {
@@ -7846,11 +7856,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         value: String?,
         unreadPlaceholder: Boolean = true,
         alert: Boolean = false,
+        success: Boolean = false,
     ) {
         val displayText = value.orEmpty().ifBlank { if (unreadPlaceholder) "Not read" else "" }
         field.text = displayText
         field.foreground = when {
             alert -> alertForeground
+            success -> synchronizedForeground
             unreadPlaceholder && displayText == "Not read" -> unreadFieldForeground
             else -> defaultInformationalFieldForeground
         }
@@ -8164,7 +8176,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         displayPreferences = displayPreferences.copy(timeSetMode = mode)
         applyTimeSetMode(mode)
         persistDisplayPreferences()
-        setStatus("Device Time Setting is now ${if (mode == TimeSetMode.SYSTEM_CLOCK) "Automatic" else "Manual"}.")
+        setStatus("Device Time Setting is now ${timeSetModeDisplayName(mode)}.")
     }
 
     private fun applyTimeSetMode(mode: TimeSetMode) {
@@ -8177,8 +8189,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         manualTimeRowPanel.isVisible = manualMode
         currentTimeRowSpacer.isVisible = !manualMode
         syncTimeButton.isVisible = !manualMode
+        syncTimeButton.text = if (mode == TimeSetMode.AUTOMATIC) "Auto" else "Sync"
         if (::timeSetAutomaticMenuItem.isInitialized) {
-            timeSetAutomaticMenuItem.isSelected = !manualMode
+            timeSetAutomaticMenuItem.isSelected = mode == TimeSetMode.AUTOMATIC
+        }
+        if (::timeSetSemiAutomaticMenuItem.isInitialized) {
+            timeSetSemiAutomaticMenuItem.isSelected = mode == TimeSetMode.SEMI_AUTOMATIC
         }
         if (::timeSetManualMenuItem.isInitialized) {
             timeSetManualMenuItem.isSelected = manualMode
@@ -8268,12 +8284,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun toggleTimeSetMode() {
         setTimeSetMode(
-            if (displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK) {
-                TimeSetMode.MANUAL
-            } else {
-                TimeSetMode.SYSTEM_CLOCK
+            when (displayPreferences.timeSetMode) {
+                TimeSetMode.AUTOMATIC -> TimeSetMode.SEMI_AUTOMATIC
+                TimeSetMode.SEMI_AUTOMATIC -> TimeSetMode.MANUAL
+                TimeSetMode.MANUAL -> TimeSetMode.SEMI_AUTOMATIC
             },
         )
+    }
+
+    private fun timeSetModeDisplayName(mode: TimeSetMode): String {
+        return when (mode) {
+            TimeSetMode.AUTOMATIC -> "Automatic"
+            TimeSetMode.SEMI_AUTOMATIC -> "Semi-Automatic"
+            TimeSetMode.MANUAL -> "Manual"
+        }
     }
 
     private fun isScheduleInteractionSuppressed(): Boolean {
@@ -9987,6 +10011,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (snapshot == null) {
             systemTimeField.text = DesktopInputSupport.formatSystemTimestamp(displayNow)
             setInformationalFieldText(currentTimeField, "Not read")
+            currentTimeRowLabel.foreground = defaultRowLabelForeground
             currentTimeField.toolTipText = null
             systemTimeField.toolTipText = null
             setInformationalFieldText(startsInField, "Not read")
@@ -10000,6 +10025,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         systemTimeField.text = DesktopInputSupport.formatSystemTimestamp(displayNow)
         val clockWarningActive = hasClockPhaseWarning()
+        val deviceTimeSet = displayedDeviceTimeCompact != null
+        val automaticOrSemiAutomaticMode = displayPreferences.timeSetMode != TimeSetMode.MANUAL
+        val clockWithinTarget =
+            lastClockPhaseErrorMillis?.let { kotlin.math.abs(it) <= 500L } == true
+        val currentTimeAlert = if (automaticOrSemiAutomaticMode) {
+            !deviceTimeSet || !clockWithinTarget
+        } else {
+            !deviceTimeSet
+        }
+        val currentTimeSuccess = automaticOrSemiAutomaticMode && deviceTimeSet && clockWithinTarget
         val phaseErrorSummary = lastClockPhaseErrorMillis?.let {
             "Measured phase error: ${DesktopInputSupport.formatSignedDurationMillis(it)}"
         }
@@ -10007,8 +10042,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             currentTimeField,
             DesktopInputSupport.formatCompactTimestampOrNotSet(displayedDeviceTimeCompact),
             unreadPlaceholder = false,
-            alert = clockWarningActive,
+            alert = currentTimeAlert,
+            success = currentTimeSuccess,
         )
+        currentTimeRowLabel.foreground = when {
+            currentTimeAlert -> alertForeground
+            currentTimeSuccess -> synchronizedForeground
+            else -> defaultRowLabelForeground
+        }
         currentTimeField.toolTipText = if (clockWarningActive) {
             phaseErrorSummary
         } else {
@@ -10041,7 +10082,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             alert = lastsAlertActive,
         )
         syncTimeButton.isEnabled =
-            displayPreferences.timeSetMode == TimeSetMode.SYSTEM_CLOCK &&
+            displayPreferences.timeSetMode == TimeSetMode.SEMI_AUTOMATIC &&
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED &&
             loadedSnapshot?.capabilities?.supportsScheduling == true
@@ -10336,6 +10377,35 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 ConnectionIndicatorState.CONNECTED,
                 "Connected to SignalSlinger on $portPath",
             )
+        }
+        maybeTriggerAutomaticDeviceTimeSync(shouldWarn)
+    }
+
+    private fun maybeTriggerAutomaticDeviceTimeSync(clockWarningActive: Boolean) {
+        if (
+            !clockWarningActive ||
+            displayPreferences.timeSetMode != TimeSetMode.AUTOMATIC ||
+            backgroundWorkInProgress ||
+            currentTransport == null ||
+            currentState?.connectionState != ConnectionState.CONNECTED ||
+            loadedSnapshot?.capabilities?.supportsScheduling != true
+        ) {
+            return
+        }
+        Timer(1) {
+            if (
+                displayPreferences.timeSetMode == TimeSetMode.AUTOMATIC &&
+                !backgroundWorkInProgress &&
+                currentTransport != null &&
+                currentState?.connectionState == ConnectionState.CONNECTED &&
+                loadedSnapshot?.capabilities?.supportsScheduling == true &&
+                hasClockPhaseWarning()
+            ) {
+                syncDeviceTimeToSystem()
+            }
+        }.apply {
+            isRepeats = false
+            start()
         }
     }
 
