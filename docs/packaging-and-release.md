@@ -36,9 +36,15 @@ Notes:
 - `npm run jdeploy:pack-preview` shows the exact npm and jDeploy package payload without publishing anything.
 - `npm run jdeploy:release-preflight` checks that the Gradle version, npm version, jDeploy workflow, and intended `v*` release tag are aligned before a public release tag is pushed.
 
-## Iterative Test Builds
+## Versioning Rules
 
-For testable in-progress Android and desktop builds, keep the release version at `x.y.z` and increment only the alphabetical suffix:
+Android and jDeploy deployments are kept in sync as one SerialSlinger release. Unless a release is explicitly scoped differently, each deployment uses the next plain numeric `x.y.z` version with no alphabetical suffix. Increment the `z` patch field from the previous deployment, keep Android `versionName`, the desktop app display version, and the npm/jDeploy package version aligned to that same `x.y.z`, and increment Android `versionCode` from the previously deployed build.
+
+Alphabetical suffixes are only for local verification builds. Do not publish a jDeploy or Android deployment with an alphabetical suffix unless that exception is explicitly requested.
+
+## Local Verification Builds
+
+For local testable in-progress Android and desktop builds, keep the release version at `x.y.z` and increment only the alphabetical suffix:
 
 - app-visible version: `1.0.98a`
 - npm/jDeploy package version: `1.0.98-a`
@@ -47,11 +53,10 @@ Current workflow:
 
 1. leave `serialSlingerVersion` in [build.gradle.kts](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/build.gradle.kts) at the intended release version
 2. increment `serialSlingerVersionSuffix` for each new test build: `a`, `b`, `c`, ... then `aa`, `ab`, ...
-3. increment Android `versionCode` in [androidApp/build.gradle.kts](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/androidApp/build.gradle.kts) from the previously deployed build
-4. keep `package.json` and `package-lock.json` aligned to the npm-safe form with a hyphen before the suffix
-5. clear the suffix before a full release so both app-visible and package versions return to plain `x.y.z`
+3. keep `package.json` and `package-lock.json` aligned to the npm-safe form with a hyphen before the suffix
+4. clear the suffix before any deployment so Android and jDeploy publish as plain `x.y.z`
 
-This keeps Android and desktop builds visibly distinct during testing without accidentally rolling the release version forward.
+This keeps local Android and desktop builds visibly distinct during testing without accidentally publishing a suffixed version.
 
 ## GitHub Release Workflow
 
@@ -66,8 +71,8 @@ It:
 
 The intended release flow is:
 
-1. align the shared release label in `build.gradle.kts`, `package.json`, and `package-lock.json`
-2. increment Android `versionCode` in `androidApp/build.gradle.kts` before applying the shared release label to an Android build
+1. increment the shared release label in `build.gradle.kts`, `package.json`, and `package-lock.json` to the next plain `x.y.z` version, with no alphabetical suffix
+2. increment Android `versionCode` in `androidApp/build.gradle.kts` from the previously deployed build
 3. run `npm run jdeploy:release-preflight`
 4. review platform parity:
    - ask whether any Android app changes in the release should also be carried into the desktop app
