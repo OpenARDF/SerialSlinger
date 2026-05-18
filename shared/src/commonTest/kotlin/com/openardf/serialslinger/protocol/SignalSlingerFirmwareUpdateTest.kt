@@ -470,7 +470,7 @@ class SignalSlingerFirmwareUpdateTest {
         )
 
         assertEquals(listOf(9_600, 115_200, 115_200, 115_200, 115_200, 9_600, 115_200, 9_600), transport.connectedBauds)
-        assertEquals(listOf("**\r", "VER\r", "INF\r", "UPD\r"), transport.asciiWrites.take(4))
+        assertEquals(listOf("GO 0\r", "**\r", "VER\r", "INF\r", "UPD\r"), transport.asciiWrites.take(5))
         assertTrue("RST\n" in transport.asciiWrites)
         assertTrue("R" in transport.asciiWrites)
         assertEquals("INF\r", transport.asciiWrites.last())

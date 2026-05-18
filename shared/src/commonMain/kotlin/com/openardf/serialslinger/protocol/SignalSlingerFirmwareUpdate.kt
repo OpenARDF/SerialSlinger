@@ -673,8 +673,9 @@ object SignalSlingerFirmwareUpdate {
         allowAppHardwareMismatch: Boolean,
         progress: (SignalSlingerFirmwareUpdateProgress) -> Unit,
     ): SignalSlingerBootloaderIdentity {
+        transport.connect(release.serialSlinger.appBaud)
+        pauseTransmissionsBeforeUpdate(transport, progress)
         if (!recoverAlreadyWaiting) {
-            transport.connect(release.serialSlinger.appBaud)
             val infoResult = readAppInfoOrBootloaderIdentity(transport, release)
             infoResult.identity?.let { return it }
             val appInfo = infoResult.appInfo
@@ -714,11 +715,28 @@ object SignalSlingerFirmwareUpdate {
                 transport.readLines(50)
                 transport.disconnect()
             }
+        } else {
+            transport.disconnect()
         }
 
         progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0, "Waiting for SignalSlinger update mode"))
         connectUpdateModeAndWaitForIdentity(transport, release, progress)?.let { return it }
         error("SignalSlinger did not enter update mode.")
+    }
+
+    private fun pauseTransmissionsBeforeUpdate(
+        transport: SignalSlingerFirmwareUpdateTransport,
+        progress: (SignalSlingerFirmwareUpdateProgress) -> Unit,
+    ) {
+        transport.writeAscii("GO 0\r")
+        val responseLines = transport.readLines(300)
+        val detail =
+            if (responseLines.isEmpty()) {
+                "Sent GO 0 before update; no response was received."
+            } else {
+                "Sent GO 0 before update: ${responseLines.joinToString(" | ")}"
+            }
+        progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0, detail))
     }
 
     private fun connectUpdateModeAndWaitForIdentity(

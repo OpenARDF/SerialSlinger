@@ -5697,7 +5697,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             log("Supported programmers: ${workshopSetup.supportedProgrammers.joinToString(", ")}")
         }
         log("Serial verification: ${if (serialVerification) "enabled" else "skipped for bare-PCB setup"}.")
-        port?.let { releaseCurrentSerialConnectionForWorkshopSetup(it, logEntries) }
+        port?.let {
+            releaseCurrentSerialConnectionForWorkshopSetup(it, logEntries)
+            pauseSignalSlingerBeforeWorkshopSetup(it, manifest, logEntries)
+        }
 
         setBusyProgress(20, 100, "Checking tools")
         runWorkshopSetupProcess(
@@ -5852,6 +5855,33 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 "SignalSlinger bootloader installed.\n\nProgramming was verified through the programmer. Serial communication was not checked because bare-PCB setup was selected."
             }
             showAppMessageDialog(message)
+        }
+    }
+
+    private fun pauseSignalSlingerBeforeWorkshopSetup(
+        port: String,
+        manifest: SignalSlingerReleaseInfo,
+        logEntries: MutableList<DesktopLogEntry>,
+    ) {
+        val transport = DesktopFirmwareUpdateTransport(port)
+        try {
+            transport.connect(manifest.serialSlinger.appBaud)
+            Thread.sleep(250L)
+            transport.readLines(250L)
+            transport.writeAscii("GO 0\r")
+            val responseLines = transport.readLines(500L)
+            val responseSummary =
+                if (responseLines.isEmpty()) {
+                    "no response was received"
+                } else {
+                    responseLines.joinToString(" | ")
+                }
+            logEntries += DesktopLogEntry(
+                "Sent GO 0 before bootloader installation; $responseSummary.",
+                DesktopLogCategory.APP,
+            )
+        } finally {
+            transport.disconnect()
         }
     }
 
