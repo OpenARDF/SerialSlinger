@@ -50,13 +50,11 @@ class DesktopSessionLog(
     }
 
     fun currentLogFile(): Path {
-        temperatureLogFile?.let { return it }
         val date = LocalDate.now(clock).format(dateFormatter)
         return logDirectory().resolve("serialslinger-$date.log")
     }
 
     fun beginTemperatureLog(): Path {
-        archiveCurrentLog()
         val file = logDirectory().resolve("serialslinger-temperature-${LocalDateTime.now(clock).format(dateTimeFormatter)}.csv")
         Files.writeString(file, "timestamp,temperature_c,external_battery_v,internal_battery_v\n", StandardOpenOption.CREATE_NEW)
         temperatureLogFile = file
@@ -65,7 +63,6 @@ class DesktopSessionLog(
 
     fun endTemperatureLog(): Path {
         temperatureLogFile = null
-        archiveCurrentLog()
         return ensureCurrentLogFile()
     }
 
@@ -103,9 +100,6 @@ class DesktopSessionLog(
     }
 
     fun appendSection(title: String, entries: List<DesktopLogEntry>): String {
-        if (temperatureLogFile != null) {
-            return ""
-        }
         val file = currentLogFile()
         val header = headerTextIfNeeded(file)
         val rendered = renderSection(title, entries)

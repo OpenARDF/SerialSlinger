@@ -51,13 +51,11 @@ class AndroidSessionLog(
     }
 
     fun currentLogFile(): File {
-        temperatureLogFile?.let { return it }
         val date = dateFormatter.format(Date())
         return File(logDirectory(), "serialslinger-$date.log")
     }
 
     fun beginTemperatureLog(): File {
-        archiveCurrentDebugLog()
         val file = File(logDirectory(), "serialslinger-temperature-${dateTimeFormatter.format(Date())}.csv")
         file.writeText("timestamp,temperature_c,external_battery_v,internal_battery_v\n")
         temperatureLogFile = file
@@ -66,7 +64,6 @@ class AndroidSessionLog(
 
     fun endTemperatureLog(): File {
         temperatureLogFile = null
-        archiveCurrentDebugLog()
         return ensureCurrentLogFile()
     }
 
@@ -103,9 +100,6 @@ class AndroidSessionLog(
     }
 
     fun appendSection(title: String, entries: List<AndroidLogEntry>): String {
-        if (temperatureLogFile != null) {
-            return ""
-        }
         val file = currentLogFile()
         val header = headerTextIfNeeded(file)
         val rendered = renderSection(title, entries)

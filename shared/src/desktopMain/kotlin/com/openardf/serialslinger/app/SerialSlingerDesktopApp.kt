@@ -7987,6 +7987,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
         }
         if (::temperatureLogMenuItem.isInitialized) {
+            temperatureLogMenuItem.text =
+                if (temperatureLogTimer != null) {
+                    "Stop Logging Temperature"
+                } else {
+                    "Start New Temperature Log"
+                }
             temperatureLogMenuItem.isEnabled = advancedEnabled
             temperatureLogMenuItem.isSelected = temperatureLogTimer != null
             temperatureLogMenuItem.foreground = if (advancedEnabled) advancedColor else defaultCheckBoxMenuForeground
@@ -8699,6 +8705,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 start()
             }
             setStatus("Temperature logging in progress.")
+            renderConnectionIndicator()
         } else if (!enabled && temperatureLogTimer != null) {
             temperatureLogTimer?.stop()
             temperatureLogTimer = null
@@ -8707,6 +8714,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             refreshDisplayedLogFromDisk()
             setStatus("Temperature logging deactivated.")
             updateAdvancedDeviceDataRefreshTimer()
+            renderConnectionIndicator()
         }
         updateAdvancedMenuItems()
     }
@@ -8843,12 +8851,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun renderConnectionIndicator() {
-        val state = if (thermalHeadlineWarningMessage != null) {
-            ConnectionIndicatorState.DISCONNECTED
-        } else {
-            connectionIndicatorState
+        val temperatureLoggingActive = temperatureLogTimer != null
+        val state = when {
+            thermalHeadlineWarningMessage != null -> ConnectionIndicatorState.DISCONNECTED
+            temperatureLoggingActive -> ConnectionIndicatorState.CONNECTED
+            else -> connectionIndicatorState
         }
-        val message = thermalHeadlineWarningMessage ?: connectionIndicatorMessage
+        val message = thermalHeadlineWarningMessage
+            ?: if (temperatureLoggingActive) {
+                "Temperature logging in progress."
+            } else {
+                connectionIndicatorMessage
+            }
         headlineLabel.text = "${state.label}: $message"
         headlineLabel.foreground = state.foreground
         headlineLabel.background = state.background

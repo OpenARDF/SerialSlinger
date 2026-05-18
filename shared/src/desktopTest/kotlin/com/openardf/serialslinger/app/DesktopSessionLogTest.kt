@@ -197,6 +197,34 @@ class DesktopSessionLogTest {
     }
 
     @Test
+    fun keepsWritingSessionLogWhileTemperatureLogIsActive() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val log = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+        )
+
+        val temperatureFile = log.beginTemperatureLog()
+        val rendered = log.appendPlainSection("User Action", listOf("Clicked Reload SignalSlinger Data."))
+        log.appendTemperatureSample(
+            timestamp = java.time.LocalDateTime.parse("2026-04-10T14:22:40"),
+            temperatureC = 21.5,
+            externalBatteryVolts = 12.1,
+            internalBatteryVolts = 4.8,
+        )
+
+        val sessionFile = tempDirectory.resolve("serialslinger-2026-04-10.log")
+        assertTrue(Files.exists(sessionFile))
+        assertTrue(rendered.contains("[APP] Clicked Reload SignalSlinger Data."))
+        assertTrue(Files.readString(sessionFile).contains("[APP] Clicked Reload SignalSlinger Data."))
+        assertEquals(
+            "timestamp,temperature_c,external_battery_v,internal_battery_v\n" +
+                "2026-04-10T14:22:40,21.5,12.1,4.8\n",
+            Files.readString(temperatureFile),
+        )
+    }
+
+    @Test
     fun listsAndDeletesTemperatureLogsOnly() {
         val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
         val log = DesktopSessionLog(
