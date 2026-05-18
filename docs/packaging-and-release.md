@@ -84,6 +84,7 @@ The intended release flow is:
 8. merge the desired release state to `main`
 9. create and push a tag like `v1.0.93`
 10. let the GitHub Actions workflow publish the release artifacts
+11. before declaring the deployment complete, re-check this release-flow checklist against the work just performed and explicitly address any missed item
 
 Keep desktop and Android releases in sync by default. Do not run a separate Android-only release flow with different versioning, tests, or parity checks unless that difference is explicitly requested for the release.
 
