@@ -2395,14 +2395,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             return
         }
         val uiState = AndroidSessionController.snapshotUiState()
-        if (
-            uiState.currentTimeSyncInFlight ||
-            uiState.sessionViewState?.state?.snapshot?.capabilities?.supportsScheduling != true
-        ) {
+        val snapshot = uiState.sessionViewState?.state?.snapshot
+        if (uiState.currentTimeSyncInFlight || snapshot?.capabilities?.supportsScheduling != true) {
             return
         }
-        val phaseErrorMillis = uiState.clockPhaseErrorMillis ?: return
-        if (abs(phaseErrorMillis) <= AndroidSessionController.CLOCK_PHASE_WARNING_THRESHOLD_MILLIS) {
+        val currentTimeNotSet = snapshot.settings.currentTimeCompact == null
+        val phaseExcessive =
+            uiState.clockPhaseErrorMillis?.let { abs(it) > AndroidSessionController.CLOCK_PHASE_WARNING_THRESHOLD_MILLIS } == true
+        if (!currentTimeNotSet && !phaseExcessive) {
             return
         }
         val nowMillis = System.currentTimeMillis()

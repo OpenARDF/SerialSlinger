@@ -394,6 +394,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var consecutiveDeviceTimeCheckNoResponseCount: Int = 0
     private var cloneTemplateSettings: DeviceSettings? = null
     private var clockDisplayTimer: Timer? = null
+    private var automaticDeviceTimeSyncTimer: Timer? = null
     private var clockPhaseWarningActive: Boolean = false
     private var lastClockPhaseErrorMillis: Long? = null
     private var autoDetectButtonLongPressTimer: Timer? = null
@@ -9281,6 +9282,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 applyClockDisplayAnchor(anchor)
                 updateClockPhaseWarning(anchor.phaseErrorMillis)
             }
+            maybeTriggerAutomaticDeviceTimeSync()
             applySnapshotToForm(
                 connection.result.state.snapshot,
                 recalculateClockOffset = connection.clockAnchor == null,
@@ -10422,35 +10424,47 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 "Connected to SignalSlinger on $portPath",
             )
         }
-        maybeTriggerAutomaticDeviceTimeSync(shouldWarn)
+        maybeTriggerAutomaticDeviceTimeSync()
     }
 
-    private fun maybeTriggerAutomaticDeviceTimeSync(clockWarningActive: Boolean) {
+    private fun maybeTriggerAutomaticDeviceTimeSync() {
         if (
-            !clockWarningActive ||
             displayPreferences.timeSetMode != TimeSetMode.AUTOMATIC ||
-            backgroundWorkInProgress ||
             currentTransport == null ||
             currentState?.connectionState != ConnectionState.CONNECTED ||
-            loadedSnapshot?.capabilities?.supportsScheduling != true
+            loadedSnapshot?.capabilities?.supportsScheduling != true ||
+            !automaticDeviceTimeSyncNeeded()
         ) {
             return
         }
-        Timer(1) {
+        if (automaticDeviceTimeSyncTimer?.isRunning == true) {
+            return
+        }
+        automaticDeviceTimeSyncTimer = Timer(100) {
             if (
-                displayPreferences.timeSetMode == TimeSetMode.AUTOMATIC &&
-                !backgroundWorkInProgress &&
-                currentTransport != null &&
-                currentState?.connectionState == ConnectionState.CONNECTED &&
-                loadedSnapshot?.capabilities?.supportsScheduling == true &&
-                hasClockPhaseWarning()
+                displayPreferences.timeSetMode != TimeSetMode.AUTOMATIC ||
+                currentTransport == null ||
+                currentState?.connectionState != ConnectionState.CONNECTED ||
+                loadedSnapshot?.capabilities?.supportsScheduling != true ||
+                !automaticDeviceTimeSyncNeeded()
             ) {
+                automaticDeviceTimeSyncTimer?.stop()
+                automaticDeviceTimeSyncTimer = null
+                return@Timer
+            }
+            if (!backgroundWorkInProgress) {
+                automaticDeviceTimeSyncTimer?.stop()
+                automaticDeviceTimeSyncTimer = null
                 syncDeviceTimeToSystem()
             }
         }.apply {
-            isRepeats = false
+            isRepeats = true
             start()
         }
+    }
+
+    private fun automaticDeviceTimeSyncNeeded(): Boolean {
+        return loadedSnapshot?.settings?.currentTimeCompact == null || hasClockPhaseWarning()
     }
 
     private fun maybeShowCloneClockReminder(
