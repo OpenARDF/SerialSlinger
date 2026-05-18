@@ -76,6 +76,8 @@ import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.io.File
 import java.net.URI
 import java.nio.file.Files
@@ -476,6 +478,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         layout = BorderLayout(12, 12)
         jMenuBar = buildMenuBar()
         SerialSlingerAppIcon.install(this)
+        addWindowListener(
+            object : WindowAdapter() {
+                override fun windowClosing(event: WindowEvent) {
+                    stopTemperatureLoggingForShutdown()
+                }
+            },
+        )
 
         add(buildHeader(), BorderLayout.NORTH)
         add(configuredContentSplitPane(), BorderLayout.CENTER)
@@ -8748,6 +8757,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             renderConnectionIndicator()
         }
         updateAdvancedMenuItems()
+    }
+
+    private fun stopTemperatureLoggingForShutdown() {
+        if (temperatureLogTimer == null) {
+            return
+        }
+        temperatureLogTimer?.stop()
+        temperatureLogTimer = null
+        temperatureLogSampleInProgress.set(false)
+        sessionLog.endTemperatureLog()
     }
 
     private fun captureTemperatureLogSample() {

@@ -440,6 +440,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     override fun onDestroy() {
         dismissStatusPopup()
         dismissFirmwareUpdateDialog()
+        AndroidSessionController.setTemperatureLoggingEnabled(applicationContext, enabled = false)
         unregisterReceiver(usbReceiver)
         super.onDestroy()
     }
