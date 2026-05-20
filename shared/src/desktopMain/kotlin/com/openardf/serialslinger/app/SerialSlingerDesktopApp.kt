@@ -5864,7 +5864,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             } else {
                 "SignalSlinger bootloader installed.\n\nProgramming was verified through the programmer. Serial communication was not checked because bare-PCB setup was selected."
             }
+            playCompletionBeep()
             showAppMessageDialog(message)
+            promptProgramAnother(serialVerification = serialVerification)
         }
     }
 
@@ -6512,10 +6514,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (trimmed.contains("Unable to connect to USB device", ignoreCase = true)) {
             return "The programmer was found but could not be opened over USB. Unplug/replug the programmer and try again."
         }
-        if (
-            trimmed.contains("No module named 'usb'", ignoreCase = true) ||
-            trimmed.contains("No module named usb", ignoreCase = true)
-        ) {
+        val reportsMissingPyusb =
+            (
+                trimmed.contains("No module named 'usb'", ignoreCase = true) ||
+                    trimmed.contains("No module named usb", ignoreCase = true)
+            ) &&
+                !trimmed.contains("If this fails", ignoreCase = true)
+        if (reportsMissingPyusb) {
             return "The pymcuprog Python environment is missing USB support.\n\nRun:\npython -m pip install pyusb\n\nIf SerialSlinger still cannot use pymcuprog after that, close and reopen the app and make sure your Python Scripts folder is on PATH."
         }
         if (trimmed.contains("pymcuprog command not found", ignoreCase = true)) {
@@ -6699,7 +6704,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 JOptionPane.WARNING_MESSAGE,
                 null,
                 arrayOf("Continue", "Cancel"),
-                "Cancel",
+                "Continue",
             )
             confirmed.set(choice == 0)
             if (confirmed.get() && backgroundWorkInProgress) {
@@ -6707,6 +6712,51 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
         }
         return confirmed.get()
+    }
+
+    private fun playCompletionBeep() {
+        if (playMacSystemSound()) {
+            return
+        }
+        runCatching {
+            Toolkit.getDefaultToolkit().beep()
+        }
+    }
+
+    private fun playMacSystemSound(): Boolean {
+        val osName = System.getProperty("os.name").orEmpty()
+        if (!osName.contains("Mac", ignoreCase = true)) {
+            return false
+        }
+        val soundFile = File("/System/Library/Sounds/Glass.aiff")
+        if (!soundFile.isFile) {
+            return false
+        }
+        return runCatching {
+            ProcessBuilder("afplay", soundFile.absolutePath).start()
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun promptProgramAnother(serialVerification: Boolean) {
+        val choice = JOptionPane.showOptionDialog(
+            this,
+            "Program another?",
+            "Program Another",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            arrayOf("Yes", "Exit"),
+            "Yes",
+        )
+        if (choice == 0) {
+            Timer(1) {
+                chooseSignalSlingerWorkshopSetupPackage(serialVerification = serialVerification)
+            }.apply {
+                isRepeats = false
+                start()
+            }
+        }
     }
 
     private fun setAutomaticFirmwareUpdatesEnabled(enabled: Boolean) {
@@ -7029,7 +7079,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             } else {
                 "SignalSlinger update completed.\n\nSerialSlinger could not refresh the displayed device information. Use Reload SignalSlinger Data to refresh it."
             }
+            playCompletionBeep()
             JOptionPane.showMessageDialog(this, message)
+            promptProgramAnother(serialVerification = true)
         }
     }
 

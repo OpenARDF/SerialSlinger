@@ -5,6 +5,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -5824,6 +5826,9 @@ object AndroidSessionController {
                     firmwareUpdateProgress = null
                 }
             }
+            if (result.isSuccess) {
+                playCompletionBeep()
+            }
             notifyListeners()
             onComplete?.let { callback ->
                 mainHandler.post {
@@ -5841,6 +5846,16 @@ object AndroidSessionController {
                     )
                 }
             }
+        }
+    }
+
+    private fun playCompletionBeep() {
+        mainHandler.post {
+            val toneGenerator = runCatching {
+                ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
+            }.getOrNull() ?: return@post
+            toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
+            mainHandler.postDelayed({ toneGenerator.release() }, 200)
         }
     }
 
