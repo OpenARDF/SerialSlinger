@@ -1207,7 +1207,7 @@ object AndroidSessionController {
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
                     cloneTemplateTimedEventEditsLocked = false
                     displayedLoadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
-                    applySnapshotDrafts(displayedLoadResult.state.snapshot)
+                    applySnapshotDrafts(displayedLoadResult.state.snapshot, refreshClockDisplayAnchor = false)
                     clockAnchor?.let { anchor ->
                         applyClockDisplayAnchor(
                             currentTimeCompact = anchor.currentTimeCompact,
@@ -3353,7 +3353,7 @@ object AndroidSessionController {
                         traceEntries = buildSyncTraceEntries(syncResult),
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    applySnapshotDrafts(finalAttempt.state.snapshot)
+                    applySnapshotDrafts(finalAttempt.state.snapshot, refreshClockDisplayAnchor = false)
                     applyClockDisplayAnchor(
                         currentTimeCompact = finalAttempt.state.snapshot?.settings?.currentTimeCompact,
                         phaseErrorMillis = finalAttempt.phaseErrorMillis,
@@ -5722,7 +5722,10 @@ object AndroidSessionController {
                                         "SignalSlinger update completed, but the visible device information could not be refreshed: ${reloadFailure.message ?: reloadFailure::class.simpleName}",
                                         AndroidLogCategory.APP,
                                     )
-                                }.getOrNull(),
+                                }.getOrNull()
+                                    ?.let { (reloadResult, clockAnchor) ->
+                                        FirmwareUpdateReload(reloadResult, clockAnchor)
+                                    },
                             )
                         }
                         if (
@@ -5749,6 +5752,9 @@ object AndroidSessionController {
                             AndroidLogCategory.APP,
                         )
                     }.getOrNull()
+                        ?.let { (reloadResult, clockAnchor) ->
+                            FirmwareUpdateReload(reloadResult, clockAnchor)
+                        }
                     FirmwareUpdateOutcome(
                         release = selection.release,
                         reloadResult = reloadResult,
@@ -5784,7 +5790,7 @@ object AndroidSessionController {
                         bootloaderVersion = release.serialSlinger.bootloaderVersion,
                         bootloaderProtocolVersion = release.serialSlinger.protocolVersion,
                     )
-                    val displayedReloadResult = outcome.reloadResult?.let(::applyPendingBootloaderVersion)
+                    val displayedReloadResult = outcome.reloadResult?.result?.let(::applyPendingBootloaderVersion)
                     if (displayedReloadResult != null) {
                         latestSessionViewState = AndroidSessionViewState(
                             state = displayedReloadResult.state,
@@ -5792,7 +5798,14 @@ object AndroidSessionController {
                         )
                         rememberLoadedTargetLocked(AndroidConnectionTarget.Usb(startState.getOrThrow().deviceName))
                         displayedReloadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
-                        applySnapshotDrafts(displayedReloadResult.state.snapshot)
+                        applySnapshotDrafts(displayedReloadResult.state.snapshot, refreshClockDisplayAnchor = false)
+                        outcome.reloadResult.clockAnchor?.let { anchor ->
+                            applyClockDisplayAnchor(
+                                currentTimeCompact = anchor.currentTimeCompact,
+                                phaseErrorMillis = anchor.phaseErrorMillis,
+                                referenceTime = anchor.referenceTime ?: LocalDateTime.now(),
+                            )
+                        }
                     } else {
                         latestSessionViewState = null
                     }
@@ -5862,7 +5875,7 @@ object AndroidSessionController {
     private fun reloadSignalSlingerAfterFirmwareUpdate(
         context: Context,
         deviceName: String,
-    ): Result<DeviceLoadResult> {
+    ): Result<Pair<DeviceLoadResult, ClockDisplayAnchor?>> {
         synchronized(this) {
             statusText = "Reloading SignalSlinger..."
             statusIsError = false
@@ -5891,7 +5904,7 @@ object AndroidSessionController {
                 "No SignalSlinger response was received."
             }
             val postLoadClockSample = postLoadClockSample(transport, initialLoad)
-            mergeLoadResults(initialLoad, postLoadClockSample?.first)
+            mergeLoadResults(initialLoad, postLoadClockSample?.first) to postLoadClockSample?.second
         }
     }
 
@@ -6072,7 +6085,12 @@ object AndroidSessionController {
 
     private data class FirmwareUpdateOutcome(
         val release: SignalSlingerReleaseInfo,
-        val reloadResult: DeviceLoadResult?,
+        val reloadResult: FirmwareUpdateReload?,
+    )
+
+    private data class FirmwareUpdateReload(
+        val result: DeviceLoadResult,
+        val clockAnchor: ClockDisplayAnchor?,
     )
 
     private data class PendingBootloaderVersion(

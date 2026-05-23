@@ -4993,7 +4993,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             thermalShutdownThresholdRowLabel.foreground = defaultRowLabelForeground
             thermalShutdownThresholdField.foreground = defaultInformationalFieldForeground
             updateThermalHeadlineWarning(snapshot.status.temperatureC)
-            lastDeviceTimeCheckAtMs = System.currentTimeMillis()
             if (recalculateClockOffset) {
                 updateDeviceClockOffset(settings.currentTimeCompact)
             }
@@ -8211,7 +8210,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             loadedSnapshot = nextState.snapshot
             setBusyProgress(2, 2, commandProgressLabel(2, 2))
             SwingUtilities.invokeLater {
-                applySnapshotToForm(nextState.snapshot)
+                applySnapshotToForm(nextState.snapshot, recalculateClockOffset = false)
                 appendLog(
                     logTitle,
                     buildList {
@@ -8705,7 +8704,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
             SwingUtilities.invokeLater {
                 rawCommandField.text = ""
-                applySnapshotToForm(nextState.snapshot)
+                applySnapshotToForm(
+                    nextState.snapshot,
+                    recalculateClockOffset = responseLines.any(::isClockTimeResponseLine),
+                )
                 appendLog(
                     "Raw Command",
                     buildList {
@@ -8750,7 +8752,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             currentState = nextState
             loadedSnapshot = nextState.snapshot
             SwingUtilities.invokeLater {
-                applySnapshotToForm(nextState.snapshot)
+                applySnapshotToForm(nextState.snapshot, recalculateClockOffset = false)
                 appendLog(
                     "Thermal Shutdown Threshold",
                     buildList {
@@ -11239,6 +11241,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 referenceTime = anchor.referenceTime ?: java.time.LocalDateTime.now(),
             )
         }
+        lastDeviceTimeCheckAtMs = System.currentTimeMillis()
     }
 
     private fun sampleClockReadLatency(
