@@ -157,10 +157,35 @@ object SignalSlingerFirmwareSupport {
         minimumVersion = SignalSlingerFirmwareVersion(1, 2, 2),
         capabilities = modern121Profile.capabilities.copy(
             supportsTemperatureLogging = true,
+            supportsFirmwareUpdate = true,
         ),
     )
 
-    fun resolve(softwareVersion: String?): SignalSlingerFirmwareProfile {
+    private val arduconProfile = SignalSlingerFirmwareProfile(
+        id = "arducon-atmega328p",
+        capabilities = DeviceCapabilities(
+            supportsTemperatureReadback = true,
+            supportsFirmwareUpdate = true,
+        ),
+        bootstrapLoadCommands = versionBootstrapCommands,
+        loadCommandsAfterVersion = listOf(
+            "ID",
+            "CLK T",
+            "CLK S",
+            "CLK F",
+            "UTI",
+            "SET S",
+        ),
+        verificationReadbackCommands = emptyMap(),
+    )
+
+    fun resolve(
+        softwareVersion: String?,
+        productName: String? = null,
+    ): SignalSlingerFirmwareProfile {
+        if (productName.equals("Arducon", ignoreCase = true)) {
+            return arduconProfile
+        }
         val parsedVersion = SignalSlingerFirmwareVersion.parse(softwareVersion)
         if (parsedVersion == null) {
             return modern120Profile

@@ -4394,6 +4394,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     },
                 )
                 add(
+                    ToolOption("Update Arducon Firmware") {
+                        showArduconUpdateConfirmation(uiState)
+                    },
+                )
+                add(
                     ToolOption(
                         if (automaticFirmwareUpdatesEnabled) {
                             "Disable Automatic SignalSlinger Firmware Updates"
@@ -4561,6 +4566,31 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             .showLogged("Update SignalSlinger")
     }
 
+    private fun showArduconUpdateConfirmation(uiState: AndroidUiState) {
+        val snapshot = uiState.sessionViewState?.state?.snapshot
+        if (!snapshot?.info?.productName.equals("Arducon", ignoreCase = true)) {
+            showLargeTextDialog("Update Arducon", "Load the attached Arducon before starting an Arducon update.")
+            return
+        }
+        val version = snapshot?.info?.softwareVersion?.takeIf { it.isNotBlank() } ?: "unknown"
+        val hardware = snapshot?.info?.hardwareBuild?.takeIf { it.isNotBlank() } ?: "unknown"
+        AlertDialog.Builder(this)
+            .setTitle("Update Arducon")
+            .setMessage(
+                "SerialSlinger will check for the latest update for this Arducon.\n\n" +
+                    "Current firmware: $version\n" +
+                    "Hardware: $hardware\n\n" +
+                    "If the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.",
+            )
+            .setPositiveButton("Update") { _, _ ->
+                chooseArduconUpdateSource { requestedVersion ->
+                    startAndroidArduconUpdate(requestedVersion)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update Arducon")
+    }
+
     private fun forcedHardwareUpdateBoard(hardwareBuild: String): String? =
         when {
             SignalSlingerFirmwareUpdate.hardwareMatchesBoard(hardwareBuild, "HW-3.4") -> "HW-3.5"
@@ -4644,6 +4674,21 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             .showLogged("Update SignalSlinger")
     }
 
+    private fun chooseArduconUpdateSource(onSelected: (String?) -> Unit) {
+        val options = arrayOf("Latest Version", "Specific Version")
+        AlertDialog.Builder(this)
+            .setTitle("Update Arducon")
+            .setItems(options) { _, which ->
+                if (which == 0) {
+                    onSelected(null)
+                } else {
+                    askArduconUpdateVersion(onSelected)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update Arducon")
+    }
+
     private fun askSignalSlingerUpdateVersion(onSelected: (String?) -> Unit) {
         val input =
             EditText(this).apply {
@@ -4668,6 +4713,30 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             .showLogged("Update SignalSlinger")
     }
 
+    private fun askArduconUpdateVersion(onSelected: (String?) -> Unit) {
+        val input =
+            EditText(this).apply {
+                hint = "2.0.0"
+                setSingleLine(true)
+                setText("2.0.0")
+                selectAll()
+            }
+        AlertDialog.Builder(this)
+            .setTitle("Update Arducon")
+            .setMessage("Enter the Arducon firmware version to download.")
+            .setView(input)
+            .setPositiveButton("Update") { _, _ ->
+                val version = input.text?.toString()?.trim()?.removePrefix("v").orEmpty()
+                if (version.isBlank()) {
+                    showLargeTextDialog("Update Arducon", "Enter a firmware version such as 2.0.0.")
+                } else {
+                    onSelected(version)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Update Arducon")
+    }
+
     private fun startAndroidSignalSlingerUpdate(
         overrideBoard: String?,
         recoverAlreadyWaiting: Boolean,
@@ -4684,6 +4753,21 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         ) { result ->
             result.exceptionOrNull()?.let { error ->
                 showLargeTextDialog("Update SignalSlinger", error.message ?: error.toString())
+            }
+            if (result.isSuccess && AndroidSessionController.snapshotUiState().sessionViewState == null) {
+                scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
+            }
+        }
+    }
+
+    private fun startAndroidArduconUpdate(requestedVersion: String?) {
+        AndroidSessionController.runArduconFirmwareUpdate(
+            context = applicationContext,
+            requestedVersion = requestedVersion,
+            confirmResidentFallback = ::confirmResidentArduconUpdate,
+        ) { result ->
+            result.exceptionOrNull()?.let { error ->
+                showLargeTextDialog("Update Arducon", error.message ?: error.toString())
             }
             if (result.isSuccess && AndroidSessionController.snapshotUiState().sessionViewState == null) {
                 scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
@@ -4777,6 +4861,42 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             AndroidSessionController.logAppEvent(
                 title = "update",
                 lines = listOf("GitHub update check failed: $downloadFailure"),
+            )
+        }
+        return confirmed
+    }
+
+    private fun confirmResidentArduconUpdate(
+        version: String,
+        board: String,
+        downloadFailure: String,
+    ): Boolean {
+        val latch = CountDownLatch(1)
+        var confirmed = false
+        Handler(Looper.getMainLooper()).post {
+            AlertDialog.Builder(this)
+                .setTitle("Update Arducon")
+                .setMessage(
+                    "SerialSlinger could not download the latest Arducon update.\n\n" +
+                        "Use the resident Arducon $version update for $board?",
+                )
+                .setPositiveButton("Use Resident Update") { _, _ ->
+                    confirmed = true
+                    latch.countDown()
+                }
+                .setNegativeButton("Cancel") { _, _ ->
+                    latch.countDown()
+                }
+                .setOnCancelListener {
+                    latch.countDown()
+                }
+                .showLogged("Update Arducon")
+        }
+        latch.await()
+        if (!confirmed) {
+            AndroidSessionController.logAppEvent(
+                title = "update",
+                lines = listOf("GitHub Arducon update check failed: $downloadFailure"),
             )
         }
         return confirmed

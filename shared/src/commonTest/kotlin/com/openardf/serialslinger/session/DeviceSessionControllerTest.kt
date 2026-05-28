@@ -83,6 +83,48 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun connectAndLoadUsesArduconReadPlanAfterInfIdentity() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "INF" to listOf(
+                    "* INF product=Arducon",
+                    "* INF update=UPD",
+                    "* INF sw=1.0.1",
+                    "* INF hw=ATmega328P-16",
+                    "* INF app=0x0000",
+                    "* INF appbaud=57600",
+                    "* INF baud=115200",
+                    "* INF bl=unknown",
+                    "* INF proto=stk500v1",
+                ),
+                "ID" to listOf("ID: NZ0I"),
+                "CLK T" to listOf("Epoch:1779988193"),
+                "CLK S" to listOf("Start:0"),
+                "CLK F" to listOf("Finish:0"),
+                "UTI" to listOf("T=34C", "V=11.31V"),
+                "SET S" to listOf("ID: 20 wpm"),
+            ),
+        )
+
+        val result = DeviceSessionController.connectAndLoad(transport)
+
+        assertEquals(
+            listOf("VER", "INF", "ID", "CLK T", "CLK S", "CLK F", "UTI", "SET S", "INF"),
+            result.commandsSent,
+        )
+        val snapshot = assertNotNull(result.state.snapshot)
+        assertEquals("Arducon", snapshot.info.productName)
+        assertEquals("1.0.1", snapshot.info.softwareVersion)
+        assertEquals("ATmega328P-16", snapshot.info.hardwareBuild)
+        assertEquals("NZ0I", snapshot.settings.stationId)
+        assertEquals(20, snapshot.settings.idCodeSpeedWpm)
+        assertEquals(34.0, snapshot.status.temperatureC)
+        assertTrue(snapshot.capabilities.supportsFirmwareUpdate)
+        assertFalse(snapshot.capabilities.supportsFrequencyProfiles)
+        assertFalse(assertNotNull(result.state.editableSettings).writableVisibleFields(snapshot.capabilities).any { it.key == "idCodeSpeedWpm" })
+    }
+
+    @Test
     fun connectAndLoadRunsInterventionBeforeNextLoadCommand() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(

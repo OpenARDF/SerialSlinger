@@ -45,6 +45,27 @@ class SignalSlingerProtocolCodecTest {
         assertNotNull(update)
         assertEquals("2.0.2", update.deviceInfoPatch?.softwareVersion)
         assertEquals("3.5", update.deviceInfoPatch?.hardwareBuild)
+        assertEquals(0x2000, update.deviceInfoPatch?.appStartAddress)
+        assertEquals(115_200, update.deviceInfoPatch?.updateBaud)
+    }
+
+    @Test
+    fun parsesArduconAppInfoReplyIntoDeviceInfoPatch() {
+        val update = SignalSlingerProtocolCodec.parseReportLine(
+            "* INF product=Arducon update=UPD sw=2.0.0 hw=ATmega328P-16 app=0x0000 appbaud=57600 baud=115200 bl=unknown proto=stk500v1",
+        )
+
+        assertNotNull(update)
+        assertEquals("Arducon", update.deviceInfoPatch?.productName)
+        assertEquals("UPD", update.deviceInfoPatch?.appUpdateCommand)
+        assertEquals("2.0.0", update.deviceInfoPatch?.softwareVersion)
+        assertEquals("ATmega328P-16", update.deviceInfoPatch?.hardwareBuild)
+        assertEquals(0x0000, update.deviceInfoPatch?.appStartAddress)
+        assertEquals(57_600, update.deviceInfoPatch?.appBaud)
+        assertEquals(115_200, update.deviceInfoPatch?.updateBaud)
+        assertEquals(null, update.deviceInfoPatch?.bootloaderVersion)
+        assertEquals(null, update.deviceInfoPatch?.bootloaderProtocolVersion)
+        assertEquals("stk500v1", update.deviceInfoPatch?.bootloaderProtocol)
     }
 
     @Test
@@ -114,6 +135,39 @@ class SignalSlingerProtocolCodecTest {
         assertNull(currentUpdate?.settingsPatch?.applyTo(settings)?.currentTimeCompact)
         assertNull(startUpdate?.settingsPatch?.applyTo(settings)?.startTimeCompact)
         assertNull(finishUpdate?.settingsPatch?.applyTo(settings)?.finishTimeCompact)
+    }
+
+    @Test
+    fun parsesArduconEpochClockRepliesIntoCompactTimestamps() {
+        val currentUpdate = SignalSlingerProtocolCodec.parseReportLine("Epoch:1779988193")
+        val startUpdate = SignalSlingerProtocolCodec.parseReportLine("Start:1779988200")
+        val finishUpdate = SignalSlingerProtocolCodec.parseReportLine("Finish:0")
+        val tooEarlyUpdate = SignalSlingerProtocolCodec.parseReportLine("Epoch:1609459199")
+
+        val currentPatch = assertNotNull(currentUpdate?.settingsPatch)
+        val startPatch = assertNotNull(startUpdate?.settingsPatch)
+        val currentCompact = assertNotNull(currentPatch.currentTimeCompact)
+        val startCompact = assertNotNull(startPatch.startTimeCompact)
+        assertEquals(12, currentCompact.length)
+        assertEquals(12, startCompact.length)
+        assertEquals("26", currentCompact.take(2))
+        assertEquals(true, currentPatch.currentTimeObserved)
+        assertEquals(true, startPatch.startTimeObserved)
+        assertEquals(null, finishUpdate?.settingsPatch?.finishTimeCompact)
+        assertEquals(true, finishUpdate?.settingsPatch?.finishTimeObserved)
+        assertEquals(null, tooEarlyUpdate?.settingsPatch?.currentTimeCompact)
+        assertEquals(true, tooEarlyUpdate?.settingsPatch?.currentTimeObserved)
+    }
+
+    @Test
+    fun parsesObservedArduconReadbackLines() {
+        val stationUpdate = SignalSlingerProtocolCodec.parseReportLine("ID: NZ0I")
+        val idSpeedUpdate = SignalSlingerProtocolCodec.parseReportLine("ID: 20 wpm")
+        val temperatureUpdate = SignalSlingerProtocolCodec.parseReportLine("T=34C")
+
+        assertEquals("NZ0I", stationUpdate?.settingsPatch?.stationId)
+        assertEquals(20, idSpeedUpdate?.settingsPatch?.idCodeSpeedWpm)
+        assertEquals(34.0, temperatureUpdate?.deviceStatusPatch?.temperatureC)
     }
 
     @Test

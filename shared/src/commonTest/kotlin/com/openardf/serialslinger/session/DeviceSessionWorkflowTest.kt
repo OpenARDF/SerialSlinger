@@ -97,6 +97,29 @@ class DeviceSessionWorkflowTest {
     }
 
     @Test
+    fun arduconIdentityUsesProductCapabilities() {
+        val updated = DeviceSessionWorkflow.ingestReportLines(
+            DeviceSessionWorkflow.connected(),
+            listOf(
+                "* INF product=Arducon update=UPD",
+                "* INF sw=2.0.0 hw=ATmega328P-16 app=0x0000 appbaud=57600 baud=115200 bl=unknown proto=stk500v1",
+            ),
+        )
+
+        val snapshot = assertNotNull(updated.snapshot)
+        assertEquals("Arducon", snapshot.info.productName)
+        assertEquals("2.0.0", snapshot.info.softwareVersion)
+        assertEquals("ATmega328P-16", snapshot.info.hardwareBuild)
+        assertEquals(0x0000, snapshot.info.appStartAddress)
+        assertEquals(57_600, snapshot.info.appBaud)
+        assertEquals(115_200, snapshot.info.updateBaud)
+        assertEquals("UPD", snapshot.info.appUpdateCommand)
+        assertEquals("stk500v1", snapshot.info.bootloaderProtocol)
+        assertTrue(snapshot.capabilities.supportsFirmwareUpdate)
+        assertFalse(snapshot.capabilities.supportsFrequencyProfiles)
+    }
+
+    @Test
     fun ingestReportLinesPreservesDisabledTransmissionsStateFromBatteryReply() {
         val state = DeviceSessionWorkflow.connected()
 

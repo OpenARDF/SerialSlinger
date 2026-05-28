@@ -29,6 +29,10 @@ import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
+import com.openardf.serialslinger.protocol.ArduconAlreadyCurrentException
+import com.openardf.serialslinger.protocol.ArduconFirmwareUpdate
+import com.openardf.serialslinger.protocol.ArduconReleaseCache
+import com.openardf.serialslinger.protocol.ArduconReleaseSelectionSource
 import com.openardf.serialslinger.protocol.SignalSlingerAppInfo
 import com.openardf.serialslinger.protocol.SignalSlingerBootloaderIdentity
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
@@ -879,6 +883,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     add(
                         JMenuItem("Update SignalSlinger Firmware...").apply {
                             addActionListener { chooseSignalSlingerUpdatePackage() }
+                        },
+                    )
+                    add(
+                        JMenuItem("Update Arducon Firmware...").apply {
+                            addActionListener { chooseArduconUpdatePackage() }
                         },
                     )
                     automaticFirmwareUpdatesMenuItem = JCheckBoxMenuItem(
@@ -1936,7 +1945,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             ) {
                 mergedProbe.copy(
                     state = PortProbeState.DETECTED,
-                    summary = "Paired alias of connected SignalSlinger",
+                    summary = "Paired alias of connected device",
+                    productName = currentState?.snapshot?.info?.productName,
                 )
             } else {
                 mergedProbe
@@ -2020,10 +2030,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 ),
             ),
         )
-        showConnectionIndicator(
-            ConnectionIndicatorState.DISCONNECTED,
-            "Connected SignalSlinger was removed",
-        )
+        showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "Connected device was removed")
         setStatus("Connected serial port was removed.")
         updateDisplayedClockFields()
     }
@@ -2084,7 +2091,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "Port Monitor",
                     listOf(
                         DesktopLogEntry(
-                            "SignalSlinger is responding on ${result.portInfo.systemPortPath}.",
+                            "${result.detectedProductLabel()} is responding on ${result.portInfo.systemPortPath}.",
                             DesktopLogCategory.DEVICE,
                         ),
                     ),
@@ -2096,9 +2103,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     showConnectionIndicator(
                         ConnectionIndicatorState.SEARCHING,
-                        "SignalSlinger detected on ${result.portInfo.systemPortPath}. Select it or click Find Device.",
+                        "${result.detectedProductLabel()} detected on ${result.portInfo.systemPortPath}. Select it or click Find Device.",
                     )
-                    setStatus("SignalSlinger detected on ${result.portInfo.systemPortPath}.")
+                    setStatus("${result.detectedProductLabel()} detected on ${result.portInfo.systemPortPath}.")
                 }
             }
             PortProbeState.NOT_DETECTED,
@@ -2110,7 +2117,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         "Port Monitor",
                         listOf(
                             DesktopLogEntry(
-                                "SignalSlinger is no longer responding on ${result.portInfo.systemPortPath}.",
+                                "Device is no longer responding on ${result.portInfo.systemPortPath}.",
                                 DesktopLogCategory.DEVICE,
                             ),
                         ),
@@ -2124,9 +2131,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 ) {
                     showConnectionIndicator(
                         ConnectionIndicatorState.DISCONNECTED,
-                        "SignalSlinger is not responding on ${result.portInfo.systemPortPath}",
+                        "Device is not responding on ${result.portInfo.systemPortPath}",
                     )
-                    setStatus("SignalSlinger stopped responding on ${result.portInfo.systemPortPath}.")
+                    setStatus("Device stopped responding on ${result.portInfo.systemPortPath}.")
                 }
             }
             PortProbeState.UNCHECKED -> refreshAvailablePorts(silent = true)
@@ -2134,7 +2141,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun autoDetectPorts() {
-        showConnectionIndicator(ConnectionIndicatorState.SEARCHING, "Searching for SignalSlinger...")
+        showConnectionIndicator(ConnectionIndicatorState.SEARCHING, "Looking for attached devices...")
         refreshAvailablePorts(silent = true)
         val ports = SignalSlingerPortDiscovery.listAvailablePorts().map { it.portInfo }
         val lastWorkingPortPath = portMemory.loadLastWorkingPortPath()
@@ -2158,11 +2165,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 selectPort(fallbackPath)
             }
             setStatus("No additional serial ports are available to probe.")
-            showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "No Connected SignalSlinger Found")
+            showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "No Connected Device Found")
             return
         }
 
-        runInBackground("Probing serial ports for SignalSlinger...") {
+        runInBackground("Looking for attached devices...") {
             val preferredProbeAttempt = attemptAutoDetectPreferredPortRecovery(
                 initialAvailablePorts = ports,
                 selectedPortPath = selectedPortPath,
@@ -2177,7 +2184,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                     refreshAvailablePorts(silent = true)
                     appendLog("Auto Detect", buildList {
-                        add(DesktopLogEntry("Trying remembered SignalSlinger port first.", DesktopLogCategory.APP))
+                        add(DesktopLogEntry("Trying remembered device port first.", DesktopLogCategory.APP))
                         preferredProbeResult?.let { result ->
                             add(DesktopLogEntry(result.displayLabel, DesktopLogCategory.DEVICE))
                             result.evidenceLines.take(3).forEach { line ->
@@ -2188,7 +2195,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     autoDetectNoDeviceFound = false
                     selectPort(preferredLoadResult.portPath)
                     applyLoadedConnection(preferredLoadResult)
-                    setStatus("Detected and loaded SignalSlinger on ${preferredLoadResult.portPath}.")
+                    setStatus("Detected and loaded device on ${preferredLoadResult.portPath}.")
                 }
                 return@runInBackground
             }
@@ -2207,7 +2214,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         selectPort(result.portInfo.systemPortPath)
                         setStatus(
                             if (result.state == PortProbeState.DETECTED) {
-                                "Detected SignalSlinger on ${result.portInfo.systemPortPath}. Loading settings..."
+                                "Detected ${result.detectedProductLabel()} on ${result.portInfo.systemPortPath}. Loading settings..."
                             } else {
                                 "Probed ${result.portInfo.systemPortPath}. Continuing search..."
                             },
@@ -2225,9 +2232,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         loadLogTitle = "Auto Detect Load",
                         loadLogLeadEntries = listOf(
                             DesktopLogEntry(
-                                "Detected ${detected.portInfo.systemPortPath}; loading settings from $resolvedPortPath.",
-                                DesktopLogCategory.APP,
-                            ),
+                            "Detected ${detected.detectedProductLabel()} on ${detected.portInfo.systemPortPath}; loading settings from $resolvedPortPath.",
+                            DesktopLogCategory.APP,
+                        ),
                             DesktopLogEntry(
                                 "Loaded ${connection.result.commandsSent.size} command(s) and received ${connection.result.linesReceived.size} line(s).",
                                 DesktopLogCategory.APP,
@@ -2258,9 +2265,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         finalScanResult.probes.none { it.portInfo.systemPortPath == preferredProbeResult.portInfo.systemPortPath }
                     ) {
                         val preferredProbeIntro = if (preferredProbeAttempt.attemptCount > 1) {
-                            "Trying remembered SignalSlinger port first (${preferredProbeAttempt.attemptCount} attempts)."
+                            "Trying remembered device port first (${preferredProbeAttempt.attemptCount} attempts)."
                         } else {
-                            "Trying remembered SignalSlinger port first."
+                            "Trying remembered device port first."
                         }
                         add(DesktopLogEntry(preferredProbeIntro, DesktopLogCategory.APP))
                         add(DesktopLogEntry(preferredProbeResult.displayLabel, DesktopLogCategory.DEVICE))
@@ -2294,7 +2301,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     autoDetectNoDeviceFound = false
                     selectPort(loadResult.portPath)
                     applyLoadedConnection(loadResult)
-                    setStatus("Detected and loaded SignalSlinger on ${loadResult.portPath}.")
+                    setStatus("Detected and loaded device on ${loadResult.portPath}.")
                     return@invokeLater
                 }
 
@@ -2310,18 +2317,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
                 if (connectedPortStillAvailable) {
                     autoDetectNoDeviceFound = false
-                    showConnectionIndicator(ConnectionIndicatorState.CONNECTED, "Connected to SignalSlinger on ${connectedPortPath}")
+                    showConnectionIndicator(ConnectionIndicatorState.CONNECTED, "Connected to device on ${connectedPortPath}")
                     refreshAvailablePorts(silent = true)
                     appendLog(
                         "Auto Detect",
                         listOf(
                             DesktopLogEntry(
-                                "No additional SignalSlinger found. Keeping ${connectedPortPath} connected.",
+                                "No additional device found. Keeping ${connectedPortPath} connected.",
                                 DesktopLogCategory.APP,
                             ),
                         ),
                     )
-                    setStatus("No additional SignalSlinger found. Keeping ${connectedPortPath} selected.")
+                    setStatus("No additional device found. Keeping ${connectedPortPath} selected.")
                 } else {
                     autoDetectNoDeviceFound = true
                     refreshAvailablePorts(silent = true)
@@ -2329,17 +2336,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         "Auto Detect Failed",
                         listOf(
                             DesktopLogEntry(
-                                "No connected SignalSlinger was found on the available serial ports.",
+                                "No connected device was found on the available serial ports.",
                                 DesktopLogCategory.DEVICE,
                             ),
                         ),
                     )
-                    showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "No Connected SignalSlinger Found")
+                    showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "No Connected Device Found")
                     setStatus(
                         if (lastWorkingPortPath != null && finalPorts.any { it.systemPortPath == lastWorkingPortPath }) {
-                            "No SignalSlinger found. Restored last working port ${lastWorkingPortPath}."
+                            "No device found. Restored last working port ${lastWorkingPortPath}."
                         } else {
-                            "No SignalSlinger found on current serial ports."
+                            "No device found on current serial ports."
                         },
                     )
                 }
@@ -2407,11 +2414,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 attemptCount += 1
                 try {
                     val connection = loadPort(candidatePath)
+                    val productName = connection.result.state.snapshot?.info?.productName ?: "SignalSlinger"
                     val probeResult = SignalSlingerPortProbe(
                         portInfo = resolvePortInfoFor(candidatePath),
                         state = PortProbeState.DETECTED,
-                        summary = "SignalSlinger detected",
+                        summary = "$productName detected",
                         evidenceLines = connection.result.linesReceived.take(3),
+                        productName = productName,
+                        appBaud = connection.result.state.snapshot?.info?.appBaud,
                         lastProbedAtMs = System.currentTimeMillis(),
                     )
                     return PreferredProbeAttempt(
@@ -5315,11 +5325,72 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun chooseArduconUpdatePackage() {
+        val portPath = currentConnectedPortPath ?: selectedProbe()?.portInfo?.systemPortPath
+        if (portPath.isNullOrBlank()) {
+            JOptionPane.showMessageDialog(this, "Connect Arducon to the USB port before starting an update.")
+            return
+        }
+        val productName = loadedSnapshot?.info?.productName.orEmpty()
+        if (!productName.equals("Arducon", ignoreCase = true)) {
+            JOptionPane.showMessageDialog(
+                this,
+                "Load the attached Arducon before starting an Arducon update.",
+                "Update Arducon",
+                JOptionPane.INFORMATION_MESSAGE,
+            )
+            return
+        }
+
+        val sourceChoice = JOptionPane.showOptionDialog(
+            this,
+            "Choose the update package.",
+            "Update Arducon",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            arrayOf("Choose Local File", "Download Latest", "Download Version", "Cancel"),
+            "Download Latest",
+        )
+        if (sourceChoice == 3 || sourceChoice == JOptionPane.CLOSED_OPTION) {
+            return
+        }
+        when (sourceChoice) {
+            1 -> updateArduconFromLatestGitHubRelease(portPath)
+            2 -> {
+                val version = chooseArduconGitHubReleaseVersion() ?: return
+                updateArduconFromGitHubReleaseVersion(portPath, version)
+            }
+            else -> {
+                val chooser = JFileChooser().apply {
+                    dialogTitle = "Update Arducon"
+                    fileSelectionMode = JFileChooser.FILES_ONLY
+                    isFileHidingEnabled = false
+                    currentDirectory = desktopArduconReleaseCacheDirectory()
+                    fileFilter = FileNameExtensionFilter("Arducon release info (*.json)", "json")
+                }
+                if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+                    return
+                }
+                updateArduconFromReleaseInfo(portPath, chooser.selectedFile)
+            }
+        }
+    }
+
     private fun chooseSignalSlingerGitHubReleaseVersion(): String? {
         val input = JOptionPane.showInputDialog(
             this,
             "Enter the SignalSlinger firmware version to download.",
             "2.0.2",
+        ) ?: return null
+        return input.trim().removePrefix("v").takeIf(String::isNotBlank)
+    }
+
+    private fun chooseArduconGitHubReleaseVersion(): String? {
+        val input = JOptionPane.showInputDialog(
+            this,
+            "Enter the Arducon firmware version to download.",
+            "2.0.0",
         ) ?: return null
         return input.trim().removePrefix("v").takeIf(String::isNotBlank)
     }
@@ -6819,6 +6890,116 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun updateArduconFromReleaseInfo(
+        portPath: String,
+        manifestFile: File,
+    ) {
+        runInBackground(
+            status = "Preparing update...",
+            showBusyDialog = true,
+            busyDialogTitle = "Updating Arducon",
+            busyDialogPrimaryMessage = "Updating Arducon...",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                performArduconUpdate(
+                    portPath = portPath,
+                    manifestFile = manifestFile,
+                    logEntries = logEntries,
+                )
+            } catch (exception: Exception) {
+                if (exception.isArduconAlreadyCurrentUpdate()) {
+                    val message = friendlyArduconUpdateFailureMessage(exception)
+                    logEntries += DesktopLogEntry(message, DesktopLogCategory.APP)
+                    SwingUtilities.invokeLater {
+                        appendLog("Update Arducon", logEntries)
+                        setStatus("Arducon is already up to date.")
+                        showAppMessageDialog(message)
+                    }
+                    return@runInBackground
+                }
+                SwingUtilities.invokeLater {
+                    appendLog("Update Arducon", logEntries)
+                }
+                throw IllegalStateException(friendlyArduconUpdateFailureMessage(exception), exception)
+            }
+        }
+    }
+
+    private fun updateArduconFromLatestGitHubRelease(portPath: String) {
+        runInBackground(
+            status = "Preparing update...",
+            showBusyDialog = true,
+            busyDialogTitle = "Updating Arducon",
+            busyDialogPrimaryMessage = "Updating Arducon...",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                val firmwareVersion = loadedSnapshot?.info?.softwareVersion?.trim()
+                val selection = ArduconReleaseCache(desktopArduconReleaseCacheDirectory()).selectLatestForUpdate(
+                    currentFirmwareVersion = firmwareVersion,
+                )
+                logEntries += DesktopLogEntry(selection.message, DesktopLogCategory.APP)
+                selection.downloadFailure?.let { failure ->
+                    logEntries += DesktopLogEntry("GitHub update check failed: $failure", DesktopLogCategory.APP)
+                }
+                if (selection.source == ArduconReleaseSelectionSource.RESIDENT && selection.downloadFailure != null) {
+                    require(confirmResidentArduconUpdate(selection.release.version, selection.release.board, selection.downloadFailure)) {
+                        "Update cancelled."
+                    }
+                }
+                performArduconUpdate(
+                    portPath = portPath,
+                    manifestFile = selection.manifestFile,
+                    logEntries = logEntries,
+                )
+            } catch (exception: Exception) {
+                if (exception.isArduconAlreadyCurrentUpdate()) {
+                    val message = friendlyArduconUpdateFailureMessage(exception)
+                    logEntries += DesktopLogEntry(message, DesktopLogCategory.APP)
+                    SwingUtilities.invokeLater {
+                        appendLog("Update Arducon", logEntries)
+                        setStatus("Arducon is already up to date.")
+                        showAppMessageDialog(message)
+                    }
+                    return@runInBackground
+                }
+                SwingUtilities.invokeLater {
+                    appendLog("Update Arducon", logEntries)
+                }
+                throw IllegalStateException(friendlyArduconUpdateFailureMessage(exception), exception)
+            }
+        }
+    }
+
+    private fun updateArduconFromGitHubReleaseVersion(
+        portPath: String,
+        requestedVersion: String,
+    ) {
+        runInBackground(
+            status = "Preparing update...",
+            showBusyDialog = true,
+            busyDialogTitle = "Updating Arducon",
+            busyDialogPrimaryMessage = "Updating Arducon...",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                val selection = ArduconReleaseCache(desktopArduconReleaseCacheDirectory()).selectGitHubReleaseForUpdate(requestedVersion)
+                logEntries += DesktopLogEntry(selection.message, DesktopLogCategory.APP)
+                performArduconUpdate(
+                    portPath = portPath,
+                    manifestFile = selection.manifestFile,
+                    logEntries = logEntries,
+                )
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Update Arducon", logEntries)
+                }
+                throw IllegalStateException(friendlyArduconUpdateFailureMessage(exception), exception)
+            }
+        }
+    }
+
     private fun updateSignalSlingerFromLatestGitHubRelease(
         portPath: String,
         recoverAlreadyWaiting: Boolean,
@@ -6989,6 +7170,90 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return true
     }
 
+    private fun performArduconUpdate(
+        portPath: String,
+        manifestFile: File,
+        logEntries: MutableList<DesktopLogEntry>,
+    ) {
+        fun log(message: String, category: DesktopLogCategory = DesktopLogCategory.APP) {
+            logEntries += DesktopLogEntry(message, category)
+        }
+
+        log("Preparing Arducon update from ${manifestFile.name}.")
+        val manifest = ArduconFirmwareUpdate.parseReleaseInfo(Files.readString(manifestFile.toPath()))
+        ArduconFirmwareUpdate.validateReleaseManifest(manifest)
+        val updateFile = manifest.updateFile()
+        val hexFile = manifestFile.parentFile.resolve(updateFile.fileName)
+        require(hexFile.isFile) {
+            "The update file `${updateFile.fileName}` was not found next to `${manifestFile.name}`."
+        }
+        val hexBytes = Files.readAllBytes(hexFile.toPath())
+        setBusyProgress(5, 100, "Checking file")
+        ArduconFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
+        val hexText = hexBytes.decodeToString()
+        log("Checked update file ${updateFile.fileName} (${hexBytes.size} bytes).")
+
+        try {
+            currentTransport?.disconnect()
+        } catch (_: Exception) {
+        }
+        currentTransport = null
+        currentConnectedPortPath = null
+
+        val delegate = DesktopFirmwareUpdateTransport(portPath)
+        val updateTransport = loggingFirmwareUpdateTransport(delegate, logEntries)
+        try {
+            ArduconFirmwareUpdate.performUpdate(
+                transport = updateTransport,
+                release = manifest,
+                hexText = hexText,
+                progress = { progress ->
+                    val total = progress.totalPages.coerceAtLeast(1)
+                    val completed = progress.completedPages.coerceIn(0, total)
+                    val percent = when (progress.stage) {
+                        "Preparing update" -> 10
+                        "Verifying update" -> 20 + (completed * 70 / total)
+                        "Sending update" -> 20 + (completed * 70 / total)
+                        "Restarting Arducon" -> 95
+                        else -> 10
+                    }
+                    progress.detail?.let { detail -> log(detail) }
+                    setBusyProgress(percent, 100, userFacingFirmwareUpdateStage(progress.stage))
+                },
+            )
+        } finally {
+            updateTransport.disconnect()
+        }
+
+        log("Arducon update completed: ${manifest.product} ${manifest.version} ${manifest.board}.")
+        setBusyProgress(96, 100, "Reloading Arducon")
+        val refreshedConnection = runCatching {
+            loadPortWithAliasFallback(portPath)
+        }.onFailure { failure ->
+            log("Arducon update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}")
+        }.getOrNull()
+        SwingUtilities.invokeLater {
+            appendLog("Update Arducon", logEntries)
+            if (refreshedConnection != null) {
+                selectPort(refreshedConnection.portPath)
+                applyLoadedConnection(
+                    refreshedConnection.copy(
+                        loadLogTitle = "Update Arducon",
+                        loadLogLeadEntries = listOf(
+                            DesktopLogEntry(
+                                "Reloaded Arducon after firmware update so the visible device information reflects the installed firmware.",
+                                DesktopLogCategory.APP,
+                            ),
+                        ),
+                    ),
+                )
+            } else {
+                clearFormForUnread()
+            }
+            setStatus("Arducon update completed.")
+        }
+    }
+
     private fun performSignalSlingerUpdate(
         portPath: String,
         manifestFile: File,
@@ -7119,6 +7384,31 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return confirmed.get()
     }
 
+    private fun confirmResidentArduconUpdate(
+        version: String,
+        board: String,
+        downloadFailure: String,
+    ): Boolean {
+        val confirmed = AtomicBoolean(false)
+        SwingUtilities.invokeAndWait {
+            val choice = JOptionPane.showConfirmDialog(
+                this,
+                "SerialSlinger could not download the latest Arducon update.\n\nUse the resident Arducon $version update for $board?",
+                "Update Arducon",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+            )
+            confirmed.set(choice == JOptionPane.YES_OPTION)
+        }
+        if (!confirmed.get()) {
+            appendLog(
+                "Update Arducon",
+                listOf(DesktopLogEntry("GitHub update check failed: $downloadFailure", DesktopLogCategory.APP)),
+            )
+        }
+        return confirmed.get()
+    }
+
     private fun confirmSignalSlingerRecoveryUpdateRetry(exception: Exception): Boolean {
         val confirmed = AtomicBoolean(false)
         val details = rootMessage(exception)
@@ -7167,6 +7457,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return File(home, ".serialslinger/signalslinger-updates")
     }
 
+    private fun desktopArduconReleaseCacheDirectory(): File {
+        val home = System.getProperty("user.home").orEmpty().ifBlank { "." }
+        return File(home, ".serialslinger/arducon-updates")
+    }
+
     private fun isHardwarePackageMismatchFailure(exception: Exception): Boolean {
         val failureDetails = rootMessage(exception)
         return failureDetails.contains("does not match package board", ignoreCase = true)
@@ -7209,10 +7504,40 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun friendlyArduconUpdateFailureMessage(exception: Exception): String {
+        val failureDetails = rootMessage(exception)
+        return when {
+            exception.isArduconAlreadyCurrentUpdate() -> failureDetails
+            failureDetails.contains("hash mismatch", ignoreCase = true) ||
+                failureDetails.contains("size mismatch", ignoreCase = true) ->
+                "SerialSlinger could not verify the Arducon update file.\n\n$failureDetails"
+            failureDetails.contains("does not match package", ignoreCase = true) ||
+                failureDetails.contains("product", ignoreCase = true) ||
+                failureDetails.contains("protocol", ignoreCase = true) ->
+                "This update package is not compatible with the attached Arducon.\n\n$failureDetails"
+            failureDetails.contains("did not enter update mode", ignoreCase = true) ||
+                failureDetails.contains("did not respond", ignoreCase = true) ||
+                failureDetails.contains("could not confirm the updated firmware", ignoreCase = true) ->
+                "The update was interrupted or Arducon did not restart as expected.\n\nReconnect Arducon and try Update Arducon Firmware again.\n\n$failureDetails"
+            else -> "Arducon update failed.\n\n$failureDetails"
+        }
+    }
+
     private fun Throwable.isAlreadyCurrentUpdate(): Boolean {
         var current: Throwable? = this
         while (current != null) {
             if (current is SignalSlingerAlreadyCurrentException) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    private fun Throwable.isArduconAlreadyCurrentUpdate(): Boolean {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is ArduconAlreadyCurrentException) {
                 return true
             }
             current = current.cause
@@ -7251,6 +7576,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             override fun writeBytes(bytes: ByteArray) {
                 log("TX ${firmwareFrameLogLabel(bytes)}")
                 delegate.writeBytes(bytes)
+            }
+
+            override fun readBytes(timeoutMs: Long): ByteArray {
+                val bytes = delegate.readBytes(timeoutMs)
+                if (bytes.isNotEmpty()) {
+                    log("RX binary bytes=${bytes.size}")
+                }
+                return bytes
             }
 
             override fun readLines(timeoutMs: Long): List<String> {
@@ -7839,10 +8172,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         updateThermalShutdownThresholdEditability(thermalThresholdEditable)
 
         daysField.isEnabled = schedulingFieldsEditable
-        frequency1Field.isEnabled = writableEnabled
-        frequency2Field.isEnabled = writableEnabled
-        frequency3Field.isEnabled = writableEnabled
-        frequencyBField.isEnabled = writableEnabled
+        val frequencyFieldsEditable =
+            writableEnabled &&
+                loadedSnapshot?.capabilities?.supportsFrequencyProfiles == true
+        frequency1Field.isEnabled = frequencyFieldsEditable
+        frequency2Field.isEnabled = frequencyFieldsEditable
+        frequency3Field.isEnabled = frequencyFieldsEditable
+        frequencyBField.isEnabled = frequencyFieldsEditable
 
         applyDateTimeEditorCapability(manualTimeSpinner, writableEnabled && schedulingSupported)
         applyDateTimeEditorCapability(startTimeSpinner, schedulingFieldsEditable)
@@ -9050,15 +9386,34 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         val previousTransport = currentTransport
         val previousState = currentState
-        val transport = DesktopSerialTransport(portPath)
-        val initialLoad = DeviceSessionController.connectAndLoad(
-            transport,
-            progress = { completed, total ->
-                setBusyProgressRange(0, 85, completed, total, commandProgressLabel(completed, total))
-            },
-            afterCommand = ::drainResidualStartupReportAfterVer,
-        )
-        requireLoadResponses(portPath, initialLoad)
+        var transport = desktopLoadTransportFor(portPath)
+        val initialLoad =
+            try {
+                loadWithTransport(portPath, transport)
+            } catch (failure: Exception) {
+                transport.disconnect()
+                if (!shouldTryArduconLoadFallback(portPath, failure)) {
+                    throw failure
+                }
+                val fallbackTransport = arduconDesktopLoadTransportFor(portPath)
+                try {
+                    val fallbackLoad = loadWithTransport(portPath, fallbackTransport)
+                    transport = fallbackTransport
+                    knownProbeResults[portPath] = SignalSlingerPortProbe(
+                        portInfo = resolvePortInfoFor(portPath),
+                        state = PortProbeState.DETECTED,
+                        summary = "Arducon detected",
+                        evidenceLines = fallbackLoad.linesReceived.take(3),
+                        productName = "Arducon",
+                        appBaud = 57_600,
+                        lastProbedAtMs = System.currentTimeMillis(),
+                    )
+                    fallbackLoad
+                } catch (fallbackFailure: Exception) {
+                    fallbackTransport.disconnect()
+                    throw fallbackFailure
+                }
+            }
         setBusyProgress(88, 100, "Checking temperature reset support")
         val temperatureResetProbe = probeTemperatureResetSupport(initialLoad, transport)
         setBusyProgress(92, 100, "Checking device time")
@@ -9076,6 +9431,51 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             loadLogLeadEntries = emptyList(),
             clockAnchor = finalClockSample?.second,
             temperatureResetCommandsSupported = temperatureResetProbe.supported,
+        )
+    }
+
+    private fun loadWithTransport(
+        portPath: String,
+        transport: DesktopSerialTransport,
+    ): DeviceLoadResult {
+        val load = DeviceSessionController.connectAndLoad(
+            transport,
+            progress = { completed, total ->
+                setBusyProgressRange(0, 85, completed, total, commandProgressLabel(completed, total))
+            },
+            afterCommand = ::drainResidualStartupReportAfterVer,
+        )
+        requireLoadResponses(portPath, load)
+        return load
+    }
+
+    private fun shouldTryArduconLoadFallback(
+        portPath: String,
+        failure: Exception,
+    ): Boolean {
+        val probe = knownProbeResults[portPath]
+        if (probe?.productName.equals("Arducon", ignoreCase = true) || probe?.appBaud == 57_600) {
+            return false
+        }
+        val message = failure.message.orEmpty().lowercase()
+        return message.contains("no response from device") || message.contains("no recognizable device response")
+    }
+
+    private fun desktopLoadTransportFor(portPath: String): DesktopSerialTransport {
+        val probe = knownProbeResults[portPath]
+        return if (probe?.productName.equals("Arducon", ignoreCase = true) || probe?.appBaud == 57_600) {
+            arduconDesktopLoadTransportFor(portPath)
+        } else {
+            DesktopSerialTransport(portPath)
+        }
+    }
+
+    private fun arduconDesktopLoadTransportFor(portPath: String): DesktopSerialTransport {
+        return DesktopSerialTransport(
+            portDescriptor = portPath,
+            baudRate = 57_600,
+            lineTerminator = "\r",
+            wakePreamble = "",
         )
     }
 
@@ -9106,7 +9506,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         result: DeviceLoadResult,
     ) {
         require(result.linesReceived.isNotEmpty()) {
-            "No response from SignalSlinger on `$portPath` while loading settings."
+            "No response from device on `$portPath` while loading settings."
+        }
+        require(result.linesReceived.any { SignalSlingerProtocolCodec.parseReportLine(it) != null }) {
+            "No recognizable device response on `$portPath` while loading settings."
         }
     }
 
@@ -9170,6 +9573,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         base: DeviceLoadResult,
         transport: DeviceTransport,
     ): TemperatureResetCapabilityLoadResult {
+        if (base.state.snapshot?.capabilities?.supportsExtendedTemperatureReadback != true) {
+            return TemperatureResetCapabilityLoadResult(result = base, supported = false)
+        }
         val command = TemperatureResetSupport.probeCommand
         val sentAtMs = System.currentTimeMillis()
         transport.sendCommands(listOf(command))
@@ -9338,17 +9744,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
         }
         autoDetectNoDeviceFound = false
-        showConnectionIndicator(ConnectionIndicatorState.CONNECTED, "Connected to SignalSlinger on ${connection.portPath}")
+        val productName = connection.result.state.snapshot?.info?.productName ?: "SignalSlinger"
+        showConnectionIndicator(ConnectionIndicatorState.CONNECTED, "Connected to $productName on ${connection.portPath}")
         portMemory.saveLastWorkingPortPath(connection.portPath)
         try {
             knownProbeResults[connection.portPath] = knownProbeResults[connection.portPath]?.copy(
                 state = PortProbeState.DETECTED,
-                summary = "SignalSlinger detected",
+                summary = "$productName detected",
+                productName = productName,
+                appBaud = connection.result.state.snapshot?.info?.appBaud,
                 lastProbedAtMs = System.currentTimeMillis(),
             ) ?: SignalSlingerPortProbe(
                 portInfo = resolvePortInfoFor(connection.portPath),
                 state = PortProbeState.DETECTED,
-                summary = "SignalSlinger detected",
+                summary = "$productName detected",
+                productName = productName,
+                appBaud = connection.result.state.snapshot?.info?.appBaud,
                 lastProbedAtMs = System.currentTimeMillis(),
             )
             connection.clockAnchor?.let { anchor ->
@@ -10382,7 +10793,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         "Device Time Check",
                         listOf(
                             DesktopLogEntry(
-                                "No response from connected SignalSlinger during periodic time check (${noResponseCount} of 2).",
+                                "No response from connected device during periodic time check (${noResponseCount} of 2).",
                                 DesktopLogCategory.APP,
                             ),
                         ),
@@ -10390,7 +10801,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     if (noResponseCount >= 2) {
                         markConnectedPortAsUnresponsive("No response to two consecutive periodic device time checks.")
                     } else {
-                        setStatus("No response from SignalSlinger during periodic time check (1 of 2).")
+                        setStatus("No response from device during periodic time check (1 of 2).")
                     }
                 }
             }

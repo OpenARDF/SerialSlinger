@@ -150,10 +150,12 @@ data class SignalSlingerAppInfo(
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
     val appStartAddress: Int? = null,
+    val appBaud: Int? = null,
     val updateBaud: Int? = null,
     val appUpdateCommand: String? = null,
     val bootloaderVersion: String? = null,
     val bootloaderProtocolVersion: Int? = null,
+    val bootloaderProtocol: String? = null,
 ) {
     fun validateForRelease(
         release: SignalSlingerReleaseInfo,
@@ -259,6 +261,10 @@ interface SignalSlingerFirmwareUpdateTransport {
     fun writeAscii(text: String)
 
     fun writeBytes(bytes: ByteArray)
+
+    fun readBytes(timeoutMs: Long): ByteArray = readLines(timeoutMs)
+        .joinToString("\n")
+        .encodeToByteArray()
 
     fun readLines(timeoutMs: Long): List<String>
 }
@@ -507,10 +513,12 @@ object SignalSlingerFirmwareUpdate {
                 softwareVersion = fields["sw"],
                 hardwareBuild = fields["hw"],
                 appStartAddress = fields["app"]?.let(::parseIntLiteral),
+                appBaud = fields["appbaud"]?.toIntOrNull(),
                 updateBaud = fields["baud"]?.toIntOrNull(),
                 appUpdateCommand = fields["update"],
                 bootloaderVersion = fields["bl"]?.takeUnless { it.equals("unknown", ignoreCase = true) },
                 bootloaderProtocolVersion = fields["proto"]?.takeUnless { it.equals("unknown", ignoreCase = true) }?.toIntOrNull(),
+                bootloaderProtocol = fields["proto"]?.takeUnless { it.equals("unknown", ignoreCase = true) },
             )
         }
         return lines.firstNotNullOfOrNull { line ->
@@ -1066,7 +1074,7 @@ private fun parseVersionParts(version: String?): IntArray {
     )
 }
 
-private sealed class JsonValue {
+internal sealed class JsonValue {
     data class Obj(val value: Map<String, JsonValue>) : JsonValue()
     data class Arr(val value: List<JsonValue>) : JsonValue()
     data class Str(val value: String) : JsonValue()
@@ -1219,7 +1227,7 @@ private sealed class JsonValue {
     }
 }
 
-private object Sha256 {
+internal object Sha256 {
     private val initialHash = intArrayOf(
         0x6a09e667,
         0xbb67ae85.toInt(),

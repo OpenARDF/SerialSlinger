@@ -45,6 +45,33 @@ class SignalSlingerPortDiscoveryTest {
     }
 
     @Test
+    fun displayLabelProminentlyMarksDetectedArducon() {
+        val port = DesktopSerialPortInfo("tty.usbB", "/dev/tty.usbB", "B", "B")
+
+        val detected = SignalSlingerPortProbe(
+            portInfo = port,
+            state = PortProbeState.DETECTED,
+            summary = "Arducon detected",
+            productName = "Arducon",
+            appBaud = 57_600,
+        )
+
+        assertEquals("[Arducon] /dev/tty.usbB - Arducon detected", detected.displayLabel)
+    }
+
+    @Test
+    fun classifiesArduconInfAsDetected() {
+        val state = SignalSlingerPortDiscovery.classifyProbeLines(
+            listOf(
+                "* INF product=Arducon",
+                "* INF sw=2.0.0 hw=ATmega328P-16 app=0x0000 appbaud=57600 baud=115200 bl=unknown proto=stk500v1",
+            ),
+        )
+
+        assertEquals(PortProbeState.DETECTED, state)
+    }
+
+    @Test
     fun stopsProbingAfterTheFirstDetectedPort() {
         val portA = DesktopSerialPortInfo("tty.usbA", "/dev/tty.usbA", "A", "A")
         val portB = DesktopSerialPortInfo("tty.usbB", "/dev/tty.usbB", "B", "B")

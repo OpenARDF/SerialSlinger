@@ -20,6 +20,8 @@ class DesktopFirmwareUpdateTransport(
         require(port.openPort()) {
             "Failed to open serial port `$portDescriptor` for update (error code ${port.lastErrorCode})."
         }
+        port.clearDTR()
+        port.clearRTS()
         serialPort = port
     }
 
@@ -47,6 +49,29 @@ class DesktopFirmwareUpdateTransport(
         require(written == bytes.size) {
             "Failed to write complete update payload to `$portDescriptor`."
         }
+    }
+
+    override fun readBytes(timeoutMs: Long): ByteArray {
+        val port = serialPort ?: return ByteArray(0)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        val out = mutableListOf<Byte>()
+
+        while (System.currentTimeMillis() <= deadline) {
+            val availableBytes = port.bytesAvailable()
+            if (availableBytes > 0) {
+                val buffer = ByteArray(availableBytes)
+                val bytesRead = port.readBytes(buffer, buffer.size)
+                if (bytesRead > 0) {
+                    out += buffer.copyOf(bytesRead).toList()
+                }
+            } else if (out.isNotEmpty()) {
+                break
+            } else {
+                Thread.sleep(pollIntervalMs)
+            }
+        }
+
+        return out.toByteArray()
     }
 
     override fun readLines(timeoutMs: Long): List<String> {

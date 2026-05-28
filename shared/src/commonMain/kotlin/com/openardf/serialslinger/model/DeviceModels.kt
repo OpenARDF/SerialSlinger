@@ -66,14 +66,20 @@ data class DeviceCapabilities(
     val supportsPatternEditing: Boolean = false,
     val supportsScheduling: Boolean = false,
     val supportsFrequencyProfiles: Boolean = false,
+    val supportsFirmwareUpdate: Boolean = false,
 )
 
 data class DeviceInfo(
     val productName: String? = null,
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
+    val appStartAddress: Int? = null,
+    val appBaud: Int? = null,
+    val updateBaud: Int? = null,
+    val appUpdateCommand: String? = null,
     val bootloaderVersion: String? = null,
     val bootloaderProtocolVersion: Int? = null,
+    val bootloaderProtocol: String? = null,
     val serialPortName: String? = null,
 )
 
@@ -260,8 +266,8 @@ data class EditableDeviceSettings(
 
     private fun capabilityAllows(fieldKey: String, capabilities: DeviceCapabilities): Boolean {
         return when (fieldKey) {
-            "patternText" -> capabilities.supportsPatternEditing
-            "lowFrequencyHz", "mediumFrequencyHz", "highFrequencyHz", "beaconFrequencyHz" -> capabilities.supportsFrequencyProfiles
+            "patternText", "idCodeSpeedWpm", "patternCodeSpeedWpm" -> capabilities.supportsPatternEditing
+            "defaultFrequencyHz", "lowFrequencyHz", "mediumFrequencyHz", "highFrequencyHz", "beaconFrequencyHz" -> capabilities.supportsFrequencyProfiles
             "lowBatteryThresholdVolts", "externalBatteryControlMode" -> capabilities.supportsExternalBatteryControl
             "currentTimeCompact", "startTimeCompact", "finishTimeCompact", "daysToRun" -> capabilities.supportsScheduling
             else -> true

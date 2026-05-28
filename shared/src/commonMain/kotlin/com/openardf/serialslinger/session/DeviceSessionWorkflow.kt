@@ -104,10 +104,15 @@ object DeviceSessionWorkflow {
         connectionState: ConnectionState,
     ): DeviceSnapshot {
         val infoPatch = update.deviceInfoPatch
-        val appIdentityObserved = infoPatch?.softwareVersion != null || infoPatch?.hardwareBuild != null
+        val appIdentityObserved = infoPatch?.softwareVersion != null || infoPatch?.hardwareBuild != null || infoPatch?.productName != null
         val nextInfo = info.copy(
+            productName = infoPatch?.productName ?: info.productName,
             softwareVersion = infoPatch?.softwareVersion ?: info.softwareVersion,
             hardwareBuild = infoPatch?.hardwareBuild ?: info.hardwareBuild,
+            appStartAddress = infoPatch?.appStartAddress ?: info.appStartAddress,
+            appBaud = infoPatch?.appBaud ?: info.appBaud,
+            updateBaud = infoPatch?.updateBaud ?: info.updateBaud,
+            appUpdateCommand = infoPatch?.appUpdateCommand ?: info.appUpdateCommand,
             bootloaderVersion = when {
                 infoPatch?.bootloaderVersion != null -> infoPatch.bootloaderVersion
                 appIdentityObserved -> null
@@ -118,8 +123,16 @@ object DeviceSessionWorkflow {
                 appIdentityObserved -> null
                 else -> info.bootloaderProtocolVersion
             },
+            bootloaderProtocol = when {
+                infoPatch?.bootloaderProtocol != null -> infoPatch.bootloaderProtocol
+                appIdentityObserved -> null
+                else -> info.bootloaderProtocol
+            },
         )
-        val firmwareProfile = SignalSlingerFirmwareSupport.resolve(nextInfo.softwareVersion)
+        val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
+            softwareVersion = nextInfo.softwareVersion,
+            productName = nextInfo.productName,
+        )
 
         return copy(
             info = nextInfo,

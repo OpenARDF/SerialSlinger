@@ -11,6 +11,7 @@ import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.session.DeviceSubmitResult
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.FirmwareCloneSession
+import com.openardf.serialslinger.protocol.ArduconFirmwareUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
 import com.openardf.serialslinger.transport.DesktopFirmwareUpdateTransport
 import com.openardf.serialslinger.transport.DesktopSerialTransport
@@ -52,6 +53,12 @@ sealed interface DesktopSmokeCommand {
         val manifestPath: String,
         val recoverAlreadyWaiting: Boolean,
         val allowAppHardwareMismatch: Boolean,
+    ) : DesktopSmokeCommand
+
+    data class ArduconUpdate(
+        val port: String,
+        val manifestPath: String,
+        val recoverAlreadyWaiting: Boolean,
     ) : DesktopSmokeCommand
 }
 
@@ -105,6 +112,14 @@ object DesktopSmokeCliParser {
                     allowAppHardwareMismatch = args.drop(3).any { it == "--allow-hardware-mismatch" },
                 )
             }
+            "arducon-update" -> {
+                if (args.size < 3) return null
+                DesktopSmokeCommand.ArduconUpdate(
+                    port = args[1],
+                    manifestPath = args[2],
+                    recoverAlreadyWaiting = args.drop(3).any { it == "--already-waiting" },
+                )
+            }
             else -> null
         }
     }
@@ -138,6 +153,11 @@ fun main(args: Array<String>) {
             command.manifestPath,
             command.recoverAlreadyWaiting,
             command.allowAppHardwareMismatch,
+        )
+        is DesktopSmokeCommand.ArduconUpdate -> runArduconUpdate(
+            command.port,
+            command.manifestPath,
+            command.recoverAlreadyWaiting,
         )
         null -> printUsage()
     }
@@ -358,6 +378,45 @@ private fun runUpdate(
             },
         )
         println("Update completed: ${release.product} ${release.version} ${release.board}")
+    } finally {
+        transport.disconnect()
+    }
+}
+
+private fun runArduconUpdate(
+    port: String,
+    manifestPath: String,
+    recoverAlreadyWaiting: Boolean,
+) {
+    val manifestFile = Path.of(manifestPath)
+    val release = ArduconFirmwareUpdate.parseReleaseInfo(Files.readString(manifestFile))
+    val updateFile = release.updateFile()
+    val hexFile = manifestFile.parent.resolve(updateFile.fileName)
+    val hexBytes = Files.readAllBytes(hexFile)
+    ArduconFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
+    val transport = DesktopFirmwareUpdateTransport(port)
+    try {
+        ArduconFirmwareUpdate.performUpdate(
+            transport = transport,
+            release = release,
+            hexText = hexBytes.decodeToString(),
+            recoverAlreadyWaiting = recoverAlreadyWaiting,
+            progress = { progress ->
+                println(
+                    buildString {
+                        append(progress.stage)
+                        if (progress.totalPages > 0) {
+                            append(" ")
+                            append(progress.completedPages)
+                            append("/")
+                            append(progress.totalPages)
+                        }
+                        progress.detail?.let { append(" - ").append(it) }
+                    },
+                )
+            },
+        )
+        println("Arducon update completed: ${release.product} ${release.version} ${release.board}")
     } finally {
         transport.disconnect()
     }
@@ -630,6 +689,8 @@ private fun printUsage() {
     println("  clone <portDescriptor>")
     println("  submit <portDescriptor> key=value [key=value ...]")
     println("  raw <portDescriptor> \"COMMAND\" [\"COMMAND\" ...]")
+    println("  update <portDescriptor> <release-info.json> [--already-waiting] [--allow-hardware-mismatch]")
+    println("  arducon-update <portDescriptor> <arducon-release-info.json> [--already-waiting]")
     println()
     println("Example:")
     println("  submit /dev/tty.usbserial stationId=W1FOX daysToRun=3 beaconFrequencyHz=3580000")

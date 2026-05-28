@@ -39,6 +39,10 @@ import com.openardf.serialslinger.session.FirmwareCloneSession
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
+import com.openardf.serialslinger.protocol.ArduconAlreadyCurrentException
+import com.openardf.serialslinger.protocol.ArduconFirmwareUpdate
+import com.openardf.serialslinger.protocol.ArduconReleaseCache
+import com.openardf.serialslinger.protocol.ArduconReleaseSelectionSource
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateProgress
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
@@ -5862,6 +5866,192 @@ object AndroidSessionController {
         }
     }
 
+    fun runArduconFirmwareUpdate(
+        context: Context,
+        requestedVersion: String? = null,
+        confirmResidentFallback: ((version: String, board: String, downloadFailure: String) -> Boolean)? = null,
+        onComplete: ((Result<Unit>) -> Unit)? = null,
+    ) {
+        val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
+        val startState =
+            synchronized(this) {
+                val snapshot = latestSessionViewState?.state?.snapshot
+                val target = latestLoadedTarget
+                val firmwareVersion = snapshot?.info?.softwareVersion?.trim().orEmpty()
+                val updateBlockedByActiveRead = signalSlingerReadInFlight || probeInFlight
+                when {
+                    updateBlockedByActiveRead -> Result.failure(IllegalStateException("Arducon is busy. Try the update again after the current operation finishes."))
+                    snapshot == null -> Result.failure(IllegalStateException("Load the attached Arducon before starting an update."))
+                    !snapshot.info.productName.equals("Arducon", ignoreCase = true) -> Result.failure(IllegalStateException("The attached device does not identify as Arducon."))
+                    target !is AndroidConnectionTarget.Usb -> Result.failure(IllegalStateException("Android firmware update requires a USB-connected Arducon."))
+                    else -> {
+                        signalSlingerReadInFlight = true
+                        firmwareUpdateProgress = AndroidFirmwareUpdateProgress("Preparing update", 0, 0, null)
+                        statusText = "Preparing update..."
+                        statusIsError = false
+                        latestSubmitSummary = "Preparing Arducon update..."
+                        Result.success(
+                            ArduconUpdateStart(
+                                deviceName = target.deviceName,
+                                firmwareVersion = firmwareVersion,
+                                requestedVersion = requestedVersion?.trim()?.removePrefix("v")?.takeIf(String::isNotBlank),
+                            ),
+                        )
+                    }
+                }
+            }
+        if (startState.isFailure) {
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(startState.exceptionOrNull()!!)) } }
+            return
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-arducon-firmware-update") {
+            val updateLog = mutableListOf<AndroidLogEntry>()
+            val result =
+                runCatching {
+                    val start = startState.getOrThrow()
+                    val cache = ArduconReleaseCache(context.applicationContext.filesDir.resolve("arducon-updates"))
+                    val selection =
+                        start.requestedVersion?.let { version ->
+                            cache.selectGitHubReleaseForUpdate(version)
+                        } ?: cache.selectLatestForUpdate(
+                            currentFirmwareVersion = start.firmwareVersion,
+                        )
+                    val downloadFailure = selection.downloadFailure
+                    if (selection.source == ArduconReleaseSelectionSource.RESIDENT && downloadFailure != null) {
+                        val confirmed = confirmResidentFallback?.invoke(
+                            selection.release.version,
+                            selection.release.board,
+                            downloadFailure,
+                        ) ?: false
+                        require(confirmed) { "Update cancelled." }
+                    }
+                    val updateFile = selection.release.updateFile()
+                    val manifestDirectory = requireNotNull(selection.manifestFile.parentFile) {
+                        "Arducon release manifest has no parent directory."
+                    }
+                    val hexFile = manifestDirectory.resolve(updateFile.fileName)
+                    val hexBytes = hexFile.readBytes()
+                    ArduconFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
+                    val usbDevice = resolveUsbDevice(usbManager, start.deviceName)
+                        ?: error("Arducon is no longer connected.")
+                    updateLog += AndroidLogEntry(selection.message, AndroidLogCategory.APP)
+                    selection.downloadFailure?.let { failure ->
+                        updateLog += AndroidLogEntry("GitHub update check failed: $failure", AndroidLogCategory.APP)
+                    }
+                    val transport = loggingFirmwareUpdateTransport(
+                        AndroidFirmwareUpdateTransport(usbManager, usbDevice),
+                        updateLog,
+                    )
+                    try {
+                        ArduconFirmwareUpdate.performUpdate(
+                            transport = transport,
+                            release = selection.release,
+                            hexText = hexBytes.decodeToString(),
+                            progress = ::recordFirmwareUpdateProgress,
+                        )
+                    } finally {
+                        transport.disconnect()
+                    }
+                    val reloadResult = reloadSignalSlingerAfterFirmwareUpdate(
+                        context = context,
+                        deviceName = start.deviceName,
+                    ).onFailure { failure ->
+                        updateLog += AndroidLogEntry(
+                            "Arducon update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}",
+                            AndroidLogCategory.APP,
+                        )
+                    }.getOrNull()
+                        ?.let { (reloadResult, clockAnchor) ->
+                            FirmwareUpdateReload(reloadResult, clockAnchor)
+                        }
+                    ArduconFirmwareUpdateOutcome(
+                        releaseVersion = selection.release.version,
+                        board = selection.release.board,
+                        reloadResult = reloadResult,
+                    )
+                }
+            val alreadyCurrent = result.exceptionOrNull()?.isArduconAlreadyCurrentUpdate() == true
+            if (result.isFailure) {
+                val message = friendlyArduconUpdateFailureMessage(result.exceptionOrNull())
+                updateLog += AndroidLogEntry(
+                    if (alreadyCurrent) {
+                        "No update needed: $message"
+                    } else {
+                        "Update failed: $message"
+                    },
+                    AndroidLogCategory.APP,
+                )
+            }
+            if (updateLog.isNotEmpty()) {
+                appendSessionLogEntries("Update Arducon", updateLog)
+            }
+
+            synchronized(this) {
+                signalSlingerReadInFlight = false
+                if (result.isSuccess) {
+                    val outcome = result.getOrThrow()
+                    val displayedReloadResult = outcome.reloadResult?.result
+                    if (displayedReloadResult != null) {
+                        latestSessionViewState = AndroidSessionViewState(
+                            state = displayedReloadResult.state,
+                            traceEntries = displayedReloadResult.traceEntries,
+                        )
+                        rememberLoadedTargetLocked(AndroidConnectionTarget.Usb(startState.getOrThrow().deviceName))
+                        displayedReloadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
+                        applySnapshotDrafts(displayedReloadResult.state.snapshot, refreshClockDisplayAnchor = false)
+                    } else {
+                        latestSessionViewState = null
+                    }
+                    latestSubmitSummary = "Arducon update completed: ${outcome.releaseVersion} ${outcome.board}."
+                    latestProbeSummary =
+                        if (displayedReloadResult != null) {
+                            "Reloaded Arducon after update."
+                        } else {
+                            "Reload Arducon after update."
+                        }
+                    statusText = "Arducon update completed."
+                    statusIsError = false
+                    firmwareUpdateProgress = null
+                } else if (alreadyCurrent) {
+                    val message = friendlyArduconUpdateFailureMessage(result.exceptionOrNull())
+                    latestSubmitSummary = message
+                    statusText = "Arducon is already up to date."
+                    statusIsError = false
+                    firmwareUpdateProgress = null
+                } else {
+                    val message = friendlyArduconUpdateFailureMessage(result.exceptionOrNull())
+                    latestSubmitSummary = "Arducon update failed.\n$message"
+                    statusText = "Arducon update failed."
+                    statusIsError = true
+                    firmwareUpdateProgress = null
+                }
+            }
+            if (result.isSuccess) {
+                playCompletionBeep()
+            }
+            notifyListeners()
+            onComplete?.let { callback ->
+                mainHandler.post {
+                    callback(
+                        result.fold(
+                            onSuccess = { Result.success(Unit) },
+                            onFailure = { failure ->
+                                if (failure.isArduconAlreadyCurrentUpdate()) {
+                                    Result.success(Unit)
+                                } else {
+                                    Result.failure(IllegalStateException(friendlyArduconUpdateFailureMessage(failure), failure))
+                                }
+                            },
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     private fun playCompletionBeep() {
         mainHandler.post {
             val toneGenerator = runCatching {
@@ -5970,6 +6160,14 @@ object AndroidSessionController {
                 delegate.writeBytes(bytes)
             }
 
+            override fun readBytes(timeoutMs: Long): ByteArray {
+                val bytes = delegate.readBytes(timeoutMs)
+                if (bytes.isNotEmpty()) {
+                    log("RX binary bytes=${bytes.size}")
+                }
+                return bytes
+            }
+
             override fun readLines(timeoutMs: Long): List<String> {
                 val lines = delegate.readLines(timeoutMs)
                 lines.forEach { line -> log("RX ${line.toFirmwareLogFragment()}") }
@@ -6063,10 +6261,43 @@ object AndroidSessionController {
         }
     }
 
+    private fun friendlyArduconUpdateFailureMessage(error: Throwable?): String {
+        val details = rootMessage(error)
+        return when {
+            details.contains("hash mismatch", ignoreCase = true) ||
+                details.contains("size mismatch", ignoreCase = true) ->
+                "SerialSlinger could not verify the Arducon update file.\n\n$details"
+            details.contains("does not match package", ignoreCase = true) ||
+                details.contains("product", ignoreCase = true) ||
+                details.contains("protocol", ignoreCase = true) ->
+                "This update package is not compatible with the attached Arducon.\n\n$details"
+            details.contains("could not confirm the updated firmware", ignoreCase = true) ||
+                details.contains("did not enter update mode", ignoreCase = true) ||
+                details.contains("did not respond", ignoreCase = true) ->
+                "The update was interrupted or Arducon did not restart as expected.\n\nReconnect Arducon and try again.\n\n$details"
+            details.contains("USB connection was interrupted", ignoreCase = true) ||
+                details.contains("Error writing", ignoreCase = true) ||
+                details.contains("rc=-1", ignoreCase = true) ->
+                "The USB connection was interrupted during the update.\n\nReconnect Arducon and try Update Arducon Firmware again.\n\n$details"
+            else -> details
+        }
+    }
+
     private fun Throwable.isAlreadyCurrentUpdate(): Boolean {
         var current: Throwable? = this
         while (current != null) {
             if (current is SignalSlingerAlreadyCurrentException) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    private fun Throwable.isArduconAlreadyCurrentUpdate(): Boolean {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is ArduconAlreadyCurrentException) {
                 return true
             }
             current = current.cause
@@ -6085,6 +6316,18 @@ object AndroidSessionController {
 
     private data class FirmwareUpdateOutcome(
         val release: SignalSlingerReleaseInfo,
+        val reloadResult: FirmwareUpdateReload?,
+    )
+
+    private data class ArduconUpdateStart(
+        val deviceName: String,
+        val firmwareVersion: String?,
+        val requestedVersion: String?,
+    )
+
+    private data class ArduconFirmwareUpdateOutcome(
+        val releaseVersion: String,
+        val board: String,
         val reloadResult: FirmwareUpdateReload?,
     )
 

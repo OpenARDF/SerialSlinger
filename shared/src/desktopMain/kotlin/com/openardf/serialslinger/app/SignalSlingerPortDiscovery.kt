@@ -17,21 +17,26 @@ data class SignalSlingerPortProbe(
     val state: PortProbeState,
     val summary: String,
     val evidenceLines: List<String> = emptyList(),
+    val productName: String? = null,
+    val appBaud: Int? = null,
     val isPlaceholder: Boolean = false,
     val lastProbedAtMs: Long? = null,
 ) {
     val displayLabel: String
         get() = when {
             isPlaceholder -> summary
-            state == PortProbeState.DETECTED -> "[SignalSlinger] ${portInfo.systemPortPath} - $summary"
+            state == PortProbeState.DETECTED -> "[${detectedProductLabel()}] ${portInfo.systemPortPath} - $summary"
             else -> "${portInfo.systemPortPath} - $summary"
         }
 
     override fun toString(): String = displayLabel
+
+    fun detectedProductLabel(): String = productName?.takeIf { it.isNotBlank() } ?: "SignalSlinger"
 }
 
 object SignalSlingerPortDiscovery {
     private val probeCommands = listOf("EVT", "FOX", "FRE")
+    private val arduconProbeCommands = listOf("INF")
     private const val probeRetryCount = 3
     private const val probeRetryDelayMs = 200L
 
@@ -59,17 +64,22 @@ object SignalSlingerPortDiscovery {
         repeat(probeRetryCount) { attempt ->
             try {
                 val transport = transportFactory(portInfo)
+                var result: SignalSlingerPortProbe
                 transport.connect()
                 try {
-                    val result = probeWithConnectedTransport(portInfo, transport)
+                    result = probeWithConnectedTransport(portInfo, transport)
                     if (result.state == PortProbeState.DETECTED) {
-                        return result
-                    }
-                    if (!shouldRetryProbeResult(result, retryOnNoReply, attempt, probeRetryCount)) {
                         return result
                     }
                 } finally {
                     transport.disconnect()
+                }
+                val arduconResult = probeArduconPort(portInfo)
+                if (arduconResult.state == PortProbeState.DETECTED) {
+                    return arduconResult
+                }
+                if (!shouldRetryProbeResult(result, retryOnNoReply, attempt, probeRetryCount)) {
+                    return result
                 }
             } catch (exception: Exception) {
                 if (!shouldRetryProbe(exception, attempt, probeRetryCount)) {
@@ -108,11 +118,15 @@ object SignalSlingerPortDiscovery {
         }
 
         val state = classifyProbeLines(lines)
+        val productName = productNameFrom(lines)
+        val appBaud = appBaudFrom(lines)
         return SignalSlingerPortProbe(
             portInfo = portInfo,
             state = state,
             summary = summaryFor(state, lines),
             evidenceLines = lines,
+            productName = productName,
+            appBaud = appBaud,
             lastProbedAtMs = startedAtMs,
         )
     }
@@ -166,11 +180,83 @@ object SignalSlingerPortDiscovery {
 
     private fun summaryFor(state: PortProbeState, lines: List<String>): String {
         return when (state) {
-            PortProbeState.DETECTED -> "SignalSlinger detected"
+            PortProbeState.DETECTED -> "${productNameFrom(lines) ?: "SignalSlinger"} detected"
             PortProbeState.NOT_DETECTED -> if (lines.isEmpty()) "No recognizable reply" else "Non-SignalSlinger replies"
             PortProbeState.ERROR -> "Probe failed"
             PortProbeState.UNCHECKED -> "Not checked"
         }
+    }
+
+    private fun probeArduconPort(portInfo: DesktopSerialPortInfo): SignalSlingerPortProbe {
+        val transport = DesktopSerialTransport(
+            portDescriptor = portInfo.systemPortPath,
+            baudRate = 57_600,
+            lineTerminator = "\r",
+            wakePreamble = "",
+            readTimeoutMs = 500,
+            quietPeriodMs = 80,
+        )
+        return try {
+            transport.connect()
+            try {
+                Thread.sleep(500)
+                transport.readAvailableLinesBriefly(700)
+                probeWithCommands(
+                    portInfo = portInfo,
+                    transport = transport,
+                    commands = arduconProbeCommands,
+                )
+            } finally {
+                transport.disconnect()
+            }
+        } catch (exception: Exception) {
+            SignalSlingerPortProbe(
+                portInfo = portInfo,
+                state = PortProbeState.ERROR,
+                summary = exception.message ?: "Probe failed",
+                lastProbedAtMs = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    private fun probeWithCommands(
+        portInfo: DesktopSerialPortInfo,
+        transport: DeviceTransport,
+        commands: List<String>,
+    ): SignalSlingerPortProbe {
+        val lines = mutableListOf<String>()
+        val startedAtMs = System.currentTimeMillis()
+
+        for (command in commands) {
+            transport.sendCommands(listOf(command))
+            lines += transport.readAvailableLines()
+            if (classifyProbeLines(lines) == PortProbeState.DETECTED) {
+                break
+            }
+        }
+
+        val state = classifyProbeLines(lines)
+        return SignalSlingerPortProbe(
+            portInfo = portInfo,
+            state = state,
+            summary = summaryFor(state, lines),
+            evidenceLines = lines,
+            productName = productNameFrom(lines),
+            appBaud = appBaudFrom(lines),
+            lastProbedAtMs = startedAtMs,
+        )
+    }
+
+    private fun productNameFrom(lines: List<String>): String? {
+        return lines.asSequence()
+            .mapNotNull { line -> SignalSlingerProtocolCodec.parseReportLine(line)?.deviceInfoPatch?.productName }
+            .firstOrNull()
+    }
+
+    private fun appBaudFrom(lines: List<String>): Int? {
+        return lines.asSequence()
+            .mapNotNull { line -> SignalSlingerProtocolCodec.parseReportLine(line)?.deviceInfoPatch?.appBaud }
+            .firstOrNull()
     }
 
     internal fun shouldRetryProbeResult(

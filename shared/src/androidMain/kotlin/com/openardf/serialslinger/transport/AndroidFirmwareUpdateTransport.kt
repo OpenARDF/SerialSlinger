@@ -72,6 +72,24 @@ class AndroidFirmwareUpdateTransport(
         lastWriteAtMs = null
     }
 
+    override fun reconfigureBaudRate(baudRate: Int): Boolean {
+        val port = serialPort ?: return false
+        return try {
+            port.setParameters(
+                baudRate,
+                8,
+                UsbSerialPort.STOPBITS_1,
+                UsbSerialPort.PARITY_NONE,
+            )
+            connectedBaudRate = baudRate
+            lineBuffer.clear()
+            lastWriteAtMs = null
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     override fun writeAscii(text: String) {
         writeBytes(text.encodeToByteArray())
     }
@@ -137,6 +155,27 @@ class AndroidFirmwareUpdateTransport(
         }
 
         return lineBuffer.drainCompletedLines()
+    }
+
+    override fun readBytes(timeoutMs: Long): ByteArray {
+        val port = serialPort ?: return ByteArray(0)
+        val deadline = System.currentTimeMillis() + timeoutMs
+        val out = mutableListOf<Byte>()
+        val buffer = ByteArray(256)
+        sleepAfterRecentWrite()
+
+        while (System.currentTimeMillis() <= deadline) {
+            val bytesRead = port.read(buffer, pollIntervalMs.toInt())
+            if (bytesRead > 0) {
+                out += buffer.copyOf(bytesRead).toList()
+            } else if (out.isNotEmpty()) {
+                break
+            } else {
+                Thread.sleep(pollIntervalMs)
+            }
+        }
+
+        return out.toByteArray()
     }
 
     private fun resolveCurrentDevice(): UsbDevice {

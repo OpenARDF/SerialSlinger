@@ -130,8 +130,29 @@ object DeviceSessionController {
             progress?.invoke(commands.size, bootstrapCommands.size.coerceAtLeast(1))
         }
 
+        if (updatedState.snapshot?.info?.softwareVersion.isNullOrBlank() && updatedState.snapshot?.info?.productName.isNullOrBlank()) {
+            val command = "INF"
+            updatedState = sendCommandAndIngest(
+                command = command,
+                state = updatedState,
+                transport = transport,
+                commands = commands,
+                lines = lines,
+                traceEntries = traceEntries,
+                notifyReportReceived = ::notifyReportReceived,
+            )
+            afterCommand?.invoke(command, updatedState, transport)?.let { intervention ->
+                commands += intervention.commandsSent
+                lines += intervention.linesReceived
+                traceEntries += intervention.traceEntries
+                notifyReportReceived(intervention.linesReceived)
+                updatedState = intervention.state
+            }
+        }
+
         val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
-            updatedState.snapshot?.info?.softwareVersion,
+            softwareVersion = updatedState.snapshot?.info?.softwareVersion,
+            productName = updatedState.snapshot?.info?.productName,
         )
         updatedState = updatedState.copy(
             snapshot = updatedState.snapshot?.copy(capabilities = firmwareProfile.capabilities),
@@ -291,7 +312,8 @@ object DeviceSessionController {
             "Cannot submit changes before a device snapshot has been loaded."
         }
         val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
-            submissionSnapshot.info.softwareVersion,
+            softwareVersion = submissionSnapshot.info.softwareVersion,
+            productName = submissionSnapshot.info.productName,
         )
         val requiresFullReloadVerification =
             allowFullReloadVerification &&

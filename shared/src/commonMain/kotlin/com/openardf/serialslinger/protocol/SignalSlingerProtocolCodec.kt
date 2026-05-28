@@ -7,12 +7,19 @@ import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.WritePlan
+import com.openardf.serialslinger.platform.platformLocalDateTimeFields
 
 data class DeviceInfoPatch(
+    val productName: String? = null,
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
+    val appStartAddress: Int? = null,
+    val appBaud: Int? = null,
+    val updateBaud: Int? = null,
+    val appUpdateCommand: String? = null,
     val bootloaderVersion: String? = null,
     val bootloaderProtocolVersion: Int? = null,
+    val bootloaderProtocol: String? = null,
 )
 
 data class DeviceStatusPatch(
@@ -111,6 +118,12 @@ object SignalSlingerProtocolCodec {
     private val currentTimePattern = Regex("""^\*\s*Time:\s*(.+)$""")
     private val startTimePattern = Regex("""^\*\s*Start:\s*(.+)$""")
     private val finishTimePattern = Regex("""^\*\s*Finish:\s*(.+)$""")
+    private val arduconEpochPattern = Regex("""^Epoch:(\d+)$""", RegexOption.IGNORE_CASE)
+    private val arduconStartEpochPattern = Regex("""^Start:(\d+)$""", RegexOption.IGNORE_CASE)
+    private val arduconFinishEpochPattern = Regex("""^Finish:(\d+)$""", RegexOption.IGNORE_CASE)
+    private val arduconIdSpeedPattern = Regex("""^ID:\s*(\d+)\s+wpm$""", RegexOption.IGNORE_CASE)
+    private val arduconStationIdPattern = Regex("""^ID:\s*(\S+)$""")
+    private val arduconTemperaturePattern = Regex("""^T=(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
     private val daysToRunPattern = Regex("""^\* Days to run:\s*(\d+)$""")
     private val daysRemainingPattern = Regex("""^\* Days remaining:\s*(\d+)$""")
     private val frequencyPattern = Regex("""^\* FRE(?:\s+([123B]))?=(.+)$""")
@@ -147,28 +160,97 @@ object SignalSlingerProtocolCodec {
         val trimmed = line.trim()
         appInfoPattern.find(trimmed)?.let { match ->
             val fields = parseKeyValueFields(match.groupValues[1])
+            val productName = fields["product"]
             val softwareVersion = fields["sw"]
             val hardwareBuild = fields["hw"]
+            val appStartAddress = fields["app"]?.let(::parseIntLiteral)
+            val appBaud = fields["appbaud"]?.toIntOrNull()
+            val updateBaud = fields["baud"]?.toIntOrNull()
+            val appUpdateCommand = fields["update"]
             val bootloaderVersion = fields["bl"]?.takeUnless { it.equals("unknown", ignoreCase = true) }
+            val bootloaderProtocol = fields["proto"]?.takeUnless { it.equals("unknown", ignoreCase = true) }
             val bootloaderProtocolVersion = fields["proto"]
                 ?.takeUnless { it.equals("unknown", ignoreCase = true) }
                 ?.toIntOrNull()
 
             if (
+                productName != null ||
                 softwareVersion != null ||
                 hardwareBuild != null ||
+                appStartAddress != null ||
+                appBaud != null ||
+                updateBaud != null ||
+                appUpdateCommand != null ||
                 bootloaderVersion != null ||
-                bootloaderProtocolVersion != null
+                bootloaderProtocolVersion != null ||
+                bootloaderProtocol != null
             ) {
                 return DeviceReportUpdate(
                     deviceInfoPatch = DeviceInfoPatch(
+                        productName = productName,
                         softwareVersion = softwareVersion,
                         hardwareBuild = hardwareBuild,
+                        appStartAddress = appStartAddress,
+                        appBaud = appBaud,
+                        updateBaud = updateBaud,
+                        appUpdateCommand = appUpdateCommand,
                         bootloaderVersion = bootloaderVersion,
                         bootloaderProtocolVersion = bootloaderProtocolVersion,
+                        bootloaderProtocol = bootloaderProtocol,
                     ),
                 )
             }
+        }
+
+        arduconEpochPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    currentTimeCompact = parseEpochSecondsCompact(match.groupValues[1]),
+                    currentTimeObserved = true,
+                ),
+            )
+        }
+
+        arduconStartEpochPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    startTimeCompact = parseEpochSecondsCompact(match.groupValues[1]),
+                    startTimeObserved = true,
+                ),
+            )
+        }
+
+        arduconFinishEpochPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    finishTimeCompact = parseEpochSecondsCompact(match.groupValues[1]),
+                    finishTimeObserved = true,
+                ),
+            )
+        }
+
+        arduconIdSpeedPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    idCodeSpeedWpm = match.groupValues[1].toInt(),
+                ),
+            )
+        }
+
+        arduconStationIdPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    stationId = match.groupValues[1].trim(),
+                ),
+            )
+        }
+
+        arduconTemperaturePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    temperatureC = match.groupValues[1].toDouble(),
+                ),
+            )
         }
 
         if (!trimmed.startsWith("*")) {
@@ -178,6 +260,7 @@ object SignalSlingerProtocolCodec {
         versionPattern.matchEntire(trimmed)?.let { match ->
             return DeviceReportUpdate(
                 deviceInfoPatch = DeviceInfoPatch(
+                    productName = "SignalSlinger",
                     softwareVersion = match.groupValues[1].trim(),
                     hardwareBuild = match.groupValues[2].trim(),
                 ),
@@ -191,6 +274,7 @@ object SignalSlingerProtocolCodec {
                 deviceInfoPatch = DeviceInfoPatch(
                     bootloaderVersion = bootloaderVersion,
                     bootloaderProtocolVersion = bootloaderProtocolVersion,
+                    bootloaderProtocol = bootloaderProtocolVersion?.toString(),
                 ),
             )
         }
@@ -474,6 +558,15 @@ object SignalSlingerProtocolCodec {
             .toMap()
     }
 
+    private fun parseIntLiteral(text: String): Int {
+        val normalized = text.trim()
+        return if (normalized.startsWith("0x", ignoreCase = true)) {
+            normalized.drop(2).toInt(16)
+        } else {
+            normalized.toInt()
+        }
+    }
+
     private fun parseFoxRole(raw: String): FoxRole? {
         val normalized = raw.trim()
         return FoxRole.entries.firstOrNull { it.label == normalized }
@@ -515,6 +608,23 @@ object SignalSlingerProtocolCodec {
 
         return "$year$month$day$hour$minute$second"
     }
+
+    private fun parseEpochSecondsCompact(raw: String): String? {
+        val epochSeconds = raw.trim().toLongOrNull() ?: return null
+        if (epochSeconds < MinimumValidEpochSeconds) {
+            return null
+        }
+        val fields = platformLocalDateTimeFields(epochSeconds) ?: return null
+        val year = (fields.year % 100).toString().padStart(2, '0')
+        val month = fields.month.toString().padStart(2, '0')
+        val day = fields.day.toString().padStart(2, '0')
+        val hour = fields.hour.toString().padStart(2, '0')
+        val minute = fields.minute.toString().padStart(2, '0')
+        val second = fields.second.toString().padStart(2, '0')
+        return "$year$month$day$hour$minute$second"
+    }
+
+    private const val MinimumValidEpochSeconds = 1_609_459_200L
 
     private fun parseEventState(trimmed: String): DeviceStatusPatch? {
         val summary = trimmed.removePrefix("*").trim()
