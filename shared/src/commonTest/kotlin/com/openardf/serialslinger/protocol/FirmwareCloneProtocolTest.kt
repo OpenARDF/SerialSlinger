@@ -63,6 +63,24 @@ class FirmwareCloneProtocolTest {
     }
 
     @Test
+    fun canOmitUnsupportedDaysAndFrequencySteps() {
+        val plan =
+            FirmwareCloneProtocol.buildPlan(
+                templateSettings = sampleSettings(),
+                currentTimeCompact = "260430171643",
+                includeDaysToRun = false,
+                includeFrequencyProfiles = false,
+            )
+
+        val commands = plan.steps.map { it.command }
+        assertFalse(commands.any { it.startsWith("CLK D") })
+        assertFalse(commands.any { it.startsWith("FRE ") })
+        assertTrue("CLK S 1777559400" in commands)
+        assertTrue("CLK F 1777581000" in commands)
+        assertTrue(commands.last().startsWith("MAS Q "))
+    }
+
+    @Test
     fun matchesFirmwareReplies() {
         assertTrue(FirmwareCloneProtocol.replyMatches("MAS S", listOf("MAS S")))
         assertTrue(FirmwareCloneProtocol.replyMatches("MAS S", listOf("> MAS PMAS S")))

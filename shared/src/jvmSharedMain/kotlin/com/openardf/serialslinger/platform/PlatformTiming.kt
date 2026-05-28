@@ -1,7 +1,9 @@
 package com.openardf.serialslinger.platform
 
 import java.time.Instant
+import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 
 internal actual fun platformCurrentTimeMillis(): Long = System.currentTimeMillis()
 
@@ -21,4 +23,33 @@ internal actual fun platformLocalDateTimeFields(epochSeconds: Long): PlatformDat
         minute = local.minute,
         second = local.second,
     )
+}
+
+internal actual fun platformUtcDateTimeFields(epochSeconds: Long): PlatformDateTimeFields? {
+    val utc = Instant.ofEpochSecond(epochSeconds)
+        .atZone(ZoneOffset.UTC)
+        .toLocalDateTime()
+    return PlatformDateTimeFields(
+        year = utc.year,
+        month = utc.monthValue,
+        day = utc.dayOfMonth,
+        hour = utc.hour,
+        minute = utc.minute,
+        second = utc.second,
+    )
+}
+
+internal actual fun platformEpochSecondsFromLocalDateTimeFields(fields: PlatformDateTimeFields): Long? {
+    return try {
+        LocalDateTime.of(
+            fields.year,
+            fields.month,
+            fields.day,
+            fields.hour,
+            fields.minute,
+            fields.second,
+        ).atZone(ZoneId.systemDefault()).toEpochSecond()
+    } catch (_: Exception) {
+        null
+    }
 }

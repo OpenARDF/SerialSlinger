@@ -116,6 +116,9 @@ class DeviceSessionWorkflowTest {
         assertEquals("UPD", snapshot.info.appUpdateCommand)
         assertEquals("stk500v1", snapshot.info.bootloaderProtocol)
         assertTrue(snapshot.capabilities.supportsFirmwareUpdate)
+        assertTrue(snapshot.capabilities.supportsStationIdEditing)
+        assertTrue(snapshot.capabilities.supportsScheduling)
+        assertFalse(snapshot.capabilities.supportsDaysToRun)
         assertFalse(snapshot.capabilities.supportsFrequencyProfiles)
     }
 

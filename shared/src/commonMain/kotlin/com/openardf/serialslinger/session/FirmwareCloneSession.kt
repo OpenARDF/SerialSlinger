@@ -34,6 +34,8 @@ object FirmwareCloneSession {
         transport: DeviceTransport,
         templateSettings: DeviceSettings,
         currentTimeCompact: () -> String,
+        includeDaysToRun: Boolean = true,
+        includeFrequencyProfiles: Boolean = true,
         afterPreCloneStop: () -> List<String> = { emptyList() },
         afterStartAttempt: () -> Unit = {},
         afterCommandAcknowledged: (String) -> Unit = {},
@@ -45,6 +47,8 @@ object FirmwareCloneSession {
                     transport = transport,
                     templateSettings = templateSettings,
                     currentTimeCompact = currentTimeCompact,
+                    includeDaysToRun = includeDaysToRun,
+                    includeFrequencyProfiles = includeFrequencyProfiles,
                     afterPreCloneStop = afterPreCloneStop,
                     afterStartAttempt = afterStartAttempt,
                     afterCommandAcknowledged = afterCommandAcknowledged,
@@ -61,6 +65,8 @@ object FirmwareCloneSession {
         transport: DeviceTransport,
         templateSettings: DeviceSettings,
         currentTimeCompact: () -> String,
+        includeDaysToRun: Boolean,
+        includeFrequencyProfiles: Boolean,
         afterPreCloneStop: () -> List<String>,
         afterStartAttempt: () -> Unit,
         afterCommandAcknowledged: (String) -> Unit,
@@ -169,6 +175,8 @@ object FirmwareCloneSession {
         val plan = FirmwareCloneProtocol.buildPlan(
             templateSettings = templateSettings,
             currentTimeCompact = currentTimeCompact(),
+            includeDaysToRun = includeDaysToRun,
+            includeFrequencyProfiles = includeFrequencyProfiles,
         )
         for (step in plan.steps.drop(1)) {
             val responseLines = sendAndReadForReply(step.command, step.expectedReply)

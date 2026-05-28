@@ -21,6 +21,8 @@ object FirmwareCloneProtocol {
     fun buildPlan(
         templateSettings: DeviceSettings,
         currentTimeCompact: String,
+        includeDaysToRun: Boolean = true,
+        includeFrequencyProfiles: Boolean = true,
     ): FirmwareClonePlan {
         val startEpoch = requireFirmwareEpoch("Start Time", templateSettings.startTimeCompact)
         val finishEpoch = requireFirmwareEpoch("Finish Time", templateSettings.finishTimeCompact)
@@ -42,7 +44,9 @@ object FirmwareCloneProtocol {
         addStep("CLK T $currentEpoch", "CLK T", currentEpoch)
         addStep("CLK S $startEpoch", "CLK S", startEpoch)
         addStep("CLK F $finishEpoch", "CLK F", finishEpoch)
-        addStep("CLK D $daysToRun", "CLK D", daysToRun.toLong())
+        if (includeDaysToRun) {
+            addStep("CLK D $daysToRun", "CLK D", daysToRun.toLong())
+        }
 
         val stationIdPayload = stationIdCommandPayload(templateSettings.stationId)
         addStep("ID $stationIdPayload", "ID", checksumForStationId(templateSettings.stationId))
@@ -54,11 +58,13 @@ object FirmwareCloneProtocol {
         val eventToken = eventToken(templateSettings.eventType)
         addStep("EVT $eventToken", "EVT", eventToken.code.toLong())
 
-        addStep("FRE X ${templateSettings.defaultFrequencyHz}", "FRE", templateSettings.defaultFrequencyHz)
-        addStep("FRE L ${frequencyForClone(templateSettings.lowFrequencyHz, templateSettings.defaultFrequencyHz)}", "FRE", frequencyForClone(templateSettings.lowFrequencyHz, templateSettings.defaultFrequencyHz))
-        addStep("FRE M ${frequencyForClone(templateSettings.mediumFrequencyHz, templateSettings.defaultFrequencyHz)}", "FRE", frequencyForClone(templateSettings.mediumFrequencyHz, templateSettings.defaultFrequencyHz))
-        addStep("FRE H ${frequencyForClone(templateSettings.highFrequencyHz, templateSettings.defaultFrequencyHz)}", "FRE", frequencyForClone(templateSettings.highFrequencyHz, templateSettings.defaultFrequencyHz))
-        addStep("FRE B ${frequencyForClone(templateSettings.beaconFrequencyHz, templateSettings.defaultFrequencyHz)}", "FRE", frequencyForClone(templateSettings.beaconFrequencyHz, templateSettings.defaultFrequencyHz))
+        if (includeFrequencyProfiles) {
+            addStep("FRE X ${templateSettings.defaultFrequencyHz}", "FRE", templateSettings.defaultFrequencyHz)
+            addStep("FRE L ${frequencyForClone(templateSettings.lowFrequencyHz, templateSettings.defaultFrequencyHz)}", "FRE", frequencyForClone(templateSettings.lowFrequencyHz, templateSettings.defaultFrequencyHz))
+            addStep("FRE M ${frequencyForClone(templateSettings.mediumFrequencyHz, templateSettings.defaultFrequencyHz)}", "FRE", frequencyForClone(templateSettings.mediumFrequencyHz, templateSettings.defaultFrequencyHz))
+            addStep("FRE H ${frequencyForClone(templateSettings.highFrequencyHz, templateSettings.defaultFrequencyHz)}", "FRE", frequencyForClone(templateSettings.highFrequencyHz, templateSettings.defaultFrequencyHz))
+            addStep("FRE B ${frequencyForClone(templateSettings.beaconFrequencyHz, templateSettings.defaultFrequencyHz)}", "FRE", frequencyForClone(templateSettings.beaconFrequencyHz, templateSettings.defaultFrequencyHz))
+        }
 
         steps += FirmwareCloneStep("MAS Q $checksum", "MAS ACK", checksum)
         return FirmwareClonePlan(

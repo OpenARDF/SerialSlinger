@@ -14,3 +14,7 @@ internal data class PlatformDateTimeFields(
 )
 
 internal expect fun platformLocalDateTimeFields(epochSeconds: Long): PlatformDateTimeFields?
+
+internal expect fun platformUtcDateTimeFields(epochSeconds: Long): PlatformDateTimeFields?
+
+internal expect fun platformEpochSecondsFromLocalDateTimeFields(fields: PlatformDateTimeFields): Long?

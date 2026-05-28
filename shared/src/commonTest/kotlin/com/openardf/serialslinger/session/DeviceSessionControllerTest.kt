@@ -120,7 +120,11 @@ class DeviceSessionControllerTest {
         assertEquals(20, snapshot.settings.idCodeSpeedWpm)
         assertEquals(34.0, snapshot.status.temperatureC)
         assertTrue(snapshot.capabilities.supportsFirmwareUpdate)
+        assertTrue(snapshot.capabilities.supportsStationIdEditing)
+        assertTrue(snapshot.capabilities.supportsScheduling)
+        assertFalse(snapshot.capabilities.supportsDaysToRun)
         assertFalse(snapshot.capabilities.supportsFrequencyProfiles)
+        assertTrue(assertNotNull(result.state.editableSettings).writableVisibleFields(snapshot.capabilities).any { it.key == "stationId" })
         assertFalse(assertNotNull(result.state.editableSettings).writableVisibleFields(snapshot.capabilities).any { it.key == "idCodeSpeedWpm" })
     }
 

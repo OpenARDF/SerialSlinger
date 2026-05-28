@@ -86,7 +86,11 @@ object DeviceSessionWorkflow {
 
         val validatedSettings = editedSettings.toValidatedDeviceSettings()
         val writePlan = WritePlanner.create(snapshot.settings, validatedSettings, forceWriteKeys = forceWriteKeys)
-        val commands = SignalSlingerProtocolCodec.encodeWritePlan(writePlan, validatedSettings)
+        val commands = SignalSlingerProtocolCodec.encodeWritePlan(
+            writePlan = writePlan,
+            editedSettings = validatedSettings,
+            deviceInfo = snapshot.info,
+        )
 
         return DeviceSubmission(
             state = state.copy(

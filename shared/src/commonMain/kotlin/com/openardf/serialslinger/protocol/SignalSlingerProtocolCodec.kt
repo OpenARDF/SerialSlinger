@@ -1,5 +1,6 @@
 package com.openardf.serialslinger.protocol
 
+import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
@@ -7,7 +8,10 @@ import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.WritePlan
+import com.openardf.serialslinger.platform.PlatformDateTimeFields
+import com.openardf.serialslinger.platform.platformEpochSecondsFromLocalDateTimeFields
 import com.openardf.serialslinger.platform.platformLocalDateTimeFields
+import com.openardf.serialslinger.platform.platformUtcDateTimeFields
 
 data class DeviceInfoPatch(
     val productName: String? = null,
@@ -496,9 +500,26 @@ object SignalSlingerProtocolCodec {
         return null
     }
 
-    fun encodeWritePlan(writePlan: WritePlan, editedSettings: DeviceSettings): List<String> {
+    fun encodeWritePlan(
+        writePlan: WritePlan,
+        editedSettings: DeviceSettings,
+        deviceInfo: DeviceInfo? = null,
+    ): List<String> {
         val commands = mutableListOf<String>()
         var batteryCommandAdded = false
+        val useUtcCompactClockWrites = deviceInfo?.productName.equals("Arducon", ignoreCase = true)
+
+        fun encodeClockWrite(prefix: String, compactTimestamp: String?): String? {
+            if (compactTimestamp == null) {
+                return null
+            }
+            val payload = if (useUtcCompactClockWrites) {
+                localCompactToUtcCompact(compactTimestamp)
+            } else {
+                compactTimestamp
+            }
+            return "$prefix $payload"
+        }
 
         for (change in writePlan.changes.sortedBy { it.writeOrder }) {
             when (change.fieldKey) {
@@ -508,9 +529,9 @@ object SignalSlingerProtocolCodec {
                 SettingKey.PATTERN_TEXT -> commands += "PAT ${editedSettings.patternText.orEmpty()}"
                 SettingKey.ID_CODE_SPEED_WPM -> commands += "SPD I ${editedSettings.idCodeSpeedWpm}"
                 SettingKey.PATTERN_CODE_SPEED_WPM -> commands += encodePatternSpeedCommand(editedSettings)
-                SettingKey.CURRENT_TIME -> editedSettings.currentTimeCompact?.let { commands += "CLK T $it" }
-                SettingKey.START_TIME -> editedSettings.startTimeCompact?.let { commands += "CLK S $it" }
-                SettingKey.FINISH_TIME -> editedSettings.finishTimeCompact?.let { commands += "CLK F $it" }
+                SettingKey.CURRENT_TIME -> encodeClockWrite("CLK T", editedSettings.currentTimeCompact)?.let { commands += it }
+                SettingKey.START_TIME -> encodeClockWrite("CLK S", editedSettings.startTimeCompact)?.let { commands += it }
+                SettingKey.FINISH_TIME -> encodeClockWrite("CLK F", editedSettings.finishTimeCompact)?.let { commands += it }
                 SettingKey.DAYS_TO_RUN -> commands += "CLK D ${editedSettings.daysToRun}"
                 SettingKey.DEFAULT_FREQUENCY_HZ -> commands += "FRE ${editedSettings.defaultFrequencyHz}"
                 SettingKey.LOW_FREQUENCY_HZ -> editedSettings.lowFrequencyHz?.let { commands += "FRE 1 $it" }
@@ -532,6 +553,35 @@ object SignalSlingerProtocolCodec {
         }
 
         return commands
+    }
+
+    private fun localCompactToUtcCompact(compactTimestamp: String): String {
+        val normalized = compactTimestamp.trim()
+        require(normalized.length == 12 && normalized.all { it.isDigit() }) {
+            "Timestamp must be YYMMDDhhmmss."
+        }
+        val localFields = PlatformDateTimeFields(
+            year = 2000 + normalized.substring(0, 2).toInt(),
+            month = normalized.substring(2, 4).toInt(),
+            day = normalized.substring(4, 6).toInt(),
+            hour = normalized.substring(6, 8).toInt(),
+            minute = normalized.substring(8, 10).toInt(),
+            second = normalized.substring(10, 12).toInt(),
+        )
+        val epochSeconds = requireNotNull(platformEpochSecondsFromLocalDateTimeFields(localFields)) {
+            "Timestamp is not valid for the local timezone."
+        }
+        val utcFields = requireNotNull(platformUtcDateTimeFields(epochSeconds)) {
+            "Timestamp could not be converted to UTC."
+        }
+        return buildString {
+            append((utcFields.year % 100).toString().padStart(2, '0'))
+            append(utcFields.month.toString().padStart(2, '0'))
+            append(utcFields.day.toString().padStart(2, '0'))
+            append(utcFields.hour.toString().padStart(2, '0'))
+            append(utcFields.minute.toString().padStart(2, '0'))
+            append(utcFields.second.toString().padStart(2, '0'))
+        }
     }
 
     private fun parseEventType(raw: String): EventType? {

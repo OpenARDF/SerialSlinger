@@ -165,6 +165,8 @@ object SignalSlingerFirmwareSupport {
         id = "arducon-atmega328p",
         capabilities = DeviceCapabilities(
             supportsTemperatureReadback = true,
+            supportsScheduling = true,
+            supportsDaysToRun = false,
             supportsFirmwareUpdate = true,
         ),
         bootstrapLoadCommands = versionBootstrapCommands,

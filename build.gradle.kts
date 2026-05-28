@@ -7,7 +7,7 @@ plugins {
 val serialSlingerVersion = "2.0.7"
 // Bump this suffix for every new testable change set so desktop and Android builds expose
 // an unmistakable version string during iterative testing. Clear it before a full release.
-val serialSlingerVersionSuffix = "f"
+val serialSlingerVersionSuffix = "l"
 val serialSlingerDisplayVersion = serialSlingerVersion + serialSlingerVersionSuffix
 val serialSlingerPackageVersion =
     if (serialSlingerVersionSuffix.isBlank()) {

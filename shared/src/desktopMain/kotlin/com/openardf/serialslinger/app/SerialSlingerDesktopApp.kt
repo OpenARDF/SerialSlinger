@@ -2,6 +2,7 @@ package com.openardf.serialslinger.app
 
 import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
+import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.EditableDeviceSettings
@@ -2812,9 +2813,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun cloneTimedEventSettings(skipClockWarning: Boolean = false) {
         val transport = currentTransport
         val state = currentState
+        val snapshot = loadedSnapshot
         val templateSettings = cloneTemplateSettings
-        if (transport == null || state == null || loadedSnapshot == null || templateSettings == null) {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+        if (transport == null || state == null || snapshot == null || templateSettings == null) {
+            JOptionPane.showMessageDialog(this, "Connect and load a supported device first.")
             return
         }
         if (cloneTemplateEventWouldAlreadyBeRunning(templateSettings)) {
@@ -2880,6 +2882,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 transport = transport,
                 templateSettings = validated,
                 currentTimeCompact = ::nextFirmwareCloneClockTimeCompact,
+                includeDaysToRun = targetSnapshot.capabilities.supportsDaysToRun,
+                includeFrequencyProfiles = targetSnapshot.capabilities.supportsFrequencyProfiles,
                 afterPreCloneStop = { waitForFirmwareClonePreCloneStop(transport) },
                 afterStartAttempt = ::waitForFirmwareCloneStartRetry,
                 afterCommandAcknowledged = { waitForFirmwareCloneCommandSettle() },
@@ -2942,7 +2946,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         targetRefreshResult = targetRefresh,
                         firmwareTraceEntries = firmwareCloneResult.traceEntries,
                         refreshResult = refreshedWithClock,
-                        comparedFieldKeys = cloneComparedFieldKeys(),
+                        comparedFieldKeys = cloneComparedFieldKeys(targetSnapshot.capabilities),
                         checksum = firmwareCloneResult.plan?.checksum,
                         syncResult = syncResult,
                     )
@@ -3096,7 +3100,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
     }
 
-    private fun cloneComparedFieldKeys(): List<SettingKey> {
+    private fun cloneComparedFieldKeys(capabilities: DeviceCapabilities): List<SettingKey> {
         return buildList {
             add(SettingKey.STATION_ID)
             add(SettingKey.EVENT_TYPE)
@@ -3106,11 +3110,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             add(SettingKey.START_TIME)
             add(SettingKey.FINISH_TIME)
-            add(SettingKey.DAYS_TO_RUN)
-            add(SettingKey.LOW_FREQUENCY_HZ)
-            add(SettingKey.MEDIUM_FREQUENCY_HZ)
-            add(SettingKey.HIGH_FREQUENCY_HZ)
-            add(SettingKey.BEACON_FREQUENCY_HZ)
+            if (capabilities.supportsDaysToRun) {
+                add(SettingKey.DAYS_TO_RUN)
+            }
+            if (capabilities.supportsFrequencyProfiles) {
+                add(SettingKey.LOW_FREQUENCY_HZ)
+                add(SettingKey.MEDIUM_FREQUENCY_HZ)
+                add(SettingKey.HIGH_FREQUENCY_HZ)
+                add(SettingKey.BEACON_FREQUENCY_HZ)
+            }
         }
     }
 
@@ -4926,7 +4934,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val settings = snapshot.settings
         val timedSettings = snapshot.settings
         val frequencies = FrequencySupport.describeFrequencies(settings)
+        val stationIdEditingSupported = snapshot.capabilities.supportsStationIdEditing
         val schedulingSupported = snapshot.capabilities.supportsScheduling
+        val daysToRunSupported = snapshot.capabilities.supportsDaysToRun
+        val patternEditingSupported = snapshot.capabilities.supportsPatternEditing
+        val frequencyProfilesSupported = snapshot.capabilities.supportsFrequencyProfiles
+        val externalBatteryControlSupported = snapshot.capabilities.supportsExternalBatteryControl
         val temperatureReadbackSupported = snapshot.capabilities.supportsTemperatureReadback
         val extendedTemperatureReadbackSupported = snapshot.capabilities.supportsExtendedTemperatureReadback
         updatingForm = true
@@ -4950,19 +4963,39 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             applyDateTimeEditorCapability(startTimeSpinner, schedulingSupported)
             applyDateTimeEditorCapability(finishTimeSpinner, schedulingSupported)
             refreshScheduleTimeEditorPresentation(snapshot)
-            daysField.isEnabled = schedulingSupported
+            daysField.isEnabled = schedulingSupported && daysToRunSupported
             updateDaysToRunDisplay(snapshot)
-            setInformationalFieldText(currentFrequencyField, formatFrequencyForDisplay(frequencies.currentFrequencyHz), unreadPlaceholder = false)
-            setInformationalFieldText(currentBankField, frequencies.currentBankId?.label ?: "Unknown", unreadPlaceholder = false)
-            setFrequencySpinnerValue(frequency1Field, timedSettings.lowFrequencyHz)
-            setFrequencySpinnerValue(frequency2Field, timedSettings.mediumFrequencyHz)
-            setFrequencySpinnerValue(frequency3Field, timedSettings.highFrequencyHz)
-            setFrequencySpinnerValue(frequencyBField, timedSettings.beaconFrequencyHz)
+            if (frequencyProfilesSupported) {
+                setInformationalFieldText(currentFrequencyField, formatFrequencyForDisplay(frequencies.currentFrequencyHz), unreadPlaceholder = false)
+                setInformationalFieldText(currentBankField, frequencies.currentBankId?.label ?: "Unknown", unreadPlaceholder = false)
+                setFrequencySpinnerValue(frequency1Field, timedSettings.lowFrequencyHz)
+                setFrequencySpinnerValue(frequency2Field, timedSettings.mediumFrequencyHz)
+                setFrequencySpinnerValue(frequency3Field, timedSettings.highFrequencyHz)
+                setFrequencySpinnerValue(frequencyBField, timedSettings.beaconFrequencyHz)
+            } else {
+                setInformationalFieldText(currentFrequencyField, "Not supported", unreadPlaceholder = false)
+                setInformationalFieldText(currentBankField, "Not supported", unreadPlaceholder = false)
+                clearFrequencySpinner(frequency1Field)
+                clearFrequencySpinner(frequency2Field)
+                clearFrequencySpinner(frequency3Field)
+                clearFrequencySpinner(frequencyBField)
+            }
             updateTimedEventFrequencyVisibility(timedSettings.eventType)
             updatePatternSpeedVisibility(settings.eventType)
-            batteryThresholdField.selectedItem = settings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) }
-            batteryModeCombo.selectedItem = settings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF
+            if (externalBatteryControlSupported) {
+                batteryThresholdField.selectedItem = settings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) }
+                batteryModeCombo.selectedItem = settings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF
+            } else {
+                batteryThresholdField.selectedItem = null
+                batteryModeCombo.selectedItem = null
+            }
             updateTransmissionsField(settings.transmissionsEnabled)
+            updateUnsupportedCapabilityHints(
+                stationIdEditingSupported = stationIdEditingSupported,
+                patternEditingSupported = patternEditingSupported,
+                frequencyProfilesSupported = frequencyProfilesSupported,
+                externalBatteryControlSupported = externalBatteryControlSupported,
+            )
             setInformationalFieldText(versionInfoField, DesktopInputSupport.formatReportedVersion(
                 softwareVersion = snapshot.info.softwareVersion,
                 hardwareBuild = snapshot.info.hardwareBuild,
@@ -5092,6 +5125,51 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             unreadPlaceholder = false,
             alert = showWarning,
         )
+    }
+
+    private fun updateUnsupportedCapabilityHints(
+        stationIdEditingSupported: Boolean,
+        patternEditingSupported: Boolean,
+        frequencyProfilesSupported: Boolean,
+        externalBatteryControlSupported: Boolean,
+    ) {
+        setUnsupportedCapabilityHint(
+            stationIdField,
+            stationIdEditingSupported,
+            "This device does not support Station ID editing in SerialSlinger.",
+        )
+
+        val patternTooltip = "This device does not support pattern editing in SerialSlinger."
+        setUnsupportedCapabilityHint(eventTypeCombo, patternEditingSupported, patternTooltip)
+        setUnsupportedCapabilityHint(foxRoleCombo, patternEditingSupported, patternTooltip)
+        setUnsupportedCapabilityHint(patternTextField, patternEditingSupported, patternTooltip)
+        setUnsupportedCapabilityHint(idSpeedField, patternEditingSupported, patternTooltip)
+        setUnsupportedCapabilityHint(devicePatternSpeedField, patternEditingSupported, patternTooltip)
+        setUnsupportedCapabilityHint(timedPatternSpeedField, patternEditingSupported, patternTooltip)
+
+        val frequencyTooltip = "This device does not support frequency editing in SerialSlinger."
+        listOf(
+            currentFrequencyRowLabel,
+            currentBankRowLabel,
+            frequency1Label,
+            frequency2Label,
+            frequency3Label,
+            frequencyBLabel,
+        ).forEach { it.isEnabled = frequencyProfilesSupported }
+        setUnsupportedCapabilityHint(currentFrequencyField, frequencyProfilesSupported, frequencyTooltip)
+        setUnsupportedCapabilityHint(currentBankField, frequencyProfilesSupported, frequencyTooltip)
+        setUnsupportedCapabilityHint(frequency1Field, frequencyProfilesSupported, frequencyTooltip)
+        setUnsupportedCapabilityHint(frequency2Field, frequencyProfilesSupported, frequencyTooltip)
+        setUnsupportedCapabilityHint(frequency3Field, frequencyProfilesSupported, frequencyTooltip)
+        setUnsupportedCapabilityHint(frequencyBField, frequencyProfilesSupported, frequencyTooltip)
+
+        val batteryTooltip = "This device does not support external battery control in SerialSlinger."
+        setUnsupportedCapabilityHint(batteryThresholdField, externalBatteryControlSupported, batteryTooltip)
+        setUnsupportedCapabilityHint(batteryModeCombo, externalBatteryControlSupported, batteryTooltip)
+    }
+
+    private fun setUnsupportedCapabilityHint(component: JComponent, supported: Boolean, unsupportedTooltip: String) {
+        component.toolTipText = if (supported) null else unsupportedTooltip
     }
 
     private fun syncFoxRoleOptions(eventType: EventType, selectedRole: FoxRole?) {
@@ -8130,13 +8208,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED &&
             cloneTemplateSettings != null
+        submitButton.toolTipText = "Click to clone. Press and hold to reload the clone template from the attached device."
         updateApplyButtonState()
     }
 
     private fun updateWritableControlAvailability(isBusy: Boolean) {
         val connected = currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
+        val stationIdEditingSupported = loadedSnapshot?.capabilities?.supportsStationIdEditing == true
         val schedulingSupported = loadedSnapshot?.capabilities?.supportsScheduling == true
+        val daysToRunSupported = loadedSnapshot?.capabilities?.supportsDaysToRun != false
+        val patternEditingSupported = loadedSnapshot?.capabilities?.supportsPatternEditing == true
+        val frequencyProfilesSupported = loadedSnapshot?.capabilities?.supportsFrequencyProfiles == true
+        val externalBatteryControlSupported = loadedSnapshot?.capabilities?.supportsExternalBatteryControl == true
         val writableEnabled = connected && !isBusy
+        val patternFieldsEditable = writableEnabled && patternEditingSupported
         val schedulingFieldsEditable =
             writableEnabled &&
             schedulingSupported &&
@@ -8152,18 +8237,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 )
             } == true
 
-        stationIdField.isEnabled = writableEnabled
-        eventTypeCombo.isEnabled = writableEnabled
-        foxRoleCombo.isEnabled = writableEnabled
+        stationIdField.isEnabled = writableEnabled && stationIdEditingSupported
+        eventTypeCombo.isEnabled = patternFieldsEditable
+        foxRoleCombo.isEnabled = patternFieldsEditable
         updatePatternTextEditability(
             loadedSnapshot?.settings?.eventType ?: (eventTypeCombo.selectedItem as? EventType ?: EventType.NONE),
-            writableEnabled,
+            patternFieldsEditable,
         )
-        idSpeedField.isEnabled = writableEnabled
-        devicePatternSpeedField.isEnabled = writableEnabled
-        timedPatternSpeedField.isEnabled = writableEnabled
-        batteryThresholdField.isEnabled = writableEnabled
-        batteryModeCombo.isEnabled = writableEnabled
+        idSpeedField.isEnabled = patternFieldsEditable
+        devicePatternSpeedField.isEnabled = patternFieldsEditable
+        timedPatternSpeedField.isEnabled = patternFieldsEditable
+        batteryThresholdField.isEnabled = writableEnabled && externalBatteryControlSupported
+        batteryModeCombo.isEnabled = writableEnabled && externalBatteryControlSupported
         transmissionsField.isEnabled = true
         val thermalThresholdEditable =
             writableEnabled &&
@@ -8171,10 +8256,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 loadedSnapshot?.capabilities?.supportsExtendedTemperatureReadback == true
         updateThermalShutdownThresholdEditability(thermalThresholdEditable)
 
-        daysField.isEnabled = schedulingFieldsEditable
+        daysField.isEnabled = schedulingFieldsEditable && daysToRunSupported
         val frequencyFieldsEditable =
             writableEnabled &&
-                loadedSnapshot?.capabilities?.supportsFrequencyProfiles == true
+                frequencyProfilesSupported
         frequency1Field.isEnabled = frequencyFieldsEditable
         frequency2Field.isEnabled = frequencyFieldsEditable
         frequency3Field.isEnabled = frequencyFieldsEditable
@@ -10484,10 +10569,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 nextState = DeviceSessionWorkflow.ingestReportLines(nextState, finishMirrorLines)
             }
 
-            val clockRefreshCommands = if (currentSnapshot.capabilities.supportsScheduling) listOf("CLK") else emptyList()
+            val clockRefreshCommands = if (currentSnapshot.capabilities.supportsScheduling) listOf(currentDeviceClockReadCommand()) else emptyList()
             val clockRefreshLines = mutableListOf<String>()
             val clockRefreshAnchor = if (clockRefreshCommands.isNotEmpty()) {
-                val clockSample = readClockSample(transport, command = "CLK")
+                val clockSample = readClockSample(transport, command = clockRefreshCommands.first())
                 clockRefreshLines += clockSample.responseLines
                 traceEntries += SerialTraceEntry(clockSample.sentAtMs, SerialTraceDirection.TX, clockSample.command)
                 traceEntries += clockSample.responseLines.map { line ->
@@ -10653,6 +10738,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         clearFrequencySpinner(frequencyBField)
         batteryThresholdField.selectedItem = null
         batteryModeCombo.selectedItem = null
+        updateUnsupportedCapabilityHints(
+            stationIdEditingSupported = true,
+            patternEditingSupported = true,
+            frequencyProfilesSupported = true,
+            externalBatteryControlSupported = true,
+        )
         updateTransmissionsField(isEnabled = true)
         setInformationalFieldText(versionInfoField, "Not read")
         setInformationalFieldText(internalBatteryField, "Not read")
@@ -10727,13 +10818,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         runInBackground(
-            "Refreshing device time from SignalSlinger...",
+            "Refreshing device time from connected device...",
             showErrorDialog = false,
             showBusyDialog = false,
         ) {
             val transport = requireNotNull(currentTransport)
             val state = requireNotNull(currentState)
-            val clockSample = readClockSample(transport, command = "CLK")
+            val clockSample = readClockSample(transport, command = currentDeviceClockReadCommand())
             val responseLines = clockSample.responseLines.toMutableList()
             lastDeviceTimeCheckAtMs = System.currentTimeMillis()
             val phaseErrorMillis = DesktopInputSupport.estimateCoarseClockErrorMillis(
@@ -10805,6 +10896,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     }
                 }
             }
+        }
+    }
+
+    private fun currentDeviceClockReadCommand(): String {
+        return if (loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true)) {
+            "CLK T"
+        } else {
+            "CLK"
         }
     }
 
@@ -11780,7 +11879,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun isClockTimeResponseLine(line: String): Boolean {
-        return line.trim().startsWith("* Time:", ignoreCase = true)
+        val trimmed = line.trim()
+        return trimmed.startsWith("* Time:", ignoreCase = true) ||
+            trimmed.startsWith("Epoch:", ignoreCase = true)
     }
 
     private fun estimatedSyncProgressUnits(): Int {

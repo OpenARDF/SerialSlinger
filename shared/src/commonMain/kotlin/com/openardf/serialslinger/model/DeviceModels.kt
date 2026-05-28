@@ -62,9 +62,11 @@ data class DeviceCapabilities(
     val supportsTemperatureReadback: Boolean = false,
     val supportsExtendedTemperatureReadback: Boolean = false,
     val supportsTemperatureLogging: Boolean = false,
+    val supportsStationIdEditing: Boolean = true,
     val supportsExternalBatteryControl: Boolean = false,
     val supportsPatternEditing: Boolean = false,
     val supportsScheduling: Boolean = false,
+    val supportsDaysToRun: Boolean = true,
     val supportsFrequencyProfiles: Boolean = false,
     val supportsFirmwareUpdate: Boolean = false,
 )
@@ -266,10 +268,12 @@ data class EditableDeviceSettings(
 
     private fun capabilityAllows(fieldKey: String, capabilities: DeviceCapabilities): Boolean {
         return when (fieldKey) {
+            "stationId" -> capabilities.supportsStationIdEditing
             "patternText", "idCodeSpeedWpm", "patternCodeSpeedWpm" -> capabilities.supportsPatternEditing
             "defaultFrequencyHz", "lowFrequencyHz", "mediumFrequencyHz", "highFrequencyHz", "beaconFrequencyHz" -> capabilities.supportsFrequencyProfiles
             "lowBatteryThresholdVolts", "externalBatteryControlMode" -> capabilities.supportsExternalBatteryControl
-            "currentTimeCompact", "startTimeCompact", "finishTimeCompact", "daysToRun" -> capabilities.supportsScheduling
+            "currentTimeCompact", "startTimeCompact", "finishTimeCompact" -> capabilities.supportsScheduling
+            "daysToRun" -> capabilities.supportsScheduling && capabilities.supportsDaysToRun
             else -> true
         }
     }

@@ -1,10 +1,14 @@
 package com.openardf.serialslinger.protocol
 
 import com.openardf.serialslinger.model.DeviceSettings
+import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.WritePlanner
+import com.openardf.serialslinger.platform.PlatformDateTimeFields
+import com.openardf.serialslinger.platform.platformEpochSecondsFromLocalDateTimeFields
+import com.openardf.serialslinger.platform.platformUtcDateTimeFields
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -334,6 +338,32 @@ class SignalSlingerProtocolCodecTest {
     }
 
     @Test
+    fun encodesArduconClockWriteCommandsAsUtcCompactTimestamps() {
+        val original = sampleSettings()
+        val edited = original.copy(
+            currentTimeCompact = "260410142233",
+            startTimeCompact = "260410150000",
+            finishTimeCompact = "260410170000",
+        )
+
+        val writePlan = WritePlanner.create(original, edited)
+        val commands = SignalSlingerProtocolCodec.encodeWritePlan(
+            writePlan = writePlan,
+            editedSettings = edited,
+            deviceInfo = DeviceInfo(productName = "Arducon"),
+        )
+
+        assertEquals(
+            listOf(
+                "CLK T ${utcCompactForLocal(2026, 4, 10, 14, 22, 33)}",
+                "CLK S ${utcCompactForLocal(2026, 4, 10, 15, 0, 0)}",
+                "CLK F ${utcCompactForLocal(2026, 4, 10, 17, 0, 0)}",
+            ),
+            commands,
+        )
+    }
+
+    @Test
     fun encodesFinishWriteWhenStartChangesButAbsoluteFinishMustBePreserved() {
         val original = sampleSettings().copy(
             startTimeCompact = "260410150000",
@@ -486,4 +516,36 @@ class SignalSlingerProtocolCodecTest {
             transmissionsEnabled = true,
         )
     }
+
+    private fun utcCompactForLocal(
+        year: Int,
+        month: Int,
+        day: Int,
+        hour: Int,
+        minute: Int,
+        second: Int,
+    ): String {
+        val epoch = requireNotNull(
+            platformEpochSecondsFromLocalDateTimeFields(
+                PlatformDateTimeFields(
+                    year = year,
+                    month = month,
+                    day = day,
+                    hour = hour,
+                    minute = minute,
+                    second = second,
+                ),
+            ),
+        )
+        val utc = requireNotNull(platformUtcDateTimeFields(epoch))
+        return buildString {
+            append((utc.year % 100).toString().padStart(2, '0'))
+            append(utc.month.toString().padStart(2, '0'))
+            append(utc.day.toString().padStart(2, '0'))
+            append(utc.hour.toString().padStart(2, '0'))
+            append(utc.minute.toString().padStart(2, '0'))
+            append(utc.second.toString().padStart(2, '0'))
+        }
+    }
+
 }

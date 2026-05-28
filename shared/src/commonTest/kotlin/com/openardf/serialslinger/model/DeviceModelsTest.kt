@@ -98,6 +98,21 @@ class DeviceModelsTest {
     }
 
     @Test
+    fun daysToRunCanBeUnsupportedIndependentlyFromStartAndFinishScheduling() {
+        val editable = sampleEditableSettings()
+        val capabilities = DeviceCapabilities(
+            supportsScheduling = true,
+            supportsDaysToRun = false,
+        )
+
+        val writable = editable.writableVisibleFields(capabilities).map { it.key }
+
+        assertTrue("startTimeCompact" in writable)
+        assertTrue("finishTimeCompact" in writable)
+        assertFalse("daysToRun" in writable)
+    }
+
+    @Test
     fun editableSettingsUseFrequencyLabelsThatMatchFirmwareBanks() {
         val editable = EditableDeviceSettings.fromDeviceSettings(sampleSettings())
 

@@ -23,6 +23,36 @@ internal actual fun platformSleep(milliseconds: Long) {
 internal actual fun platformLocalDateTimeFields(epochSeconds: Long): PlatformDateTimeFields? =
     utcDateTimeFields(epochSeconds)
 
+internal actual fun platformUtcDateTimeFields(epochSeconds: Long): PlatformDateTimeFields? =
+    utcDateTimeFields(epochSeconds)
+
+internal actual fun platformEpochSecondsFromLocalDateTimeFields(fields: PlatformDateTimeFields): Long? {
+    if (fields.month !in 1..12 || fields.hour !in 0..23 || fields.minute !in 0..59 || fields.second !in 0..59) {
+        return null
+    }
+    val daysBeforeMonthCommon = intArrayOf(0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+    val daysInMonth = when (fields.month) {
+        2 -> if (isLeapYear(fields.year)) 29 else 28
+        4, 6, 9, 11 -> 30
+        else -> 31
+    }
+    if (fields.day !in 1..daysInMonth) {
+        return null
+    }
+    val yearSince1900 = fields.year - 1900
+    val dayOfYear = daysBeforeMonthCommon[fields.month - 1] +
+        (if (fields.month > 2 && isLeapYear(fields.year)) 1 else 0) +
+        (fields.day - 1)
+    return fields.second.toLong() +
+        fields.minute.toLong() * 60L +
+        fields.hour.toLong() * 3_600L +
+        dayOfYear.toLong() * 86_400L +
+        (yearSince1900 - 70L) * 31_536_000L +
+        ((yearSince1900 - 69L) / 4L) * 86_400L -
+        ((yearSince1900 - 1L) / 100L) * 86_400L +
+        ((yearSince1900 + 299L) / 400L) * 86_400L
+}
+
 private fun utcDateTimeFields(epochSeconds: Long): PlatformDateTimeFields? {
     if (epochSeconds < 0L) {
         return null
@@ -52,4 +82,8 @@ private fun civilFromDays(daysSinceEpoch: Long): Triple<Int, Int, Int> {
     val month = monthPrime + if (monthPrime < 10) 3L else -9L
     val adjustedYear = year + if (month <= 2) 1L else 0L
     return Triple(adjustedYear.toInt(), month.toInt(), day.toInt())
+}
+
+private fun isLeapYear(year: Int): Boolean {
+    return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
