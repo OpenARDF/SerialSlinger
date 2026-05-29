@@ -26,6 +26,7 @@ enum class ScheduleTimeInputMode {
 }
 
 data class DesktopDisplayPreferences(
+    val deviceModeName: String = "SIGNALSLINGER",
     val frequencyDisplayUnit: FrequencyDisplayUnit = FrequencyDisplayUnit.MHZ,
     val temperatureDisplayUnit: TemperatureDisplayUnit = TemperatureDisplayUnit.CELSIUS,
     val logVisible: Boolean = false,
@@ -46,6 +47,7 @@ interface DesktopDisplayPreferencesStore {
 
 object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStore {
     private const val nodePath = "com/openardf/serialslinger"
+    private const val keyDeviceModeName = "deviceModeName"
     private const val keyFrequencyDisplayUnit = "frequencyDisplayUnit"
     private const val keyTemperatureDisplayUnit = "temperatureDisplayUnit"
     private const val keyLogVisible = "logVisible"
@@ -63,6 +65,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
 
     override fun load(): DesktopDisplayPreferences {
         return DesktopDisplayPreferences(
+            deviceModeName = preferences.get(keyDeviceModeName, "SIGNALSLINGER") ?: "SIGNALSLINGER",
             frequencyDisplayUnit = loadEnum(
                 key = keyFrequencyDisplayUnit,
                 defaultValue = FrequencyDisplayUnit.MHZ,
@@ -112,6 +115,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
     override fun save(preferences: DesktopDisplayPreferences) {
         val sanitizedTimedEventDefaults =
             FrequencySupport.sanitizeTimedEventDefaultFrequencies(preferences.timedEventDefaultFrequencies)
+        this.preferences.put(keyDeviceModeName, preferences.deviceModeName)
         this.preferences.put(keyFrequencyDisplayUnit, preferences.frequencyDisplayUnit.name)
         this.preferences.put(keyTemperatureDisplayUnit, preferences.temperatureDisplayUnit.name)
         this.preferences.putBoolean(keyLogVisible, preferences.logVisible)

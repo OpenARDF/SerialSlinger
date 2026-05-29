@@ -17,12 +17,41 @@ data class ArduconReleaseInfo(
     val board: String,
     val update: ArduconUpdateImage,
     val bootloader: ArduconBootloaderImage,
+    val firstInstall: ArduconFirstInstallImage?,
+    val workshopSetup: ArduconWorkshopSetup?,
     val firmwareUpdate: ArduconUpdateSettings,
     val files: List<ArduconReleaseFile>,
 ) {
     fun updateFile(): ArduconReleaseFile {
         return files.firstOrNull { it.kind == "update" && it.fileName == update.fileName }
             ?: error("Arducon release manifest does not list update file `${update.fileName}`.")
+    }
+
+    fun bootloaderFile(): ArduconReleaseFile {
+        return files.firstOrNull { it.kind == "bootloader" && it.fileName == bootloader.fileName }
+            ?: error("Arducon release manifest does not list bootloader file `${bootloader.fileName}`.")
+    }
+
+    fun firstInstallFile(): ArduconReleaseFile {
+        val fileName = firstInstall?.fileName ?: error("Arducon release manifest does not include first-install metadata.")
+        return files.firstOrNull { it.kind == "first-install" && it.fileName == fileName }
+            ?: error("Arducon release manifest does not list first-install file `$fileName`.")
+    }
+
+    fun setupHelperFile(): ArduconReleaseFile {
+        val fileName = workshopSetup?.setupHelperFileName ?: error("Arducon release manifest does not include workshop setup metadata.")
+        return files.firstOrNull { it.kind == "setup-helper" && it.fileName == fileName }
+            ?: error("Arducon release manifest does not list setup-helper file `$fileName`.")
+    }
+
+    fun setupLauncherFile(): ArduconReleaseFile {
+        val fileName = workshopSetup?.setupLauncherFileName ?: error("Arducon release manifest does not include workshop setup launcher metadata.")
+        return files.firstOrNull { it.kind == "workshop-setup-launcher" && it.fileName == fileName }
+            ?: error("Arducon release manifest does not list workshop setup launcher `$fileName`.")
+    }
+
+    fun workshopSetupToolFiles(): List<ArduconReleaseFile> {
+        return files.filter { it.kind == "workshop-setup-tool" }
     }
 }
 
@@ -40,6 +69,26 @@ data class ArduconBootloaderImage(
     val startAddress: Int,
     val endAddress: Int,
     val bytesInImage: Int,
+)
+
+data class ArduconFirstInstallImage(
+    val fileName: String,
+    val bytesInImage: Int,
+)
+
+data class ArduconWorkshopSetup(
+    val setupHelperFileName: String?,
+    val setupLauncherFileName: String?,
+    val provisioningScriptFileName: String?,
+    val serialValidationScriptFileName: String?,
+    val supportedProgrammers: List<String>,
+    val bootSectionPages: Int?,
+    val fuseBootSize: String?,
+    val fuseCodeSize: String?,
+    val highFuseTarget: String?,
+    val highFuseTargetPreserveEeprom: String?,
+    val extendedFuseBodLevelTarget: String?,
+    val extendedFuseBodLevelDescription: String?,
 )
 
 data class ArduconUpdateSettings(
@@ -67,7 +116,9 @@ object ArduconFirmwareUpdate {
         val root = JsonValue.parse(jsonText.trimStart('\uFEFF')).asObject()
         val update = root.requiredObject("update")
         val bootloader = root.requiredObject("bootloader")
+        val firstInstall = root.optionalObject("firstInstall")
         val firmwareUpdate = root.requiredObject("firmwareUpdate")
+        val workshopSetup = root.optionalObject("workshopSetup")
         val files = root.requiredArray("files").map { item ->
             val file = item.asObject()
             ArduconReleaseFile(
@@ -97,6 +148,28 @@ object ArduconFirmwareUpdate {
                 endAddress = parseIntLiteral(bootloader.requiredString("endAddress")),
                 bytesInImage = bootloader.requiredInt("bytesInImage"),
             ),
+            firstInstall = firstInstall?.let {
+                ArduconFirstInstallImage(
+                    fileName = it.requiredString("fileName"),
+                    bytesInImage = it.requiredInt("bytesInImage"),
+                )
+            },
+            workshopSetup = workshopSetup?.let {
+                ArduconWorkshopSetup(
+                    setupHelperFileName = it.optionalString("setupHelperFileName"),
+                    setupLauncherFileName = it.optionalString("setupLauncherFileName"),
+                    provisioningScriptFileName = it.optionalString("provisioningScriptFileName"),
+                    serialValidationScriptFileName = it.optionalString("serialValidationScriptFileName"),
+                    supportedProgrammers = it.optionalArray("supportedProgrammers")?.map { item -> item.asString() }.orEmpty(),
+                    bootSectionPages = it.optionalInt("bootSectionPages"),
+                    fuseBootSize = it.optionalString("fuseBootSize"),
+                    fuseCodeSize = it.optionalString("fuseCodeSize"),
+                    highFuseTarget = it.optionalString("highFuseTarget"),
+                    highFuseTargetPreserveEeprom = it.optionalString("highFuseTargetPreserveEeprom"),
+                    extendedFuseBodLevelTarget = it.optionalString("extendedFuseBodLevelTarget"),
+                    extendedFuseBodLevelDescription = it.optionalString("extendedFuseBodLevelDescription"),
+                )
+            },
             firmwareUpdate = ArduconUpdateSettings(
                 appBaud = firmwareUpdate.requiredInt("appBaud"),
                 updateBaud = firmwareUpdate.requiredInt("updateBaud"),
@@ -485,6 +558,10 @@ private fun Map<String, JsonValue>.optionalInt(key: String): Int? = this[key]?.a
 
 private fun Map<String, JsonValue>.requiredObject(key: String): Map<String, JsonValue> = required(key).asObject()
 
+private fun Map<String, JsonValue>.optionalObject(key: String): Map<String, JsonValue>? = this[key]?.asObject()
+
 private fun Map<String, JsonValue>.requiredArray(key: String): List<JsonValue> = required(key).asArray()
+
+private fun Map<String, JsonValue>.optionalArray(key: String): List<JsonValue>? = this[key]?.asArray()
 
 private fun Map<String, JsonValue>.required(key: String): JsonValue = this[key] ?: error("Release manifest is missing `$key`.")

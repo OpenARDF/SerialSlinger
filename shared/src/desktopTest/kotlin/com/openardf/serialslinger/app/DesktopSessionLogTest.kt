@@ -181,17 +181,19 @@ class DesktopSessionLogTest {
             clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
         )
 
-        val file = log.beginTemperatureLog()
+        val file = log.beginTemperatureLog("Arducon")
         log.appendTemperatureSample(
+            deviceType = "Arducon",
             timestamp = java.time.LocalDateTime.parse("2026-04-10T14:22:40"),
             temperatureC = 21.5,
             externalBatteryVolts = 12.1,
             internalBatteryVolts = 4.8,
         )
 
+        assertEquals("serialslinger-temperature-arducon-2026-04-10-142233.csv", file.fileName.toString())
         assertEquals(
-            "timestamp,temperature_c,external_battery_v,internal_battery_v\n" +
-                "2026-04-10T14:22:40,21.5,12.1,4.8\n",
+            "device_type,timestamp,temperature_c,external_battery_v,internal_battery_v\n" +
+                "Arducon,2026-04-10T14:22:40,21.5,12.1,4.8\n",
             Files.readString(file),
         )
     }
@@ -204,9 +206,10 @@ class DesktopSessionLogTest {
             clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
         )
 
-        val temperatureFile = log.beginTemperatureLog()
+        val temperatureFile = log.beginTemperatureLog("SignalSlinger")
         val rendered = log.appendPlainSection("User Action", listOf("Clicked Reload SignalSlinger Data."))
         log.appendTemperatureSample(
+            deviceType = "SignalSlinger",
             timestamp = java.time.LocalDateTime.parse("2026-04-10T14:22:40"),
             temperatureC = 21.5,
             externalBatteryVolts = 12.1,
@@ -218,8 +221,8 @@ class DesktopSessionLogTest {
         assertTrue(rendered.contains("[APP] Clicked Reload SignalSlinger Data."))
         assertTrue(Files.readString(sessionFile).contains("[APP] Clicked Reload SignalSlinger Data."))
         assertEquals(
-            "timestamp,temperature_c,external_battery_v,internal_battery_v\n" +
-                "2026-04-10T14:22:40,21.5,12.1,4.8\n",
+            "device_type,timestamp,temperature_c,external_battery_v,internal_battery_v\n" +
+                "SignalSlinger,2026-04-10T14:22:40,21.5,12.1,4.8\n",
             Files.readString(temperatureFile),
         )
     }
@@ -232,14 +235,14 @@ class DesktopSessionLogTest {
             clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
         )
         val directory = log.logDirectory()
-        val temperatureLog = directory.resolve("serialslinger-temperature-2026-04-10-142233.csv")
+        val temperatureLog = directory.resolve("serialslinger-temperature-arducon-2026-04-10-142233.csv")
         Files.writeString(temperatureLog, "temperature")
         Files.writeString(directory.resolve("serialslinger-2026-04-10.log"), "daily")
         Files.writeString(directory.resolve("notes.csv"), "keep")
 
         val logs = log.listTemperatureLogFiles()
 
-        assertEquals(listOf("serialslinger-temperature-2026-04-10-142233.csv"), logs.map { it.name })
+        assertEquals(listOf("serialslinger-temperature-arducon-2026-04-10-142233.csv"), logs.map { it.name })
         assertTrue(log.deleteTemperatureLog(temperatureLog))
         assertFalse(Files.exists(temperatureLog))
         assertTrue(Files.exists(directory.resolve("serialslinger-2026-04-10.log")))

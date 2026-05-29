@@ -7,6 +7,19 @@ data class TimedEventFrequencyVisibility(
     val showFrequencyB: Boolean,
 )
 
+data class ArduconFoxRole(
+    val roleName: String,
+    val numericalDesignator: Int,
+    val morsePatternSent: String,
+    val timing: String,
+    val eventType: EventType,
+) {
+    val commandToken: String
+        get() = numericalDesignator.toString().padStart(2, '0')
+
+    override fun toString(): String = roleName
+}
+
 data class EventProfileWorkflowState(
     val loadedEventType: EventType,
     val loadedFoxRole: FoxRole?,
@@ -18,6 +31,48 @@ data class EventProfileWorkflowState(
 )
 
 object EventProfileSupport {
+    val arduconFoxRoles: List<ArduconFoxRole> = listOf(
+        ArduconFoxRole("Classic Beacon", 0, "MO", "Continuous", EventType.CLASSIC),
+        ArduconFoxRole("Classic Fox 1", 1, "MOE", "1st minute of 5", EventType.CLASSIC),
+        ArduconFoxRole("Classic Fox 2", 2, "MOI", "2nd minute of 5", EventType.CLASSIC),
+        ArduconFoxRole("Classic Fox 3", 3, "MOS", "3rd minute of 5", EventType.CLASSIC),
+        ArduconFoxRole("Classic Fox 4", 4, "MOH", "4th minute of 5", EventType.CLASSIC),
+        ArduconFoxRole("Classic Fox 5", 5, "MO5", "5th minute of 5", EventType.CLASSIC),
+        ArduconFoxRole("Foxoring", 6, "5", "Continuous", EventType.FOXORING),
+        ArduconFoxRole("Spectator", 7, "S", "Continuous", EventType.SPRINT),
+        ArduconFoxRole("Sprint Slow Fox 1", 8, "ME", "1st 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Sprint Slow Fox 2", 9, "MI", "2nd 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Sprint Slow Fox 3", 10, "MS", "3rd 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Sprint Slow Fox 4", 11, "MH", "4th 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Sprint Slow Fox 5", 12, "M5", "5th 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Sprint Fast Fox 1", 13, "OE", "1st 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Sprint Fast Fox 2", 14, "OI", "2nd 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Sprint Fast Fox 3", 15, "OS", "3rd 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Sprint Fast Fox 4", 16, "OH", "4th 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Sprint Fast Fox 5", 17, "O5", "5th 12-seconds of 60", EventType.SPRINT),
+        ArduconFoxRole("Voltage & Temperature", 19, "Volts / Degrees C", "1st 30-seconds of 60", EventType.NONE),
+    )
+
+    fun arduconFoxRoleForDesignator(designator: Int?): ArduconFoxRole? {
+        return arduconFoxRoles.firstOrNull { it.numericalDesignator == designator }
+    }
+
+    fun parseArduconFoxRoleOrNull(raw: String): ArduconFoxRole? {
+        val normalized = raw.trim()
+        if (normalized.isEmpty()) {
+            return null
+        }
+        val numeric = normalized.toIntOrNull()
+            ?: normalized.trimStart('0').ifEmpty { "0" }.toIntOrNull()
+        if (numeric != null) {
+            return arduconFoxRoleForDesignator(numeric)
+        }
+        return arduconFoxRoles.firstOrNull {
+            it.roleName.equals(normalized, ignoreCase = true) ||
+                it.commandToken.equals(normalized, ignoreCase = true)
+        }
+    }
+
     fun selectableEventTypes(): List<EventType> {
         return EventType.entries.filterNot { it == EventType.NONE }
     }

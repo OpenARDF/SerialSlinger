@@ -12,6 +12,13 @@ enum class PortProbeState {
     ERROR,
 }
 
+enum class PortProbeOrder {
+    SIGNALSLINGER_FIRST,
+    ARDUCON_FIRST,
+    SIGNALSLINGER_ONLY,
+    ARDUCON_ONLY,
+}
+
 data class SignalSlingerPortProbe(
     val portInfo: DesktopSerialPortInfo,
     val state: PortProbeState,
@@ -59,10 +66,24 @@ object SignalSlingerPortDiscovery {
     fun probePort(
         portInfo: DesktopSerialPortInfo,
         retryOnNoReply: Boolean = false,
+        probeOrder: PortProbeOrder = PortProbeOrder.SIGNALSLINGER_FIRST,
         transportFactory: (DesktopSerialPortInfo) -> DeviceTransport = ::defaultTransportFor,
     ): SignalSlingerPortProbe {
         repeat(probeRetryCount) { attempt ->
             try {
+                if (probeOrder == PortProbeOrder.ARDUCON_FIRST || probeOrder == PortProbeOrder.ARDUCON_ONLY) {
+                    val arduconResult = probeArduconPort(portInfo)
+                    if (arduconResult.state == PortProbeState.DETECTED) {
+                        return arduconResult
+                    }
+                    if (probeOrder == PortProbeOrder.ARDUCON_ONLY) {
+                        if (shouldRetryProbeResult(arduconResult, retryOnNoReply = true, attemptIndex = attempt, maxAttempts = probeRetryCount)) {
+                            Thread.sleep(probeRetryDelayMs)
+                            return@repeat
+                        }
+                        return arduconResult
+                    }
+                }
                 val transport = transportFactory(portInfo)
                 var result: SignalSlingerPortProbe
                 transport.connect()
@@ -74,9 +95,14 @@ object SignalSlingerPortDiscovery {
                 } finally {
                     transport.disconnect()
                 }
-                val arduconResult = probeArduconPort(portInfo)
-                if (arduconResult.state == PortProbeState.DETECTED) {
-                    return arduconResult
+                if (probeOrder == PortProbeOrder.SIGNALSLINGER_ONLY) {
+                    return result
+                }
+                if (probeOrder == PortProbeOrder.SIGNALSLINGER_FIRST) {
+                    val arduconResult = probeArduconPort(portInfo)
+                    if (arduconResult.state == PortProbeState.DETECTED) {
+                        return arduconResult
+                    }
                 }
                 if (!shouldRetryProbeResult(result, retryOnNoReply, attempt, probeRetryCount)) {
                     return result
@@ -140,13 +166,14 @@ object SignalSlingerPortDiscovery {
 
     fun findFirstDetectedPort(
         ports: List<DesktopSerialPortInfo>,
+        probeOrder: PortProbeOrder = PortProbeOrder.SIGNALSLINGER_FIRST,
         transportFactory: (DesktopSerialPortInfo) -> DeviceTransport = ::defaultTransportFor,
         onProbeComplete: ((SignalSlingerPortProbe) -> Unit)? = null,
     ): AutoDetectScanResult {
         val probes = mutableListOf<SignalSlingerPortProbe>()
 
         for (portInfo in ports) {
-            val result = probePort(portInfo, transportFactory = transportFactory)
+            val result = probePort(portInfo, probeOrder = probeOrder, transportFactory = transportFactory)
             probes += result
             onProbeComplete?.invoke(result)
             if (result.state == PortProbeState.DETECTED) {

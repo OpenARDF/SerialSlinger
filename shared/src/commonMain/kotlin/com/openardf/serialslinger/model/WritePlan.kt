@@ -4,6 +4,7 @@ enum class SettingKey {
     STATION_ID,
     EVENT_TYPE,
     FOX_ROLE,
+    ARDUCON_FOX_ROLE,
     PATTERN_TEXT,
     ID_CODE_SPEED_WPM,
     PATTERN_CODE_SPEED_WPM,
@@ -19,6 +20,9 @@ enum class SettingKey {
     LOW_BATTERY_THRESHOLD_VOLTS,
     EXTERNAL_BATTERY_CONTROL_MODE,
     TRANSMISSIONS_ENABLED,
+    DTMF_PASSWORD,
+    AM_TONE_FREQUENCY,
+    PTT_RESET_SETTING,
 }
 
 data class SettingChange(
@@ -45,6 +49,7 @@ object WritePlanner {
             addIfChanged(SettingKey.STATION_ID, 10, original.stationId, edited.stationId, true, forceWriteKeys)
             addIfChanged(SettingKey.EVENT_TYPE, 20, original.eventType, edited.eventType, true, forceWriteKeys)
             addIfChanged(SettingKey.FOX_ROLE, 30, original.foxRole, edited.foxRole, true, forceWriteKeys)
+            addIfChanged(SettingKey.ARDUCON_FOX_ROLE, 35, original.arduconFoxRoleCode, edited.arduconFoxRoleCode, true, forceWriteKeys)
             addIfChanged(SettingKey.PATTERN_TEXT, 40, original.patternText, edited.patternText, true, forceWriteKeys)
             addIfChanged(SettingKey.ID_CODE_SPEED_WPM, 50, original.idCodeSpeedWpm, edited.idCodeSpeedWpm, true, forceWriteKeys)
             addIfChanged(SettingKey.PATTERN_CODE_SPEED_WPM, 60, original.patternCodeSpeedWpm, edited.patternCodeSpeedWpm, true, forceWriteKeys)
@@ -60,6 +65,9 @@ object WritePlanner {
             addIfChanged(SettingKey.LOW_BATTERY_THRESHOLD_VOLTS, 160, original.lowBatteryThresholdVolts, edited.lowBatteryThresholdVolts, true, forceWriteKeys)
             addIfChanged(SettingKey.EXTERNAL_BATTERY_CONTROL_MODE, 170, original.externalBatteryControlMode, edited.externalBatteryControlMode, true, forceWriteKeys)
             addIfChanged(SettingKey.TRANSMISSIONS_ENABLED, 180, original.transmissionsEnabled, edited.transmissionsEnabled, true, forceWriteKeys)
+            addIfChanged(SettingKey.DTMF_PASSWORD, 190, original.dtmfPassword, edited.dtmfPassword, true, forceWriteKeys)
+            addIfChanged(SettingKey.AM_TONE_FREQUENCY, 200, original.amToneFrequency, edited.amToneFrequency, true, forceWriteKeys)
+            addIfChanged(SettingKey.PTT_RESET_SETTING, 210, original.pttResetSetting, edited.pttResetSetting, true, forceWriteKeys)
             addFinishWriteNeededToPreserveAbsoluteFinishAfterStartChange(original, edited)
         }.sortedBy { it.writeOrder }
 

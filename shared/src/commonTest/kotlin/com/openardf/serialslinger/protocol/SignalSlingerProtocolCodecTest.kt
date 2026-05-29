@@ -5,6 +5,7 @@ import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
+import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.WritePlanner
 import com.openardf.serialslinger.platform.PlatformDateTimeFields
 import com.openardf.serialslinger.platform.platformEpochSecondsFromLocalDateTimeFields
@@ -172,6 +173,23 @@ class SignalSlingerProtocolCodecTest {
         assertEquals("NZ0I", stationUpdate?.settingsPatch?.stationId)
         assertEquals(20, idSpeedUpdate?.settingsPatch?.idCodeSpeedWpm)
         assertEquals(34.0, temperatureUpdate?.deviceStatusPatch?.temperatureC)
+    }
+
+    @Test
+    fun parsesArduconUtilityTemperatureReportIntoDeviceStatus() {
+        val currentUpdate = SignalSlingerProtocolCodec.parseReportLine("T=41.7C")
+        val maximumUpdate = SignalSlingerProtocolCodec.parseReportLine("Max=41.7C")
+        val maximumEverUpdate = SignalSlingerProtocolCodec.parseReportLine("Max Ever=42.5C")
+        val maximumEverResetUpdate = SignalSlingerProtocolCodec.parseReportLine("Max Ever Reset=41.7C")
+        val thresholdUpdate = SignalSlingerProtocolCodec.parseReportLine("Thermal Shutdown=50C")
+        val spacedThresholdUpdate = SignalSlingerProtocolCodec.parseReportLine("Thermal Shutdown= 50C")
+
+        assertEquals(41.7, currentUpdate?.deviceStatusPatch?.temperatureC)
+        assertEquals(41.7, maximumUpdate?.deviceStatusPatch?.maximumTemperatureC)
+        assertEquals(42.5, maximumEverUpdate?.deviceStatusPatch?.maximumEverTemperatureC)
+        assertEquals(41.7, maximumEverResetUpdate?.deviceStatusPatch?.maximumEverTemperatureC)
+        assertEquals(50.0, thresholdUpdate?.deviceStatusPatch?.thermalShutdownThresholdC)
+        assertEquals(50.0, spacedThresholdUpdate?.deviceStatusPatch?.thermalShutdownThresholdC)
     }
 
     @Test
@@ -361,6 +379,124 @@ class SignalSlingerProtocolCodecTest {
             ),
             commands,
         )
+    }
+
+    @Test
+    fun encodesArduconIdSpeedWithSetCommand() {
+        val original = sampleSettings().copy(idCodeSpeedWpm = 15)
+        val edited = original.copy(idCodeSpeedWpm = 20)
+
+        val writePlan = WritePlanner.create(original, edited)
+        val commands = SignalSlingerProtocolCodec.encodeWritePlan(
+            writePlan = writePlan,
+            editedSettings = edited,
+            deviceInfo = DeviceInfo(productName = "Arducon"),
+        )
+
+        assertEquals(listOf("SET S 20"), commands)
+    }
+
+    @Test
+    fun parsesArduconFoxReadback() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("Fox=1")
+
+        assertNotNull(update)
+        assertEquals(1, update.settingsPatch?.arduconFoxRoleCode)
+        assertEquals(EventType.CLASSIC, update.settingsPatch?.eventType)
+        assertEquals("MOE", update.settingsPatch?.patternText)
+    }
+
+    @Test
+    fun parsesArduconVoltageAndTemperatureFoxReadback() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("Fox=19")
+
+        assertNotNull(update)
+        assertEquals(19, update.settingsPatch?.arduconFoxRoleCode)
+        assertEquals(EventType.NONE, update.settingsPatch?.eventType)
+        assertEquals("Volts / Degrees C", update.settingsPatch?.patternText)
+    }
+
+    @Test
+    fun encodesArduconFoxRoleCommandsWithTwoDigitDesignator() {
+        val original = sampleSettings().copy(arduconFoxRoleCode = 1)
+        val edited = original.copy(arduconFoxRoleCode = 6)
+
+        val writePlan = WritePlanner.create(original, edited)
+        val commands = SignalSlingerProtocolCodec.encodeWritePlan(
+            writePlan = writePlan,
+            editedSettings = edited,
+            deviceInfo = DeviceInfo(productName = "Arducon"),
+        )
+
+        assertEquals(listOf("FOX 06"), commands)
+    }
+
+    @Test
+    fun encodesForcedArduconVoltageAndTemperatureFoxRoleCommand() {
+        val original = sampleSettings().copy(arduconFoxRoleCode = 19)
+        val edited = original.copy(arduconFoxRoleCode = 19)
+
+        val writePlan = WritePlanner.create(original, edited, forceWriteKeys = setOf(SettingKey.ARDUCON_FOX_ROLE))
+        val commands = SignalSlingerProtocolCodec.encodeWritePlan(
+            writePlan = writePlan,
+            editedSettings = edited,
+            deviceInfo = DeviceInfo(productName = "Arducon"),
+        )
+
+        assertEquals(listOf("FOX 19"), commands)
+    }
+
+    @Test
+    fun parsesArduconUtilityAndAdvancedSettingsReadbacks() {
+        val voltageUpdate = SignalSlingerProtocolCodec.parseReportLine("V=11.07V")
+        val passwordUpdate = SignalSlingerProtocolCodec.parseReportLine("PWD=1357")
+        val amUpdate = SignalSlingerProtocolCodec.parseReportLine("AM:3")
+        val pttUpdate = SignalSlingerProtocolCodec.parseReportLine("DRP:1")
+        val invalidPttUpdate = SignalSlingerProtocolCodec.parseReportLine("DRP:2")
+
+        assertEquals(11.07, voltageUpdate?.deviceStatusPatch?.externalBatteryVolts)
+        assertEquals("1357", passwordUpdate?.settingsPatch?.dtmfPassword)
+        assertEquals(3, amUpdate?.settingsPatch?.amToneFrequency)
+        assertEquals(1, pttUpdate?.settingsPatch?.pttResetSetting)
+        assertNull(invalidPttUpdate)
+    }
+
+    @Test
+    fun encodesArduconAdvancedSettingsCommands() {
+        val original = sampleSettings().copy(
+            dtmfPassword = "1357",
+            amToneFrequency = 0,
+            pttResetSetting = 0,
+        )
+        val edited = original.copy(
+            dtmfPassword = "2468",
+            amToneFrequency = 3,
+            pttResetSetting = 1,
+        )
+
+        val writePlan = WritePlanner.create(original, edited)
+        val commands = SignalSlingerProtocolCodec.encodeWritePlan(
+            writePlan = writePlan,
+            editedSettings = edited,
+            deviceInfo = DeviceInfo(productName = "Arducon"),
+        )
+
+        assertEquals(listOf("PWD 2468", "AM 3", "SET P 1"), commands)
+    }
+
+    @Test
+    fun rejectsInvalidArduconDtmfPasswordCommands() {
+        val original = sampleSettings().copy(dtmfPassword = "1357")
+        val edited = original.copy(dtmfPassword = "12A4")
+        val writePlan = WritePlanner.create(original, edited)
+
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            SignalSlingerProtocolCodec.encodeWritePlan(
+                writePlan = writePlan,
+                editedSettings = edited,
+                deviceInfo = DeviceInfo(productName = "Arducon"),
+            )
+        }
     }
 
     @Test

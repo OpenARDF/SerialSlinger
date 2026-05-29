@@ -63,6 +63,12 @@ data class DeviceCapabilities(
     val supportsExtendedTemperatureReadback: Boolean = false,
     val supportsTemperatureLogging: Boolean = false,
     val supportsStationIdEditing: Boolean = true,
+    val supportsEventTypeEditing: Boolean = true,
+    val supportsFoxRoleEditing: Boolean = true,
+    val supportsIdCodeSpeedEditing: Boolean = true,
+    val supportsDtmfPasswordEditing: Boolean = false,
+    val supportsAmToneEditing: Boolean = false,
+    val supportsPttResetEditing: Boolean = false,
     val supportsExternalBatteryControl: Boolean = false,
     val supportsPatternEditing: Boolean = false,
     val supportsScheduling: Boolean = false,
@@ -106,6 +112,7 @@ data class DeviceSettings(
     val stationId: String,
     val eventType: EventType,
     val foxRole: FoxRole? = null,
+    val arduconFoxRoleCode: Int? = null,
     val patternText: String?,
     val idCodeSpeedWpm: Int,
     val patternCodeSpeedWpm: Int,
@@ -121,6 +128,9 @@ data class DeviceSettings(
     val lowBatteryThresholdVolts: Double?,
     val externalBatteryControlMode: ExternalBatteryControlMode?,
     val transmissionsEnabled: Boolean,
+    val dtmfPassword: String? = null,
+    val amToneFrequency: Int? = null,
+    val pttResetSetting: Int? = null,
 ) {
     companion object {
         fun empty(): DeviceSettings {
@@ -128,6 +138,7 @@ data class DeviceSettings(
                 stationId = "",
                 eventType = EventType.NONE,
                 foxRole = null,
+                arduconFoxRoleCode = null,
                 patternText = null,
                 idCodeSpeedWpm = 0,
                 patternCodeSpeedWpm = 0,
@@ -143,6 +154,9 @@ data class DeviceSettings(
                 lowBatteryThresholdVolts = null,
                 externalBatteryControlMode = null,
                 transmissionsEnabled = true,
+                dtmfPassword = null,
+                amToneFrequency = null,
+                pttResetSetting = null,
             )
         }
     }
@@ -158,6 +172,18 @@ data class DeviceSnapshot(
 )
 
 fun DeviceSnapshot.hasWallClockTimeSet(): Boolean = settings.hasWallClockTimeSet()
+
+fun isValidDtmfPassword(value: String): Boolean {
+    return value.length in 4..8 && value.all { it.isDigit() }
+}
+
+fun normalizeDtmfPasswordForWrite(value: String?): String? {
+    val normalized = value?.trim() ?: return null
+    require(isValidDtmfPassword(normalized)) {
+        "DTMF Password must be 4 to 8 numeric characters."
+    }
+    return normalized
+}
 
 enum class ValidationState {
     VALID,
@@ -185,6 +211,7 @@ data class EditableDeviceSettings(
     val stationId: SettingsField<String>,
     val eventType: SettingsField<EventType>,
     val foxRole: SettingsField<FoxRole?>,
+    val arduconFoxRoleCode: SettingsField<Int?> = SettingsField("arduconFoxRoleCode", "Arducon Fox Role", null, null),
     val patternText: SettingsField<String?>,
     val idCodeSpeedWpm: SettingsField<Int>,
     val patternCodeSpeedWpm: SettingsField<Int>,
@@ -200,11 +227,15 @@ data class EditableDeviceSettings(
     val lowBatteryThresholdVolts: SettingsField<Double?>,
     val externalBatteryControlMode: SettingsField<ExternalBatteryControlMode?>,
     val transmissionsEnabled: SettingsField<Boolean>,
+    val dtmfPassword: SettingsField<String?> = SettingsField("dtmfPassword", "DTMF Password", null, null),
+    val amToneFrequency: SettingsField<Int?> = SettingsField("amToneFrequency", "AM Tone", null, null),
+    val pttResetSetting: SettingsField<Int?> = SettingsField("pttResetSetting", "PTT Reset", null, null),
 ) {
     val fields: List<SettingsField<*>> = listOf(
         stationId,
         eventType,
         foxRole,
+        arduconFoxRoleCode,
         patternText,
         idCodeSpeedWpm,
         patternCodeSpeedWpm,
@@ -220,6 +251,9 @@ data class EditableDeviceSettings(
         lowBatteryThresholdVolts,
         externalBatteryControlMode,
         transmissionsEnabled,
+        dtmfPassword,
+        amToneFrequency,
+        pttResetSetting,
     )
 
     val hasDirtyFields: Boolean
@@ -237,11 +271,13 @@ data class EditableDeviceSettings(
         }
         val normalizedTransmissionsEnabled =
             normalizedExternalBatteryControlMode != ExternalBatteryControlMode.CHARGE_ONLY
+        val normalizedDtmfPassword = normalizeDtmfPasswordForWrite(dtmfPassword.editedValue)
 
         return DeviceSettings(
             stationId = stationId.editedValue,
             eventType = eventType.editedValue,
             foxRole = foxRole.editedValue,
+            arduconFoxRoleCode = arduconFoxRoleCode.editedValue,
             patternText = patternText.editedValue,
             idCodeSpeedWpm = idCodeSpeedWpm.editedValue,
             patternCodeSpeedWpm = patternCodeSpeedWpm.editedValue,
@@ -257,6 +293,9 @@ data class EditableDeviceSettings(
             lowBatteryThresholdVolts = lowBatteryThresholdVolts.editedValue,
             externalBatteryControlMode = normalizedExternalBatteryControlMode,
             transmissionsEnabled = normalizedTransmissionsEnabled,
+            dtmfPassword = normalizedDtmfPassword,
+            amToneFrequency = amToneFrequency.editedValue,
+            pttResetSetting = pttResetSetting.editedValue,
         )
     }
 
@@ -269,7 +308,14 @@ data class EditableDeviceSettings(
     private fun capabilityAllows(fieldKey: String, capabilities: DeviceCapabilities): Boolean {
         return when (fieldKey) {
             "stationId" -> capabilities.supportsStationIdEditing
-            "patternText", "idCodeSpeedWpm", "patternCodeSpeedWpm" -> capabilities.supportsPatternEditing
+            "eventType" -> capabilities.supportsEventTypeEditing
+            "foxRole" -> capabilities.supportsFoxRoleEditing
+            "arduconFoxRoleCode" -> capabilities.supportsFoxRoleEditing
+            "idCodeSpeedWpm" -> capabilities.supportsIdCodeSpeedEditing
+            "dtmfPassword" -> capabilities.supportsDtmfPasswordEditing
+            "amToneFrequency" -> capabilities.supportsAmToneEditing
+            "pttResetSetting" -> capabilities.supportsPttResetEditing
+            "patternText", "patternCodeSpeedWpm" -> capabilities.supportsPatternEditing
             "defaultFrequencyHz", "lowFrequencyHz", "mediumFrequencyHz", "highFrequencyHz", "beaconFrequencyHz" -> capabilities.supportsFrequencyProfiles
             "lowBatteryThresholdVolts", "externalBatteryControlMode" -> capabilities.supportsExternalBatteryControl
             "currentTimeCompact", "startTimeCompact", "finishTimeCompact" -> capabilities.supportsScheduling
@@ -284,6 +330,7 @@ data class EditableDeviceSettings(
                 stationId = SettingsField("stationId", "Station ID", settings.stationId, settings.stationId),
                 eventType = SettingsField("eventType", "Event Type", settings.eventType, settings.eventType),
                 foxRole = SettingsField("foxRole", "Fox Role (FOX)", settings.foxRole, settings.foxRole),
+                arduconFoxRoleCode = SettingsField("arduconFoxRoleCode", "Arducon Fox Role", settings.arduconFoxRoleCode, settings.arduconFoxRoleCode),
                 patternText = SettingsField("patternText", "Pattern Text", settings.patternText, settings.patternText),
                 idCodeSpeedWpm = SettingsField("idCodeSpeedWpm", "ID Speed", settings.idCodeSpeedWpm, settings.idCodeSpeedWpm),
                 patternCodeSpeedWpm = SettingsField("patternCodeSpeedWpm", "Pattern Speed", settings.patternCodeSpeedWpm, settings.patternCodeSpeedWpm),
@@ -319,6 +366,9 @@ data class EditableDeviceSettings(
                     settings.transmissionsEnabled,
                     settings.transmissionsEnabled,
                 ),
+                dtmfPassword = SettingsField("dtmfPassword", "DTMF Password", settings.dtmfPassword, settings.dtmfPassword),
+                amToneFrequency = SettingsField("amToneFrequency", "AM Tone", settings.amToneFrequency, settings.amToneFrequency),
+                pttResetSetting = SettingsField("pttResetSetting", "PTT Reset", settings.pttResetSetting, settings.pttResetSetting),
             )
         }
     }

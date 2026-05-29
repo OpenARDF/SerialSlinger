@@ -1,6 +1,7 @@
 package com.openardf.serialslinger.session
 
 import com.openardf.serialslinger.model.ConnectionState
+import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.EditableDeviceSettings
 import com.openardf.serialslinger.model.EventType
@@ -98,18 +99,22 @@ class DeviceSessionControllerTest {
                     "* INF proto=stk500v1",
                 ),
                 "ID" to listOf("ID: NZ0I"),
+                "FOX" to listOf("Fox=1"),
                 "CLK T" to listOf("Epoch:1779988193"),
                 "CLK S" to listOf("Start:0"),
                 "CLK F" to listOf("Finish:0"),
                 "UTI" to listOf("T=34C", "V=11.31V"),
                 "SET S" to listOf("ID: 20 wpm"),
+                "PWD" to listOf("PWD=1357"),
+                "AM" to listOf("AM:0"),
+                "SET P" to listOf("DRP:0"),
             ),
         )
 
         val result = DeviceSessionController.connectAndLoad(transport)
 
         assertEquals(
-            listOf("VER", "INF", "ID", "CLK T", "CLK S", "CLK F", "UTI", "SET S", "INF"),
+            listOf("VER", "INF", "ID", "FOX", "CLK T", "CLK S", "CLK F", "UTI", "SET S", "PWD", "AM", "SET P", "INF"),
             result.commandsSent,
         )
         val snapshot = assertNotNull(result.state.snapshot)
@@ -117,15 +122,27 @@ class DeviceSessionControllerTest {
         assertEquals("1.0.1", snapshot.info.softwareVersion)
         assertEquals("ATmega328P-16", snapshot.info.hardwareBuild)
         assertEquals("NZ0I", snapshot.settings.stationId)
+        assertEquals(1, snapshot.settings.arduconFoxRoleCode)
+        assertEquals(EventType.CLASSIC, snapshot.settings.eventType)
+        assertEquals("MOE", snapshot.settings.patternText)
         assertEquals(20, snapshot.settings.idCodeSpeedWpm)
+        assertEquals("1357", snapshot.settings.dtmfPassword)
+        assertEquals(0, snapshot.settings.amToneFrequency)
+        assertEquals(0, snapshot.settings.pttResetSetting)
         assertEquals(34.0, snapshot.status.temperatureC)
+        assertEquals(11.31, snapshot.status.externalBatteryVolts)
         assertTrue(snapshot.capabilities.supportsFirmwareUpdate)
         assertTrue(snapshot.capabilities.supportsStationIdEditing)
+        assertFalse(snapshot.capabilities.supportsEventTypeEditing)
+        assertTrue(snapshot.capabilities.supportsFoxRoleEditing)
+        assertTrue(snapshot.capabilities.supportsIdCodeSpeedEditing)
         assertTrue(snapshot.capabilities.supportsScheduling)
         assertFalse(snapshot.capabilities.supportsDaysToRun)
         assertFalse(snapshot.capabilities.supportsFrequencyProfiles)
         assertTrue(assertNotNull(result.state.editableSettings).writableVisibleFields(snapshot.capabilities).any { it.key == "stationId" })
-        assertFalse(assertNotNull(result.state.editableSettings).writableVisibleFields(snapshot.capabilities).any { it.key == "idCodeSpeedWpm" })
+        assertFalse(assertNotNull(result.state.editableSettings).writableVisibleFields(snapshot.capabilities).any { it.key == "eventType" })
+        assertTrue(assertNotNull(result.state.editableSettings).writableVisibleFields(snapshot.capabilities).any { it.key == "foxRole" })
+        assertTrue(assertNotNull(result.state.editableSettings).writableVisibleFields(snapshot.capabilities).any { it.key == "idCodeSpeedWpm" })
     }
 
     @Test
@@ -289,6 +306,41 @@ class DeviceSessionControllerTest {
         assertEquals(emptyList(), result.state.pendingSubmitCommands)
         assertEquals(result.commandsSent.size + result.linesReceived.size, result.submitTraceEntries.size)
         assertEquals(result.readbackCommandsSent.size + result.readbackLinesReceived.size, result.readbackTraceEntries.size)
+    }
+
+    @Test
+    fun submitEditsWritesAndVerifiesArduconDtmfPassword() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "PWD 2468" to listOf("PWD=2468"),
+                "PWD" to listOf("PWD=2468"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(FakeDeviceTransport(), sampleSettings().copy(dtmfPassword = "1357"))
+        val state = connected.state.copy(
+            snapshot = assertNotNull(connected.state.snapshot).copy(info = DeviceInfo(productName = "Arducon")),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(state.snapshot).settings).copy(
+            dtmfPassword = SettingsField("dtmfPassword", "DTMF Password", "1357", "2468"),
+        )
+
+        val result = DeviceSessionController.submitEdits(state, editable, transport)
+
+        assertEquals(listOf("PWD 2468"), result.commandsSent)
+        assertEquals(listOf("PWD"), result.readbackCommandsSent)
+        assertEquals(listOf("PWD 2468", "PWD"), transport.sentCommands)
+        assertEquals("2468", result.state.snapshot?.settings?.dtmfPassword)
+        assertEquals(
+            SettingVerification(
+                fieldKey = SettingKey.DTMF_PASSWORD,
+                expectedValue = "2468",
+                actualValue = "2468",
+                observedInReadback = true,
+                verified = true,
+            ),
+            result.verifications.single(),
+        )
     }
 
     @Test

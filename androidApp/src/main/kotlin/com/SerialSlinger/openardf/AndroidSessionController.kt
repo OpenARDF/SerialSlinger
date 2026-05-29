@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.openardf.serialslinger.model.DeviceSnapshot
+import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.EditableDeviceSettings
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
@@ -497,8 +498,8 @@ object AndroidSessionController {
         val templateSettings = requireNotNull(clonePreflight.templateSettings)
 
         synchronized(this) {
-            latestSubmitSummary = "Submitting Clone to attached SignalSlinger..."
-            statusText = "Submitting Clone to attached SignalSlinger..."
+            latestSubmitSummary = "Submitting Clone to attached device..."
+            statusText = "Submitting Clone to attached device..."
             statusIsError = false
             markScheduleDerivedDataPendingLocked()
         }
@@ -512,12 +513,12 @@ object AndroidSessionController {
                 requestedDeviceName = requestedDeviceName,
                 requestedTarget = requestedTarget,
                 allowUsbAutoDetect = false,
-                missingMessage = "SignalSlinger is no longer connected.",
+                missingMessage = "Device is no longer connected.",
             ) { target, transport ->
                 resolvedTarget = target
                 val targetRefresh = DeviceSessionController.refreshFromDevice(sessionState, transport, startEditing = true)
                 require(hasSignalSlingerReportLine(targetRefresh.linesReceived)) {
-                    "The attached SignalSlinger did not respond. Check the configuration cable and try again."
+                    "The attached device did not respond. Check the configuration cable and try again."
                 }
                 clearFirmwareCloneBufferedFragments(transport)
                 val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
@@ -528,12 +529,61 @@ object AndroidSessionController {
                         previousPhaseErrorMillis = null,
                         loadedPhaseErrorMillis = null,
                     )
-                val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
+                val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings, targetSnapshot.capabilities)
                 val validated = editable.toValidatedDeviceSettings()
+                if (targetSnapshot.info.productName.equals("Arducon", ignoreCase = true)) {
+                    val submitResult = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
+                    cloneFailureTraceEntries = targetRefresh.traceEntries + submitResult.submitTraceEntries + submitResult.readbackTraceEntries
+                    val refreshed = DeviceSessionController.refreshFromDevice(submitResult.state, transport, startEditing = true)
+                    cloneFailureTraceEntries = cloneFailureTraceEntries + refreshed.traceEntries
+                    require(hasSignalSlingerReportLine(refreshed.linesReceived)) {
+                        "The attached device did not respond during clone verification. Check the configuration cable and try again."
+                    }
+                    val clockSample = postLoadClockSample(transport, refreshed)
+                    val finalRefresh = clockSample?.first ?: refreshed
+                    val clockAnchor = clockSample?.second
+                    val syncResult =
+                        if (clockAnchor?.phaseErrorMillis?.let { abs(it) > CLOCK_PHASE_WARNING_THRESHOLD_MILLIS } == true) {
+                            performAlignedTimeSync(
+                                transport = transport,
+                                state = finalRefresh.state,
+                                snapshot = requireNotNull(finalRefresh.state.snapshot),
+                            )
+                        } else {
+                            null
+                        }
+                    val finalState = syncResult?.finalAttempt?.state ?: finalRefresh.state
+                    val finalPhaseErrorMillis = syncResult?.finalAttempt?.phaseErrorMillis ?: clockAnchor?.phaseErrorMillis
+                    val syncTraceEntries = syncResult?.let(::buildSyncTraceEntries).orEmpty()
+                    return@runWithResolvedTransport CloneSubmitResult(
+                        state = finalState,
+                        cloneProtocol = "Arducon serial commands",
+                        writeCommandCount = submitResult.commandsSent.size,
+                        writeResponseLineCount = submitResult.linesReceived.size + submitResult.readbackLinesReceived.size,
+                        refreshCommandCount = refreshed.commandsSent.size + (clockSample?.first?.commandsSent?.size ?: 0),
+                        refreshResponseLineCount = refreshed.linesReceived.size + (clockSample?.first?.linesReceived?.size ?: 0),
+                        syncAttemptCount = syncResult?.attempts?.size ?: 0,
+                        syncSucceeded = syncResult?.succeeded ?: true,
+                        traceEntries =
+                            buildList {
+                                addAll(targetRefresh.traceEntries)
+                                addAll(submitResult.submitTraceEntries)
+                                addAll(submitResult.readbackTraceEntries)
+                                addAll(refreshed.traceEntries)
+                                clockSample?.first?.let { addAll(it.traceEntries) }
+                                addAll(syncTraceEntries)
+                            },
+                        clockPhaseErrorMillis = finalPhaseErrorMillis,
+                        clockReferenceTime = clockAnchor?.referenceTime,
+                        possibleNewDeviceReasons = possibleNewDeviceReasons,
+                    )
+                }
                 val firmwareCloneResult =
                     FirmwareCloneSession.cloneFromTemplate(
                         transport = transport,
                         templateSettings = validated,
+                        includeDaysToRun = targetSnapshot.capabilities.supportsDaysToRun,
+                        includeFrequencyProfiles = targetSnapshot.capabilities.supportsFrequencyProfiles,
                         currentTimeCompact = ::nextFirmwareCloneClockTimeCompact,
                         afterPreCloneStop = { waitForFirmwareClonePreCloneStop(transport) },
                         afterStartAttempt = ::waitForFirmwareCloneStartRetry,
@@ -544,7 +594,7 @@ object AndroidSessionController {
                     val refreshed = DeviceSessionController.refreshFromDevice(targetRefresh.state, transport, startEditing = true)
                     cloneFailureTraceEntries = cloneFailureTraceEntries + refreshed.traceEntries
                     require(hasSignalSlingerReportLine(refreshed.linesReceived)) {
-                        "The attached SignalSlinger did not respond during clone verification. Check the configuration cable and try again."
+                        "The attached device did not respond during clone verification. Check the configuration cable and try again."
                     }
                     val clockSample = postLoadClockSample(transport, refreshed)
                     val finalRefresh = clockSample?.first ?: refreshed
@@ -1323,7 +1373,7 @@ object AndroidSessionController {
                     rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
                     draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
                     draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
                     draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -1441,7 +1491,7 @@ object AndroidSessionController {
                     rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
                     draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
                     draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
                     draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -1740,14 +1790,6 @@ object AndroidSessionController {
         source: String = "ui",
         onComplete: ((Result<Unit>) -> Unit)? = null,
     ) {
-        val validatedThreshold = try {
-            ThermalShutdownSupport.validateCelsius(thresholdCelsius)
-        } catch (error: IllegalArgumentException) {
-            emitCommandLog("set-thermal-threshold", source, success = false, summary = error.message.orEmpty())
-            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
-            return
-        }
-
         val sessionState = synchronized(this) { latestSessionViewState?.state }
         val snapshot = sessionState?.snapshot
         if (sessionState == null || snapshot == null) {
@@ -1758,6 +1800,13 @@ object AndroidSessionController {
         }
         if (!snapshot.capabilities.supportsExtendedTemperatureReadback) {
             val error = IllegalStateException("Thermal Shutdown Threshold is not supported by the loaded snapshot.")
+            emitCommandLog("set-thermal-threshold", source, success = false, summary = error.message.orEmpty())
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+        val validatedThreshold = try {
+            ThermalShutdownSupport.validateCelsius(thresholdCelsius, productName = snapshot.info.productName)
+        } catch (error: IllegalArgumentException) {
             emitCommandLog("set-thermal-threshold", source, success = false, summary = error.message.orEmpty())
             onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
             return
@@ -1779,7 +1828,10 @@ object AndroidSessionController {
                 allowUsbAutoDetect = false,
                 missingMessage = "SignalSlinger is no longer connected.",
             ) { target, transport ->
-                val command = ThermalShutdownSupport.commandForCelsius(validatedThreshold)
+                val command = ThermalShutdownSupport.commandForCelsius(
+                    validatedThreshold,
+                    productName = snapshot.info.productName,
+                )
                 val sentAtMs = System.currentTimeMillis()
                 transport.sendCommands(listOf(command))
                 val responseLines = transport.readAvailableLines()
@@ -1901,7 +1953,7 @@ object AndroidSessionController {
                     }
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
                     draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
                     draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
                     draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -2155,7 +2207,7 @@ object AndroidSessionController {
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
                     draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
                     draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
                     draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -2272,7 +2324,7 @@ object AndroidSessionController {
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
                     draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
                     draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
                     draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -2422,7 +2474,7 @@ object AndroidSessionController {
                     rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
                     draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
                     draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
                     draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -2572,7 +2624,7 @@ object AndroidSessionController {
                     rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
                     draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
                     draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
                     draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -2639,13 +2691,28 @@ object AndroidSessionController {
             return
         }
 
+        val parsedArduconFoxRole =
+            if (snapshot.info.productName.equals("Arducon", ignoreCase = true)) {
+                EventProfileSupport.parseArduconFoxRoleOrNull(foxRoleInput)
+            } else {
+                null
+            }
         val parsedFoxRole =
-            parseFoxRoleInput(
-                raw = foxRoleInput,
-                eventType = snapshot.settings.eventType,
-            )
-        if (parsedFoxRole == null) {
-            val allowed = foxRoleOptions(snapshot.settings.eventType).joinToString(", ") { it.uiLabel }
+            if (parsedArduconFoxRole == null) {
+                parseFoxRoleInput(
+                    raw = foxRoleInput,
+                    eventType = snapshot.settings.eventType,
+                )
+            } else {
+                null
+            }
+        if (parsedArduconFoxRole == null && parsedFoxRole == null) {
+            val allowed =
+                if (snapshot.info.productName.equals("Arducon", ignoreCase = true)) {
+                    EventProfileSupport.arduconFoxRoles.joinToString(", ") { it.roleName }
+                } else {
+                    foxRoleOptions(snapshot.settings.eventType).joinToString(", ") { it.uiLabel }
+                }
             val error = IllegalArgumentException("Unsupported Fox Role for ${snapshot.settings.eventType}: `$foxRoleInput`. Try one of: $allowed")
             synchronized(this) {
                 latestSubmitSummary = "Submit failed.\n${error.message}"
@@ -2659,11 +2726,12 @@ object AndroidSessionController {
             }
             return
         }
+        val parsedFoxRoleLabel = parsedArduconFoxRole?.roleName ?: parsedFoxRole?.uiLabel.orEmpty()
 
         synchronized(this) {
-            draftFoxRole = parsedFoxRole.uiLabel
-            latestSubmitSummary = "Submitting Fox Role update: ${parsedFoxRole.uiLabel}"
-            statusText = "Submitting Fox Role: ${parsedFoxRole.uiLabel}"
+            draftFoxRole = parsedFoxRoleLabel
+            latestSubmitSummary = "Submitting Fox Role update: $parsedFoxRoleLabel"
+            statusText = "Submitting Fox Role: $parsedFoxRoleLabel"
             statusIsError = false
         }
         notifyListeners()
@@ -2682,6 +2750,9 @@ object AndroidSessionController {
                 resolvedTarget = target
                 val editedSettings = editableSettings.copy(
                     foxRole = editableSettings.foxRole.copy(editedValue = parsedFoxRole),
+                    arduconFoxRoleCode = editableSettings.arduconFoxRoleCode.copy(
+                        editedValue = parsedArduconFoxRole?.numericalDesignator ?: editableSettings.arduconFoxRoleCode.editedValue,
+                    ),
                 )
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
@@ -2706,7 +2777,7 @@ object AndroidSessionController {
                         resolvedTarget?.let(::rememberLoadedTargetLocked)
                         draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                         draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                        draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                        draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
                         draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
                         draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
                         draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -2830,7 +2901,7 @@ object AndroidSessionController {
                     rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
                     draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
                     draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = submitResult.state.snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
                     draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
                     draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
                     draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -4084,7 +4155,7 @@ object AndroidSessionController {
             } catch (error: Throwable) {
                 synchronized(this) {
                     latestSubmitSummary = "Submit failed.\n${error.message}"
-                    statusText = "Lasts update failed."
+                    statusText = "Duration update failed."
                     statusIsError = true
                 }
                 emitCommandLog("set-lasts", source, success = false, summary = error.message.orEmpty())
@@ -4962,7 +5033,7 @@ object AndroidSessionController {
 
     private fun renderCloneSubmitSummary(result: CloneSubmitResult): String {
         return buildString {
-            appendLine("Clone submitted to attached SignalSlinger.")
+            appendLine("Clone submitted to attached device.")
             appendLine("Clone protocol: ${result.cloneProtocol}")
             result.firmwareCloneChecksum?.let { checksum ->
                 appendLine("Firmware clone checksum: $checksum")
@@ -5121,7 +5192,7 @@ object AndroidSessionController {
     ) {
         draftStationId = snapshot?.settings?.stationId.orEmpty()
         draftEventType = snapshot?.settings?.eventType?.name.orEmpty()
-        draftFoxRole = snapshot?.settings?.foxRole?.uiLabel.orEmpty()
+        draftFoxRole = formatSnapshotFoxRole(snapshot)
         draftIdSpeedWpm = snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
         draftPatternText = snapshot?.settings?.patternText.orEmpty()
         draftPatternSpeedWpm = snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
@@ -5133,6 +5204,13 @@ object AndroidSessionController {
         if (refreshClockDisplayAnchor) {
             applyClockDisplayAnchor(snapshot?.settings?.currentTimeCompact)
         }
+    }
+
+    private fun formatSnapshotFoxRole(snapshot: DeviceSnapshot?): String {
+        val settings = snapshot?.settings ?: return ""
+        return EventProfileSupport.arduconFoxRoleForDesignator(settings.arduconFoxRoleCode)?.roleName
+            ?: settings.foxRole?.uiLabel
+            ?: ""
     }
 
     private fun rememberCloneTemplateFrom(sourceSnapshot: DeviceSnapshot) {
@@ -5237,26 +5315,31 @@ object AndroidSessionController {
     private fun buildCloneEditableSettings(
         targetBaseSettings: DeviceSettings,
         templateSettings: DeviceSettings,
+        capabilities: DeviceCapabilities,
     ): EditableDeviceSettings {
         return EditableDeviceSettings.fromDeviceSettings(targetBaseSettings).copy(
-            stationId = SettingsField("stationId", "Station ID", targetBaseSettings.stationId, templateSettings.stationId),
-            eventType = SettingsField("eventType", "Event Type", targetBaseSettings.eventType, templateSettings.eventType),
-            idCodeSpeedWpm = SettingsField("idCodeSpeedWpm", "ID Speed", targetBaseSettings.idCodeSpeedWpm, templateSettings.idCodeSpeedWpm),
-            startTimeCompact = SettingsField("startTimeCompact", "Start Time", targetBaseSettings.startTimeCompact, templateSettings.startTimeCompact),
-            finishTimeCompact = SettingsField("finishTimeCompact", "Finish Time", targetBaseSettings.finishTimeCompact, templateSettings.finishTimeCompact),
-            daysToRun = SettingsField("daysToRun", "Days To Run", targetBaseSettings.daysToRun, templateSettings.daysToRun),
-            patternCodeSpeedWpm = SettingsField(
-                "patternCodeSpeedWpm",
-                "Pattern Speed",
-                targetBaseSettings.patternCodeSpeedWpm,
-                templateSettings.patternCodeSpeedWpm,
-            ),
-            lowFrequencyHz = SettingsField("lowFrequencyHz", "Frequency 1 (FRE 1)", targetBaseSettings.lowFrequencyHz, templateSettings.lowFrequencyHz),
-            mediumFrequencyHz = SettingsField("mediumFrequencyHz", "Frequency 2 (FRE 2)", targetBaseSettings.mediumFrequencyHz, templateSettings.mediumFrequencyHz),
-            highFrequencyHz = SettingsField("highFrequencyHz", "Frequency 3 (FRE 3)", targetBaseSettings.highFrequencyHz, templateSettings.highFrequencyHz),
-            beaconFrequencyHz = SettingsField("beaconFrequencyHz", "Frequency B (FRE B)", targetBaseSettings.beaconFrequencyHz, templateSettings.beaconFrequencyHz),
+            stationId = cloneField("stationId", "Station ID", targetBaseSettings.stationId, templateSettings.stationId, capabilities.supportsStationIdEditing),
+            eventType = cloneField("eventType", "Event Type", targetBaseSettings.eventType, templateSettings.eventType, capabilities.supportsEventTypeEditing),
+            foxRole = cloneField("foxRole", "Fox Role (FOX)", targetBaseSettings.foxRole, templateSettings.foxRole, capabilities.supportsFoxRoleEditing),
+            idCodeSpeedWpm = cloneField("idCodeSpeedWpm", "ID Speed", targetBaseSettings.idCodeSpeedWpm, templateSettings.idCodeSpeedWpm, capabilities.supportsIdCodeSpeedEditing),
+            startTimeCompact = cloneField("startTimeCompact", "Start Time", targetBaseSettings.startTimeCompact, templateSettings.startTimeCompact, capabilities.supportsScheduling),
+            finishTimeCompact = cloneField("finishTimeCompact", "Finish Time", targetBaseSettings.finishTimeCompact, templateSettings.finishTimeCompact, capabilities.supportsScheduling),
+            daysToRun = cloneField("daysToRun", "Days To Run", targetBaseSettings.daysToRun, templateSettings.daysToRun, capabilities.supportsScheduling && capabilities.supportsDaysToRun),
+            patternCodeSpeedWpm = cloneField("patternCodeSpeedWpm", "Pattern Speed", targetBaseSettings.patternCodeSpeedWpm, templateSettings.patternCodeSpeedWpm, capabilities.supportsPatternEditing),
+            lowFrequencyHz = cloneField("lowFrequencyHz", "Frequency 1 (FRE 1)", targetBaseSettings.lowFrequencyHz, templateSettings.lowFrequencyHz, capabilities.supportsFrequencyProfiles),
+            mediumFrequencyHz = cloneField("mediumFrequencyHz", "Frequency 2 (FRE 2)", targetBaseSettings.mediumFrequencyHz, templateSettings.mediumFrequencyHz, capabilities.supportsFrequencyProfiles),
+            highFrequencyHz = cloneField("highFrequencyHz", "Frequency 3 (FRE 3)", targetBaseSettings.highFrequencyHz, templateSettings.highFrequencyHz, capabilities.supportsFrequencyProfiles),
+            beaconFrequencyHz = cloneField("beaconFrequencyHz", "Frequency B (FRE B)", targetBaseSettings.beaconFrequencyHz, templateSettings.beaconFrequencyHz, capabilities.supportsFrequencyProfiles),
         )
     }
+
+    private fun <T> cloneField(
+        key: String,
+        label: String,
+        currentValue: T,
+        templateValue: T,
+        supported: Boolean,
+    ): SettingsField<T> = SettingsField(key, label, currentValue, if (supported) templateValue else currentValue)
 
     private fun editableSettingsWithTimedEventDefaultFrequencies(
         editableSettings: EditableDeviceSettings,

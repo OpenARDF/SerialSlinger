@@ -79,6 +79,34 @@ class DeviceModelsTest {
     }
 
     @Test
+    fun validatedSettingsAcceptDtmfPasswordsWithFourToEightDigits() {
+        val fourDigitSettings = sampleEditableSettings(
+            dtmfPassword = SettingsField("dtmfPassword", "DTMF Password", "1357", "2468"),
+        ).toValidatedDeviceSettings()
+        val eightDigitSettings = sampleEditableSettings(
+            dtmfPassword = SettingsField("dtmfPassword", "DTMF Password", "1357", "12345678"),
+        ).toValidatedDeviceSettings()
+
+        assertEquals("2468", fourDigitSettings.dtmfPassword)
+        assertEquals("12345678", eightDigitSettings.dtmfPassword)
+    }
+
+    @Test
+    fun validatedSettingsRejectInvalidDtmfPasswords() {
+        listOf("123", "123456789", "12A4", "", "12 34").forEach { invalidPassword ->
+            val editable = sampleEditableSettings(
+                dtmfPassword = SettingsField("dtmfPassword", "DTMF Password", "1357", invalidPassword),
+            )
+
+            val error = assertFailsWith<IllegalArgumentException> {
+                editable.toValidatedDeviceSettings()
+            }
+
+            assertTrue(error.message!!.contains("DTMF Password"))
+        }
+    }
+
+    @Test
     fun unsupportedFieldsAreFilteredOutByCapabilities() {
         val editable = sampleEditableSettings()
         val capabilities = DeviceCapabilities(
@@ -199,6 +227,7 @@ class DeviceModelsTest {
         lowBatteryThresholdVolts: SettingsField<Double?> = SettingsField("lowBatteryThresholdVolts", "Low Battery Threshold", 3.5, 3.5),
         externalBatteryControlMode: SettingsField<ExternalBatteryControlMode?> = SettingsField("externalBatteryControlMode", "External Battery Control", ExternalBatteryControlMode.OFF, ExternalBatteryControlMode.OFF),
         transmissionsEnabled: SettingsField<Boolean> = SettingsField("transmissionsEnabled", "RF Transmissions", true, true),
+        dtmfPassword: SettingsField<String?> = SettingsField("dtmfPassword", "DTMF Password", null, null),
     ): EditableDeviceSettings {
         return EditableDeviceSettings(
             stationId = stationId,
@@ -219,6 +248,7 @@ class DeviceModelsTest {
             lowBatteryThresholdVolts = lowBatteryThresholdVolts,
             externalBatteryControlMode = externalBatteryControlMode,
             transmissionsEnabled = transmissionsEnabled,
+            dtmfPassword = dtmfPassword,
         )
     }
 }

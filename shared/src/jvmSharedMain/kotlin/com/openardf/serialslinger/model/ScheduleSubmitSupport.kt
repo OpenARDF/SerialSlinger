@@ -123,7 +123,7 @@ object ScheduleSubmitSupport {
             "Event duration must be positive."
         }
         val normalizedStartTime = JvmTimeSupport.validateStartTimeForWrite(currentSettings.startTimeCompact)
-            ?: error("Set a valid Start Time first before changing Lasts.")
+            ?: error("Set a valid Start Time first before changing Duration.")
         return absoluteFinishEdit(
             currentSettings = currentSettings,
             normalizedFinishTime = JvmTimeSupport.finishTimeCompactFromStart(normalizedStartTime, requestedDuration),

@@ -7,7 +7,7 @@ object ThermalShutdownSupport {
     const val minimumCelsius: Int = 30
     const val maximumCelsius: Int = 55
 
-    fun validateCelsius(value: Int): Int {
+    fun validateCelsius(value: Int, productName: String? = null): Int {
         require(value in minimumCelsius..maximumCelsius) {
             "Thermal Shutdown Threshold must be between $minimumCelsius C and $maximumCelsius C."
         }
@@ -22,7 +22,12 @@ object ThermalShutdownSupport {
         return ((value - 32.0) * 5.0 / 9.0).roundToInt()
     }
 
-    fun commandForCelsius(value: Int): String {
-        return "TMP H ${validateCelsius(value)}"
+    fun commandForCelsius(value: Int, productName: String? = null): String {
+        val validated = validateCelsius(value, productName)
+        return if (productName.equals("Arducon", ignoreCase = true)) {
+            "UTI H $validated"
+        } else {
+            "TMP H $validated"
+        }
     }
 }

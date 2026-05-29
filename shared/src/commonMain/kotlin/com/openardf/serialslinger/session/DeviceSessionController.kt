@@ -506,6 +506,7 @@ object DeviceSessionController {
             if (patch.stationId != null) add(SettingKey.STATION_ID)
             if (patch.eventType != null) add(SettingKey.EVENT_TYPE)
             if (patch.foxRole != null) add(SettingKey.FOX_ROLE)
+            if (patch.arduconFoxRoleCode != null) add(SettingKey.ARDUCON_FOX_ROLE)
             if (patch.patternText != null) add(SettingKey.PATTERN_TEXT)
             if (patch.idCodeSpeedWpm != null) add(SettingKey.ID_CODE_SPEED_WPM)
             if (patch.patternCodeSpeedWpm != null) add(SettingKey.PATTERN_CODE_SPEED_WPM)
@@ -521,6 +522,9 @@ object DeviceSessionController {
             if (patch.lowBatteryThresholdVolts != null) add(SettingKey.LOW_BATTERY_THRESHOLD_VOLTS)
             if (patch.externalBatteryControlMode != null) add(SettingKey.EXTERNAL_BATTERY_CONTROL_MODE)
             if (patch.transmissionsEnabled != null) add(SettingKey.TRANSMISSIONS_ENABLED)
+            if (patch.dtmfPassword != null) add(SettingKey.DTMF_PASSWORD)
+            if (patch.amToneFrequency != null) add(SettingKey.AM_TONE_FREQUENCY)
+            if (patch.pttResetSetting != null) add(SettingKey.PTT_RESET_SETTING)
         }
     }
 
@@ -621,6 +625,7 @@ object DeviceSessionController {
             SettingKey.STATION_ID -> settings.stationId
             SettingKey.EVENT_TYPE -> settings.eventType
             SettingKey.FOX_ROLE -> settings.foxRole
+            SettingKey.ARDUCON_FOX_ROLE -> settings.arduconFoxRoleCode
             SettingKey.PATTERN_TEXT -> settings.patternText
             SettingKey.ID_CODE_SPEED_WPM -> settings.idCodeSpeedWpm
             SettingKey.PATTERN_CODE_SPEED_WPM -> settings.patternCodeSpeedWpm
@@ -636,6 +641,9 @@ object DeviceSessionController {
             SettingKey.LOW_BATTERY_THRESHOLD_VOLTS -> settings.lowBatteryThresholdVolts
             SettingKey.EXTERNAL_BATTERY_CONTROL_MODE -> settings.externalBatteryControlMode
             SettingKey.TRANSMISSIONS_ENABLED -> settings.transmissionsEnabled
+            SettingKey.DTMF_PASSWORD -> settings.dtmfPassword
+            SettingKey.AM_TONE_FREQUENCY -> settings.amToneFrequency
+            SettingKey.PTT_RESET_SETTING -> settings.pttResetSetting
         }
     }
 }

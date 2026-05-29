@@ -54,9 +54,16 @@ class DesktopSessionLog(
         return logDirectory().resolve("serialslinger-$date.log")
     }
 
-    fun beginTemperatureLog(): Path {
-        val file = logDirectory().resolve("serialslinger-temperature-${LocalDateTime.now(clock).format(dateTimeFormatter)}.csv")
-        Files.writeString(file, "timestamp,temperature_c,external_battery_v,internal_battery_v\n", StandardOpenOption.CREATE_NEW)
+    fun beginTemperatureLog(deviceType: String): Path {
+        val deviceSlug = deviceType.lowercase(Locale.US).replace(Regex("""[^a-z0-9]+"""), "-").trim('-')
+        val file = logDirectory().resolve(
+            "serialslinger-temperature-${deviceSlug.ifBlank { "device" }}-${LocalDateTime.now(clock).format(dateTimeFormatter)}.csv",
+        )
+        Files.writeString(
+            file,
+            "device_type,timestamp,temperature_c,external_battery_v,internal_battery_v\n",
+            StandardOpenOption.CREATE_NEW,
+        )
         temperatureLogFile = file
         return file
     }
@@ -67,13 +74,15 @@ class DesktopSessionLog(
     }
 
     fun appendTemperatureSample(
+        deviceType: String,
         timestamp: LocalDateTime,
         temperatureC: Double?,
         externalBatteryVolts: Double?,
         internalBatteryVolts: Double?,
     ) {
         val file = temperatureLogFile ?: return
-        val line = "${timestamp.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)}," +
+        val line = "${csvEscape(deviceType)}," +
+            "${timestamp.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)}," +
             "${temperatureC?.let { String.format(Locale.US, "%.1f", it) }.orEmpty()}," +
             "${externalBatteryVolts?.let { String.format(Locale.US, "%.1f", it) }.orEmpty()}," +
             "${internalBatteryVolts?.let { String.format(Locale.US, "%.1f", it) }.orEmpty()}\n"
@@ -232,6 +241,14 @@ class DesktopSessionLog(
             appendLine("SerialSlinger $appVersion")
             appendLine("Platform: $platformLabel")
             appendLine()
+        }
+    }
+
+    private fun csvEscape(value: String): String {
+        return if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
+            "\"" + value.replace("\"", "\"\"") + "\""
+        } else {
+            value
         }
     }
 

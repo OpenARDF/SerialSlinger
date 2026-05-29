@@ -3,11 +3,13 @@ package com.openardf.serialslinger.protocol
 import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.EventType
+import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.WritePlan
+import com.openardf.serialslinger.model.normalizeDtmfPasswordForWrite
 import com.openardf.serialslinger.platform.PlatformDateTimeFields
 import com.openardf.serialslinger.platform.platformEpochSecondsFromLocalDateTimeFields
 import com.openardf.serialslinger.platform.platformLocalDateTimeFields
@@ -45,6 +47,7 @@ data class DeviceSettingsPatch(
     val stationId: String? = null,
     val eventType: EventType? = null,
     val foxRole: FoxRole? = null,
+    val arduconFoxRoleCode: Int? = null,
     val patternText: String? = null,
     val idCodeSpeedWpm: Int? = null,
     val patternCodeSpeedWpm: Int? = null,
@@ -63,6 +66,9 @@ data class DeviceSettingsPatch(
     val lowBatteryThresholdVolts: Double? = null,
     val externalBatteryControlMode: ExternalBatteryControlMode? = null,
     val transmissionsEnabled: Boolean? = null,
+    val dtmfPassword: String? = null,
+    val amToneFrequency: Int? = null,
+    val pttResetSetting: Int? = null,
 ) {
     fun applyTo(base: DeviceSettings): DeviceSettings {
         val nextTransmissionsEnabled = transmissionsEnabled ?: base.transmissionsEnabled
@@ -83,6 +89,7 @@ data class DeviceSettingsPatch(
             stationId = stationId ?: base.stationId,
             eventType = eventType ?: base.eventType,
             foxRole = foxRole ?: base.foxRole,
+            arduconFoxRoleCode = arduconFoxRoleCode ?: base.arduconFoxRoleCode,
             patternText = patternText ?: base.patternText,
             idCodeSpeedWpm = idCodeSpeedWpm ?: base.idCodeSpeedWpm,
             patternCodeSpeedWpm = patternCodeSpeedWpm ?: base.patternCodeSpeedWpm,
@@ -98,6 +105,9 @@ data class DeviceSettingsPatch(
             lowBatteryThresholdVolts = lowBatteryThresholdVolts ?: base.lowBatteryThresholdVolts,
             externalBatteryControlMode = nextExternalBatteryMode,
             transmissionsEnabled = nextTransmissionsEnabled,
+            dtmfPassword = dtmfPassword ?: base.dtmfPassword,
+            amToneFrequency = amToneFrequency ?: base.amToneFrequency,
+            pttResetSetting = pttResetSetting ?: base.pttResetSetting,
         )
     }
 }
@@ -115,6 +125,7 @@ object SignalSlingerProtocolCodec {
     private val stationIdPattern = Regex("""^\* ID:\s*(.*)$""")
     private val eventPattern = Regex("""^\* Event:\s*(.+)$""")
     private val foxPattern = Regex("""^\*\s*Fox:\s*(.+)$""")
+    private val arduconFoxPattern = Regex("""^Fox\s*[:=]\s*(.+)$""", RegexOption.IGNORE_CASE)
     private val patternTextPattern = Regex("""^\* PAT:\s*(.*)$""")
     private val idSpeedPattern = Regex("""^\* ID SPD:\s*(\d+)\s+WPM$""")
     private val patternSpeedPattern = Regex("""^\* PAT SPD:\s*(\d+)\s+WPM$""")
@@ -128,6 +139,14 @@ object SignalSlingerProtocolCodec {
     private val arduconIdSpeedPattern = Regex("""^ID:\s*(\d+)\s+wpm$""", RegexOption.IGNORE_CASE)
     private val arduconStationIdPattern = Regex("""^ID:\s*(\S+)$""")
     private val arduconTemperaturePattern = Regex("""^T=(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
+    private val arduconMaximumTemperaturePattern = Regex("""^Max\s*=\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
+    private val arduconMaximumEverTemperaturePattern = Regex("""^Max Ever\s*=\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
+    private val arduconMaximumEverResetTemperaturePattern = Regex("""^Max Ever Reset\s*=\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
+    private val arduconThermalShutdownThresholdPattern = Regex("""^Thermal Shutdown\s*=\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
+    private val arduconVoltagePattern = Regex("""^V=([0-9]+(?:\.[0-9]+)?)V$""", RegexOption.IGNORE_CASE)
+    private val arduconPasswordPattern = Regex("""^PWD=(\S*)$""", RegexOption.IGNORE_CASE)
+    private val arduconAmTonePattern = Regex("""^AM:(\d+)$""", RegexOption.IGNORE_CASE)
+    private val arduconPttResetPattern = Regex("""^DRP:([01])$""", RegexOption.IGNORE_CASE)
     private val daysToRunPattern = Regex("""^\* Days to run:\s*(\d+)$""")
     private val daysRemainingPattern = Regex("""^\* Days remaining:\s*(\d+)$""")
     private val frequencyPattern = Regex("""^\* FRE(?:\s+([123B]))?=(.+)$""")
@@ -249,10 +268,92 @@ object SignalSlingerProtocolCodec {
             )
         }
 
+        arduconFoxPattern.matchEntire(trimmed)?.let { match ->
+            EventProfileSupport.parseArduconFoxRoleOrNull(match.groupValues[1])?.let { arduconRole ->
+                return DeviceReportUpdate(
+                    settingsPatch = DeviceSettingsPatch(
+                        arduconFoxRoleCode = arduconRole.numericalDesignator,
+                        eventType = arduconRole.eventType,
+                        patternText = arduconRole.morsePatternSent,
+                    ),
+                )
+            }
+            parseFoxRole(match.groupValues[1])?.let { foxRole ->
+                return DeviceReportUpdate(
+                    settingsPatch = DeviceSettingsPatch(foxRole = foxRole),
+                )
+            }
+            return null
+        }
+
         arduconTemperaturePattern.matchEntire(trimmed)?.let { match ->
             return DeviceReportUpdate(
                 deviceStatusPatch = DeviceStatusPatch(
                     temperatureC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        arduconMaximumTemperaturePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    maximumTemperatureC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        arduconMaximumEverTemperaturePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    maximumEverTemperatureC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        arduconMaximumEverResetTemperaturePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    maximumEverTemperatureC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        arduconThermalShutdownThresholdPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    thermalShutdownThresholdC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        arduconVoltagePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    externalBatteryVolts = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        arduconPasswordPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    dtmfPassword = match.groupValues[1].trim(),
+                ),
+            )
+        }
+
+        arduconAmTonePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    amToneFrequency = match.groupValues[1].toInt(),
+                ),
+            )
+        }
+
+        arduconPttResetPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    pttResetSetting = match.groupValues[1].toInt(),
                 ),
             )
         }
@@ -526,8 +627,15 @@ object SignalSlingerProtocolCodec {
                 SettingKey.STATION_ID -> commands += encodeStationId(editedSettings.stationId)
                 SettingKey.EVENT_TYPE -> commands += "EVT ${encodeEventType(editedSettings.eventType)}"
                 SettingKey.FOX_ROLE -> editedSettings.foxRole?.let { commands += "FOX ${it.commandToken}" }
+                SettingKey.ARDUCON_FOX_ROLE -> editedSettings.arduconFoxRoleCode?.let { commands += "FOX ${it.toString().padStart(2, '0')}" }
                 SettingKey.PATTERN_TEXT -> commands += "PAT ${editedSettings.patternText.orEmpty()}"
-                SettingKey.ID_CODE_SPEED_WPM -> commands += "SPD I ${editedSettings.idCodeSpeedWpm}"
+                SettingKey.ID_CODE_SPEED_WPM -> {
+                    commands += if (useUtcCompactClockWrites) {
+                        "SET S ${editedSettings.idCodeSpeedWpm}"
+                    } else {
+                        "SPD I ${editedSettings.idCodeSpeedWpm}"
+                    }
+                }
                 SettingKey.PATTERN_CODE_SPEED_WPM -> commands += encodePatternSpeedCommand(editedSettings)
                 SettingKey.CURRENT_TIME -> encodeClockWrite("CLK T", editedSettings.currentTimeCompact)?.let { commands += it }
                 SettingKey.START_TIME -> encodeClockWrite("CLK S", editedSettings.startTimeCompact)?.let { commands += it }
@@ -549,6 +657,9 @@ object SignalSlingerProtocolCodec {
                         batteryCommandAdded = true
                     }
                 }
+                SettingKey.DTMF_PASSWORD -> normalizeDtmfPasswordForWrite(editedSettings.dtmfPassword)?.let { commands += "PWD $it" }
+                SettingKey.AM_TONE_FREQUENCY -> editedSettings.amToneFrequency?.let { commands += "AM $it" }
+                SettingKey.PTT_RESET_SETTING -> editedSettings.pttResetSetting?.takeIf { it == 0 || it == 1 }?.let { commands += "SET P $it" }
             }
         }
 
@@ -619,7 +730,13 @@ object SignalSlingerProtocolCodec {
 
     private fun parseFoxRole(raw: String): FoxRole? {
         val normalized = raw.trim()
-        return FoxRole.entries.firstOrNull { it.label == normalized }
+        val normalizedToken = normalized.trimStart('0').ifEmpty { "0" }
+        return FoxRole.entries.firstOrNull {
+            it.label.equals(normalized, ignoreCase = true) ||
+                it.uiLabel.equals(normalized, ignoreCase = true) ||
+                it.commandToken.equals(normalized, ignoreCase = true) ||
+                it.commandToken.equals(normalizedToken, ignoreCase = true)
+        }
     }
 
     private fun parseFirmwareDisplayTime(raw: String): String? {

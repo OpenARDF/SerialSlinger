@@ -362,6 +362,29 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun calculatesDurationEditFinishTimeFromStartTime() {
+        assertEquals(
+            "260410220000",
+            DesktopInputSupport.finishTimeCompactForDurationEdit(
+                startTimeCompact = "260410160000",
+                currentTimeCompact = "260410150000",
+                duration = Duration.ofHours(6),
+            ),
+        )
+    }
+
+    @Test
+    fun rejectsDurationEditWhenFinishWouldBeBeforeDeviceTime() {
+        assertFailsWith<IllegalArgumentException> {
+            DesktopInputSupport.finishTimeCompactForDurationEdit(
+                startTimeCompact = "260410160000",
+                currentTimeCompact = "260410230000",
+                duration = Duration.ofHours(6),
+            )
+        }
+    }
+
+    @Test
     fun derivesRelativeSelectionForDefaultEventLength() {
         assertEquals(
             DesktopInputSupport.RelativeTimeSelection(hours = 6, minutes = 0, useTopOfHour = false),

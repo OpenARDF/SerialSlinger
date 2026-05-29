@@ -66,6 +66,17 @@ class SignalSlingerFirmwareSupportTest {
     }
 
     @Test
+    fun enablesTemperatureLoggingForArducon() {
+        val profile = SignalSlingerFirmwareSupport.resolve("2.0.0", productName = "Arducon")
+
+        assertEquals("arducon-atmega328p", profile.id)
+        assertTrue(profile.capabilities.supportsTemperatureReadback)
+        assertTrue(profile.capabilities.supportsExtendedTemperatureReadback)
+        assertTrue(profile.capabilities.supportsTemperatureLogging)
+        assertTrue("UTI" in profile.fullLoadCommands)
+    }
+
+    @Test
     fun foxRoleVerificationReadbackIncludesPatternSpeedRefresh() {
         val profile = SignalSlingerFirmwareSupport.resolve("1.2s")
 

@@ -26,5 +26,6 @@ class ThermalShutdownSupportTest {
     @Test
     fun buildsThermalThresholdCommand() {
         assertEquals("TMP H 50", ThermalShutdownSupport.commandForCelsius(50))
+        assertEquals("UTI H 50", ThermalShutdownSupport.commandForCelsius(50, productName = "Arducon"))
     }
 }

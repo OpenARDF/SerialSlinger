@@ -147,6 +147,14 @@ tasks.register<JavaExec>("desktopAppRun") {
     dependsOn(mainCompilation.compileTaskProvider)
     classpath(mainCompilation.runtimeDependencyFiles, mainCompilation.output.allOutputs)
     mainClass.set("com.openardf.serialslinger.app.SerialSlingerDesktopAppKt")
+    listOf(
+        "serialslinger.desktopControl",
+        "serialslinger.desktopControl.port",
+    ).forEach { propertyName ->
+        System.getProperty(propertyName)?.let { value ->
+            systemProperty(propertyName, value)
+        }
+    }
 }
 
 val desktopTarget = kotlin.targets.getByName("desktop") as KotlinJvmTarget

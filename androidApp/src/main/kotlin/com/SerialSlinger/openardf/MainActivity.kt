@@ -61,6 +61,7 @@ import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.openardf.serialslinger.model.ArduconFoxRole
 import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
 import com.openardf.serialslinger.model.ConnectionState
@@ -744,6 +745,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 loadedStatus?.daysRemaining
             }
         val timedEventUnavailable = disconnectedLocked && cloneTemplateSettings == null
+        val eventTypeEditingSupported = snapshot?.capabilities?.supportsEventTypeEditing != false
+        val foxRoleEditingSupported = snapshot?.capabilities?.supportsFoxRoleEditing != false
+        val idCodeSpeedEditingSupported = snapshot?.capabilities?.supportsIdCodeSpeedEditing != false
+        val isArducon = loadedInfo?.productName.equals("Arducon", ignoreCase = true)
         displayedTimedEventSettings = if (timedEventUnavailable) null else timedEventSettings
         displayedTimedEventDaysRemaining = timedEventDaysRemaining
         displayedTimedEventUsesCloneTemplate = cloneTemplateSettings != null
@@ -758,10 +763,16 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             EventProfileSupport.parseFoxRoleOrNull(uiState.draftFoxRole.orEmpty(), loadedSettings.eventType)
                 ?: loadedSettings.foxRole
                 ?: EventProfileSupport.foxRoleOptions(loadedSettings.eventType).firstOrNull()
+        val selectedArduconFoxRole =
+            EventProfileSupport.parseArduconFoxRoleOrNull(uiState.draftFoxRole.orEmpty())
+                ?: EventProfileSupport.arduconFoxRoleForDesignator(loadedSettings.arduconFoxRoleCode)
+                ?: EventProfileSupport.arduconFoxRoles.firstOrNull()
         val loadedEventType = loadedSettings.eventType
         val loadedFoxRole = loadedSettings.foxRole
+        val loadedArduconFoxRole = EventProfileSupport.arduconFoxRoleForDesignator(loadedSettings.arduconFoxRoleCode)
         var currentTimedEventType = timedEventSettings.eventType
         var currentFoxRole = loadedFoxRole ?: selectedFoxRole
+        var currentArduconFoxRole = loadedArduconFoxRole ?: selectedArduconFoxRole
         lateinit var eventTypeChooserButton: Button
         lateinit var foxRoleChooserButton: Button
 
@@ -774,7 +785,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             val foxRoleOptions = EventProfileSupport.foxRoleOptions(loadedEventType)
             currentFoxRole = requestedFoxRole ?: loadedFoxRole ?: foxRoleOptions.firstOrNull()
             foxRoleChooserButton.text = currentFoxRole?.uiLabel ?: "<none>"
-            foxRoleChooserButton.isEnabled = foxRoleOptions.isNotEmpty()
+            foxRoleChooserButton.isEnabled = foxRoleOptions.isNotEmpty() && foxRoleEditingSupported && !timedEventUnavailable
+        }
+
+        fun refreshArduconFoxRoleSelection(requestedFoxRole: ArduconFoxRole?) {
+            val foxRoleOptions = EventProfileSupport.arduconFoxRoles
+            currentArduconFoxRole = requestedFoxRole ?: loadedArduconFoxRole ?: foxRoleOptions.firstOrNull()
+            foxRoleChooserButton.text = currentArduconFoxRole?.let(::formatArduconFoxRoleLabel) ?: "<none>"
+            foxRoleChooserButton.isEnabled = foxRoleOptions.isNotEmpty() && foxRoleEditingSupported && !timedEventUnavailable
         }
 
         eventTypeChooserButton =
@@ -804,6 +822,29 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 if (handlePreviewUnlockTap("fox")) {
                     return@rowButton
                 }
+                if (isArducon) {
+                    val foxRoleOptions = EventProfileSupport.arduconFoxRoles
+                    val labels = foxRoleOptions.map(::formatArduconFoxRoleLabel).toTypedArray()
+                    AlertDialog.Builder(this)
+                        .setTitle("Choose Fox Role")
+                        .setSingleChoiceItems(labels, foxRoleOptions.indexOf(currentArduconFoxRole).coerceAtLeast(0)) { dialog, which ->
+                            val chosenFoxRole = foxRoleOptions[which]
+                            AndroidSessionController.logUserAction("Selected Fox Role: ${chosenFoxRole.roleName}.")
+                            (dialog as? AlertDialog)?.listView?.setItemChecked(which, true)
+                            refreshArduconFoxRoleSelection(chosenFoxRole)
+                            val dismissAndSubmit = {
+                                dialog.dismiss()
+                                if (chosenFoxRole != loadedArduconFoxRole) {
+                                    runArduconFoxRoleSubmitOrPreview(chosenFoxRole)
+                                }
+                            }
+                            (dialog as? AlertDialog)?.listView?.postDelayed(dismissAndSubmit, FOX_ROLE_PICKER_FEEDBACK_DELAY_MS)
+                                ?: foxRoleChooserButton.post(dismissAndSubmit)
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .showLogged("Choose Fox Role")
+                    return@rowButton
+                }
                 val foxRoleOptions = EventProfileSupport.foxRoleOptions(loadedEventType)
                 val labels = foxRoleOptions.map { it.uiLabel }.toTypedArray()
                 AlertDialog.Builder(this)
@@ -826,10 +867,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     .showLogged("Choose Fox Role")
             }
         refreshTimedEventTypeSelection(currentTimedEventType)
-        refreshDeviceFoxRoleSelection(selectedFoxRole)
+        if (isArducon) {
+            refreshArduconFoxRoleSelection(selectedArduconFoxRole)
+        } else {
+            refreshDeviceFoxRoleSelection(selectedFoxRole)
+        }
         if (timedEventUnavailable) {
             eventTypeChooserButton.text = ""
         }
+        eventTypeChooserButton.isEnabled = !timedEventUnavailable && eventTypeEditingSupported
         if (disconnectedLocked) {
             foxRoleChooserButton.text = ""
         }
@@ -900,7 +946,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             )
         }
 
-        if (!devicePatternSpeedInTimedEvent) {
+        if (!isArducon && !devicePatternSpeedInTimedEvent) {
             if (disconnectedLocked) {
                 deviceSettingsCard.addView(compactLabeledRow("Pattern Speed", readOnlyField("")))
             } else {
@@ -1089,7 +1135,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
         installTimedEventSettingsTextEditGuard(stationIdEditor)
         timedEventCard.addView(compactLabeledRow("Station ID", stationIdEditor))
-        if (timedEventUnavailable) {
+        if (timedEventUnavailable || !idCodeSpeedEditingSupported) {
             timedEventCard.addView(compactLabeledRow("ID Speed", readOnlyField("")))
         } else {
             val idSpeedSpinner =
@@ -1103,7 +1149,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 runIdSpeedSubmitOrPreview(selectedValue)
             }
         }
-        if (timedPatternSpeedInTimedEvent) {
+        if (!isArducon && timedPatternSpeedInTimedEvent) {
             if (timedEventUnavailable) {
                 timedEventCard.addView(compactLabeledRow("Pattern Speed", readOnlyField("")))
             } else {
@@ -1501,10 +1547,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val lastsField =
             pickerField(
                 text = durationSummary,
-                hint = "Lasts",
+                hint = "Duration",
                 textSizeSp = timestampFieldTextSizeSp(),
-                actionLabel = "Lasts",
-                isEnabledForInteraction = finishTimeEditable,
+                actionLabel = "Duration",
+                isEnabledForInteraction = schedulingFieldsEditable,
                 guardCloneTemplate = true,
             ) {
                 showLastsDurationDialog(
@@ -1514,17 +1560,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             timedEventSettings.finishTimeCompact,
                         ) ?: Duration.ofMinutes(defaultEventLengthMinutes.toLong()),
                 ) { selectedDuration ->
-                    chooseScheduleChangeDurationResolution(
-                        currentDaysToRun = timedEventSettings.daysToRun,
-                        proposedDuration = selectedDuration,
-                        onCancel = {},
-                    ) { preserveDaysToRun, effectiveDuration ->
-                        clearRelativeScheduleDisplayOverrides()
-                        runEventDurationSubmitOrPreview(
-                            requestedDuration = effectiveDuration ?: selectedDuration,
-                            preserveDaysToRun = preserveDaysToRun,
-                        )
-                    }
+                    clearRelativeScheduleDisplayOverrides()
+                    runEventDurationSubmitOrPreview(
+                        requestedDuration = selectedDuration,
+                        preserveDaysToRun = false,
+                    )
                 }
             }.apply {
                 if (durationDiffersFromDefault) {
@@ -1534,7 +1574,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         var lastsLabelView: TextView? = null
         timedEventCard.addView(
             compactLabeledRow(
-                "Lasts",
+                "Duration",
                 lastsField,
                 captureLabelView = { labelView ->
                     lastsLabelView = labelView
@@ -1542,13 +1582,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             ),
         )
         lastsLabelView?.setTextColor(if (durationDiffersFromDefault) warningColor else normalLabelColor)
-        lastsLabelView?.alpha = if (finishTimeEditable) 1f else 0.55f
-        lastsLabelView?.setOnClickListener(if (finishTimeEditable) {
+        lastsLabelView?.alpha = if (schedulingFieldsEditable) 1f else 0.55f
+        lastsLabelView?.setOnClickListener(if (schedulingFieldsEditable) {
             View.OnClickListener { lastsField.performClick() }
         } else {
             null
         })
-        if (finishTimeEditable) {
+        if (schedulingFieldsEditable) {
             lastsLabelView?.installTapOnlyClick()
         }
 
@@ -1702,13 +1742,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val temperatureReadbackSupported = snapshot?.capabilities?.supportsTemperatureReadback == true
         val extendedTemperatureReadbackSupported = snapshot?.capabilities?.supportsExtendedTemperatureReadback == true
         deviceDataCard.addView(sectionTitle("Device Data"))
-        deviceDataCard.addView(
-            compactLabeledRow(
-                "Internal Battery",
-                readOnlyField(loadedStatus?.internalBatteryVolts?.let { "$it V" }.orUnknown()),
-                labelWidthDp = 128,
-            ),
-        )
+        if (!isArducon) {
+            deviceDataCard.addView(
+                compactLabeledRow(
+                    "Internal Battery",
+                    readOnlyField(loadedStatus?.internalBatteryVolts?.let { "$it V" }.orUnknown()),
+                    labelWidthDp = 128,
+                ),
+            )
+        }
         deviceDataCard.addView(
             compactLabeledRow(
                 "External Battery",
@@ -1755,18 +1797,20 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         if (temperatureReadbackSupported) {
             applyTemperatureRowAppearance(currentTemperatureLabelView, currentTemperatureField, loadedStatus?.temperatureC)
         }
-        val minimumTemperatureField = readOnlyField(formatTemperatureForDeviceData(loadedStatus?.minimumTemperatureC, temperatureReadbackSupported))
-        var minimumTemperatureLabelView: TextView? = null
-        deviceDataCard.addView(
-            compactLabeledRow(
-                "Minimum Temperature",
-                minimumTemperatureField,
-                labelWidthDp = 132,
-                captureLabelView = { minimumTemperatureLabelView = it },
-            ),
-        )
-        if (temperatureReadbackSupported) {
-            applyTemperatureRowAppearance(minimumTemperatureLabelView, minimumTemperatureField, loadedStatus?.minimumTemperatureC)
+        if (!isArducon) {
+            val minimumTemperatureField = readOnlyField(formatTemperatureForDeviceData(loadedStatus?.minimumTemperatureC, temperatureReadbackSupported))
+            var minimumTemperatureLabelView: TextView? = null
+            deviceDataCard.addView(
+                compactLabeledRow(
+                    "Minimum Temperature",
+                    minimumTemperatureField,
+                    labelWidthDp = 132,
+                    captureLabelView = { minimumTemperatureLabelView = it },
+                ),
+            )
+            if (temperatureReadbackSupported) {
+                applyTemperatureRowAppearance(minimumTemperatureLabelView, minimumTemperatureField, loadedStatus?.minimumTemperatureC)
+            }
         }
         val thermalThresholdText = formatTemperatureForDeviceData(loadedStatus?.thermalShutdownThresholdC, extendedTemperatureReadbackSupported)
         val thermalThresholdField =
@@ -2319,6 +2363,69 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.runFoxRoleSubmit(
             context = applicationContext,
             foxRoleInput = foxRole.uiLabel,
+        ) {
+            if (!userDismissed && dialog.isShowing) {
+                dialog.dismiss()
+            }
+        }
+    }
+
+    private fun runArduconFoxRoleSubmitOrPreview(foxRole: ArduconFoxRole) {
+        if (isPreviewModeActive()) {
+            updatePreviewSettings { settings ->
+                settings.copy(
+                    eventType = foxRole.eventType,
+                    arduconFoxRoleCode = foxRole.numericalDesignator,
+                    patternText = foxRole.morsePatternSent,
+                )
+            }
+            return
+        }
+        runArduconFoxRoleSubmitWithStatusModal(foxRole)
+    }
+
+    private fun runArduconFoxRoleSubmitWithStatusModal(foxRole: ArduconFoxRole) {
+        val padding = (20 * resources.displayMetrics.density).toInt()
+        val spacing = (12 * resources.displayMetrics.density).toInt()
+        var userDismissed = false
+        val container =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(padding, padding / 2, padding, 0)
+                addView(
+                    ProgressBar(this@MainActivity).apply {
+                        isIndeterminate = true
+                    },
+                    LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                        marginEnd = spacing
+                    },
+                )
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text = "Submitting Fox Role: ${foxRole.roleName}"
+                        textSize = 15f
+                        setTextColor(Color.parseColor("#1F2937"))
+                    },
+                    LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f),
+                )
+            }
+        val dialog =
+            AlertDialog.Builder(this)
+                .setTitle("Submitting Fox Role")
+                .setView(container)
+                .setNegativeButton("Dismiss") { activeDialog, _ ->
+                    userDismissed = true
+                    activeDialog.dismiss()
+                }
+                .create()
+        dialog.setOnCancelListener { userDismissed = true }
+        dialog.setOnDismissListener { userDismissed = true }
+        dialog.showLogged("Submitting Fox Role")
+
+        AndroidSessionController.runFoxRoleSubmit(
+            context = applicationContext,
+            foxRoleInput = foxRole.roleName,
         ) {
             if (!userDismissed && dialog.isShowing) {
                 dialog.dismiss()
@@ -2899,7 +3006,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("Software version: ${info.softwareVersion.orUnknown()}")
             appendLine("Hardware build: ${info.hardwareBuild.orUnknown()}")
             appendLine("Bootloader version: ${info.bootloaderVersion.orUnknown()}")
-            appendLine("Bootloader protocol: ${info.bootloaderProtocolVersion?.toString().orUnknown()}")
+            appendLine("Bootloader protocol: ${(info.bootloaderProtocol ?: info.bootloaderProtocolVersion?.toString()).orUnknown()}")
             appendLine("Product name: ${info.productName.orUnknown()}")
             appendLine("Serial port name: ${info.serialPortName.orUnknown()}")
             appendLine()
@@ -2968,15 +3075,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
         return buildString {
             append("SW Ver: $softwareVersion HW Build: $hardwareBuild")
-            append(" Bootloader: ")
             val bootloaderVersion = info?.bootloaderVersion?.trim()?.takeIf { it.isNotBlank() }
-            if (bootloaderVersion == null) {
-                append("Not Available")
-            } else {
+            val bootloaderProtocol = info?.bootloaderProtocol?.trim()?.takeIf { it.isNotBlank() }
+                ?: info?.bootloaderProtocolVersion?.toString()
+            if (bootloaderVersion != null) {
+                append(" Bootloader: ")
                 append(bootloaderVersion)
-                info.bootloaderProtocolVersion?.let { protocol ->
-                    append(" protocol $protocol")
-                }
+                bootloaderProtocol?.let { protocol -> append(" protocol $protocol") }
+            } else if (bootloaderProtocol != null) {
+                append(" Bootloader protocol: $bootloaderProtocol")
             }
         }
     }
@@ -3993,7 +4100,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
         val dialog =
             AlertDialog.Builder(this)
-                .setTitle("Lasts")
+                .setTitle("Duration")
                 .setView(pickerLayout)
                 .setPositiveButton("OK") { _, _ ->
                     val minutes = currentMinutes()
@@ -4007,7 +4114,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 .create()
         dialog.setOnDismissListener { lastsDurationDialogOpen = false }
         lastsDurationDialogOpen = true
-        dialog.showLogged("Lasts")
+        dialog.showLogged("Duration")
     }
 
     private fun showAboutDialog() {
@@ -7073,6 +7180,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun formatEventTypeLabel(eventType: EventType): String =
         eventType.name.lowercase().replaceFirstChar { it.uppercase() }
+
+    private fun formatArduconFoxRoleLabel(role: ArduconFoxRole): String =
+        "${role.roleName} - ${role.morsePatternSent}"
 
     private fun rowButton(text: String, onClick: () -> Unit): Button =
         Button(this).apply {

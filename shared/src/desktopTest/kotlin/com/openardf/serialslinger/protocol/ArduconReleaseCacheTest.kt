@@ -12,6 +12,23 @@ import kotlin.test.assertTrue
 
 class ArduconReleaseCacheTest {
     @Test
+    fun parsesCurrentArduconWorkshopSetupMetadata() {
+        val release = ArduconFirmwareUpdate.parseReleaseInfo(currentWorkshopManifest(version = "2.0.2"))
+
+        assertEquals("Prepare-Arducon-Updates-v2.0.2-ATmega328P.ps1", release.workshopSetup?.setupLauncherFileName)
+        assertEquals(null, release.workshopSetup?.setupHelperFileName)
+        assertEquals("provision-bootloader.ps1", release.workshopSetup?.provisioningScriptFileName)
+        assertEquals("test-bootloader-serial.ps1", release.workshopSetup?.serialValidationScriptFileName)
+        assertEquals("0xDE", release.workshopSetup?.highFuseTarget)
+        assertEquals("0xD6", release.workshopSetup?.highFuseTargetPreserveEeprom)
+        assertEquals("0x05", release.workshopSetup?.extendedFuseBodLevelTarget)
+        assertEquals("BODLEVEL=2.7V; preserve extended-fuse bits outside BODLEVEL[2:0]", release.workshopSetup?.extendedFuseBodLevelDescription)
+        assertEquals("Prepare-Arducon-Updates-v2.0.2-ATmega328P.ps1", release.setupLauncherFile().fileName)
+        assertEquals(2, release.workshopSetupToolFiles().size)
+        ArduconFirmwareUpdate.validateReleaseManifest(release)
+    }
+
+    @Test
     fun downloadsLatestArduconReleasePackage() {
         val root = Files.createTempDirectory("arducon-release-cache-test").toFile()
         val latestApi = URI("https://api.github.test/releases/latest")
@@ -143,6 +160,85 @@ class ArduconReleaseCacheTest {
     }
 
     private fun sampleHex(): String = intelHex(0x0000 to byteArrayOf(0x01, 0x02, 0x03, 0x04))
+
+    private fun currentWorkshopManifest(version: String): String {
+        val update = byteArrayOf(0x01, 0x02, 0x03, 0x04)
+        val firstInstall = byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05)
+        val bootloader = byteArrayOf(0x06, 0x07)
+        val source = byteArrayOf(0x08)
+        val launcher = byteArrayOf(0x09)
+        val provision = byteArrayOf(0x0A)
+        val validation = byteArrayOf(0x0B)
+        return """
+            {
+              "format": "arducon-release-info-v1",
+              "product": "Arducon",
+              "version": "$version",
+              "board": "ATmega328P",
+              "update": {
+                "fileName": "Arducon-Update-v$version-ATmega328P.hex",
+                "startAddress": "0x0000",
+                "bytesInImage": 4
+              },
+              "firstInstall": {
+                "fileName": "Arducon-First-Install-v$version-ATmega328P.hex",
+                "bytesInImage": 5
+              },
+              "bootloader": {
+                "fileName": "Arducon-Bootloader-Optiboot-ATmega328P.hex",
+                "sourceArchiveFileName": "Arducon-Bootloader-Optiboot-ATmega328P-Source.zip",
+                "protocol": "stk500v1",
+                "baud": 115200,
+                "startAddress": "0x7E00",
+                "endAddress": "0x7FFF",
+                "bytesInImage": 2
+              },
+              "firmwareUpdate": {
+                "appBaud": 57600,
+                "updateBaud": 115200,
+                "appInfoCommand": "INF",
+                "appUpdateCommand": "UPD",
+                "bootloaderEntryCommand": "",
+                "pageBytes": 128,
+                "protocolVersion": 1,
+                "bootloaderProtocol": "stk500v1",
+                "bootloaderVersion": "unknown",
+                "appStartAddress": "0x0000",
+                "flashBytes": 32768,
+                "appLimitAddress": "0x7E00"
+              },
+              "workshopSetup": {
+                "setupLauncherFileName": "Prepare-Arducon-Updates-v$version-ATmega328P.ps1",
+                "provisioningScriptFileName": "provision-bootloader.ps1",
+                "serialValidationScriptFileName": "test-bootloader-serial.ps1",
+                "highFuseTarget": "0xDE",
+                "highFuseTargetPreserveEeprom": "0xD6",
+                "extendedFuseBodLevelTarget": "0x05",
+                "extendedFuseBodLevelDescription": "BODLEVEL=2.7V; preserve extended-fuse bits outside BODLEVEL[2:0]",
+                "supportedProgrammers": ["atmelice_isp", "usbasp"]
+              },
+              "files": [
+                ${releaseFileJson("Arducon-Update-v$version-ATmega328P.hex", "update", update)},
+                ${releaseFileJson("Arducon-First-Install-v$version-ATmega328P.hex", "first-install", firstInstall)},
+                ${releaseFileJson("Arducon-Bootloader-Optiboot-ATmega328P.hex", "bootloader", bootloader)},
+                ${releaseFileJson("Arducon-Bootloader-Optiboot-ATmega328P-Source.zip", "bootloader-source", source)},
+                ${releaseFileJson("Prepare-Arducon-Updates-v$version-ATmega328P.ps1", "workshop-setup-launcher", launcher)},
+                ${releaseFileJson("provision-bootloader.ps1", "workshop-setup-tool", provision)},
+                ${releaseFileJson("test-bootloader-serial.ps1", "workshop-setup-tool", validation)}
+              ]
+            }
+        """.trimIndent()
+    }
+
+    private fun releaseFileJson(fileName: String, kind: String, bytes: ByteArray): String =
+        """
+            {
+              "fileName": "$fileName",
+              "kind": "$kind",
+              "sizeBytes": ${bytes.size},
+              "sha256": "${Sha256.digestHex(bytes)}"
+            }
+        """.trimIndent()
 
     private fun intelHex(vararg chunks: Pair<Int, ByteArray>): String {
         val lines = mutableListOf<String>()

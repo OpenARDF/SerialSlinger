@@ -283,6 +283,22 @@ object DesktopInputSupport {
         return JvmTimeSupport.finishTimeCompactFromStart(startTimeCompact, duration)
     }
 
+    fun finishTimeCompactForDurationEdit(
+        startTimeCompact: String?,
+        currentTimeCompact: String?,
+        duration: Duration,
+    ): String {
+        val start = validateStartTimeForWrite(startTimeCompact)
+            ?: error("Set a valid Start Time first before changing Duration.")
+        val current = validateCurrentTimeForWrite(currentTimeCompact)
+            ?: error("Set Device Time first before changing Duration.")
+        val finish = finishTimeCompactFromStart(start, duration)
+        require(!parseCompactTimestamp(finish).isBefore(parseCompactTimestamp(current))) {
+            "Duration must place Finish Time after Device Time."
+        }
+        return finish
+    }
+
     fun relativeTimeSelectionForDuration(minutes: Int): RelativeTimeSelection {
         return RelativeScheduleSupport.selectionForDuration(minutes).toDesktopSelection()
     }
@@ -498,15 +514,20 @@ object DesktopInputSupport {
         hardwareBuild: String?,
         bootloaderVersion: String? = null,
         bootloaderProtocolVersion: Int? = null,
+        bootloaderProtocol: String? = null,
     ): String {
         return if (softwareVersion.isNullOrBlank() || hardwareBuild.isNullOrBlank()) {
             "Not Available"
         } else {
             buildString {
                 append("SW Ver: ${softwareVersion.trim()} HW Build: ${hardwareBuild.trim()}")
-                if (!bootloaderVersion.isNullOrBlank()) {
-                    append(" Bootloader: ${bootloaderVersion.trim()}")
-                    bootloaderProtocolVersion?.let { append(" protocol $it") }
+                val protocol = bootloaderProtocol?.takeIf { it.isNotBlank() } ?: bootloaderProtocolVersion?.toString()
+                val version = bootloaderVersion?.trim()?.takeIf { it.isNotBlank() }
+                if (version != null) {
+                    append(" Bootloader: $version")
+                    protocol?.let { append(" protocol $it") }
+                } else if (protocol != null) {
+                    append(" Bootloader protocol: $protocol")
                 }
             }
         }

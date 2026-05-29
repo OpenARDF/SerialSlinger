@@ -1,12 +1,14 @@
 package com.openardf.serialslinger.app
 
 import com.openardf.serialslinger.model.ConnectionState
+import com.openardf.serialslinger.model.ArduconFoxRole
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
 import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.EditableDeviceSettings
 import com.openardf.serialslinger.model.EventType
+import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
@@ -32,8 +34,11 @@ import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.protocol.ArduconAlreadyCurrentException
 import com.openardf.serialslinger.protocol.ArduconFirmwareUpdate
+import com.openardf.serialslinger.protocol.ArduconReleaseInfo
 import com.openardf.serialslinger.protocol.ArduconReleaseCache
+import com.openardf.serialslinger.protocol.ArduconReleaseSelection
 import com.openardf.serialslinger.protocol.ArduconReleaseSelectionSource
+import com.openardf.serialslinger.protocol.ArduconWorkshopSetup
 import com.openardf.serialslinger.protocol.SignalSlingerAppInfo
 import com.openardf.serialslinger.protocol.SignalSlingerBootloaderIdentity
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
@@ -41,6 +46,7 @@ import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
 import com.openardf.serialslinger.protocol.SignalSlingerAlreadyCurrentException
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseInfo
+import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelection
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
@@ -69,6 +75,7 @@ import java.awt.GridBagLayout
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Insets
+import java.awt.Frame
 import java.awt.KeyboardFocusManager
 import java.awt.Point
 import java.awt.RenderingHints
@@ -84,7 +91,11 @@ import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.URI
+import java.net.URLDecoder
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
@@ -93,7 +104,12 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.util.Calendar
 import java.util.Date
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpServer
 import javax.imageio.ImageIO
 import javax.swing.border.Border
 import javax.swing.AbstractButton
@@ -148,6 +164,271 @@ fun main() {
     System.setProperty("com.apple.mrj.application.apple.menu.about.name", "SerialSlinger")
     SwingUtilities.invokeLater {
         SerialSlingerDesktopFrame().isVisible = true
+    }
+}
+
+private data class DesktopControlSnapshot(
+    val version: String,
+    val deviceMode: String,
+    val busy: Boolean,
+    val connectionState: String,
+    val connectionIndicator: String,
+    val status: String,
+    val connectedPort: String?,
+    val selectedPort: String?,
+    val product: String?,
+    val softwareVersion: String?,
+    val hardwareBuild: String?,
+    val windowVisible: Boolean,
+    val windowDisplayable: Boolean,
+    val windowX: Int,
+    val windowY: Int,
+    val windowWidth: Int,
+    val windowHeight: Int,
+)
+
+private data class DesktopControlCommandResult(
+    val accepted: Boolean,
+    val message: String,
+)
+
+private class DesktopControlServer private constructor(
+    private val frame: SerialSlingerDesktopFrame,
+    private val server: HttpServer,
+    val discoveryFile: Path,
+) {
+    val baseUrl: String = "http://127.0.0.1:${server.address.port}"
+
+    fun stop() {
+        runCatching { server.stop(0) }
+        runCatching { Files.deleteIfExists(discoveryFile) }
+    }
+
+    private fun handle(exchange: HttpExchange) {
+        try {
+            val path = exchange.requestURI.path.orEmpty()
+            val params = queryParams(exchange.requestURI.rawQuery.orEmpty())
+            when (path) {
+                "/status" -> respondJson(exchange, HttpURLConnection.HTTP_OK, snapshotJson(runOnEdt { frame.controlSnapshot() }))
+                "/device-mode" -> {
+                    val mode = params["mode"] ?: readBodyParam(exchange, "mode")
+                    if (mode.isNullOrBlank()) {
+                        respondJson(exchange, HttpURLConnection.HTTP_BAD_REQUEST, errorJson("Missing `mode`."))
+                    } else {
+                        val result = runOnEdt { frame.controlSetDeviceMode(mode) }
+                        respondJson(exchange, if (result.accepted) HttpURLConnection.HTTP_OK else 409, commandJson(result))
+                    }
+                }
+                "/find-device" -> {
+                    val result = runOnEdt { frame.controlFindDevice() }
+                    respondJson(exchange, if (result.accepted) HttpURLConnection.HTTP_ACCEPTED else 409, commandJson(result))
+                }
+                "/show-window" -> {
+                    val result = runOnEdt {
+                        frame.controlShowWindow(
+                            x = params["x"]?.toIntOrNull(),
+                            y = params["y"]?.toIntOrNull(),
+                        )
+                    }
+                    respondJson(exchange, if (result.accepted) HttpURLConnection.HTTP_OK else 409, commandJson(result))
+                }
+                "/raw-command" -> {
+                    val command = params["command"] ?: readBodyParam(exchange, "command")
+                    if (command.isNullOrBlank()) {
+                        respondJson(exchange, HttpURLConnection.HTTP_BAD_REQUEST, errorJson("Missing `command`."))
+                    } else {
+                        val result = runOnEdt { frame.controlSendRawCommand(command) }
+                        respondJson(exchange, if (result.accepted) HttpURLConnection.HTTP_ACCEPTED else 409, commandJson(result))
+                    }
+                }
+                "/help" -> respondJson(exchange, HttpURLConnection.HTTP_OK, helpJson())
+                else -> respondJson(exchange, HttpURLConnection.HTTP_NOT_FOUND, errorJson("Unknown endpoint `$path`."))
+            }
+        } catch (exception: Exception) {
+            respondJson(
+                exchange,
+                HttpURLConnection.HTTP_INTERNAL_ERROR,
+                errorJson(exception.message ?: exception::class.simpleName.orEmpty()),
+            )
+        } finally {
+            exchange.close()
+        }
+    }
+
+    private fun readBodyParam(exchange: HttpExchange, name: String): String? {
+        val body = exchange.requestBody.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        if (body.isBlank()) {
+            return null
+        }
+        val params = queryParams(body)
+        return params[name] ?: parseSimpleJsonStringField(body, name)
+    }
+
+    private fun respondJson(exchange: HttpExchange, statusCode: Int, body: String) {
+        val bytes = body.toByteArray(Charsets.UTF_8)
+        exchange.responseHeaders.set("Content-Type", "application/json; charset=utf-8")
+        exchange.sendResponseHeaders(statusCode, bytes.size.toLong())
+        exchange.responseBody.use { stream ->
+            stream.write(bytes)
+        }
+    }
+
+    private fun helpJson(): String {
+        return """{"endpoints":["GET /status","POST /show-window?x=-1354&y=71","POST /device-mode?mode=SignalSlinger|Arducon","POST /find-device","POST /raw-command?command=INF"]}"""
+    }
+
+    private fun snapshotJson(snapshot: DesktopControlSnapshot): String {
+        return buildString {
+            append("{")
+            appendJsonField("version", snapshot.version)
+            append(",")
+            appendJsonField("deviceMode", snapshot.deviceMode)
+            append(",\"busy\":").append(snapshot.busy)
+            append(",")
+            appendJsonField("connectionState", snapshot.connectionState)
+            append(",")
+            appendJsonField("connectionIndicator", snapshot.connectionIndicator)
+            append(",")
+            appendJsonField("status", snapshot.status)
+            append(",")
+            appendJsonField("connectedPort", snapshot.connectedPort)
+            append(",")
+            appendJsonField("selectedPort", snapshot.selectedPort)
+            append(",")
+            appendJsonField("product", snapshot.product)
+            append(",")
+            appendJsonField("softwareVersion", snapshot.softwareVersion)
+            append(",")
+            appendJsonField("hardwareBuild", snapshot.hardwareBuild)
+            append(",\"windowVisible\":").append(snapshot.windowVisible)
+            append(",\"windowDisplayable\":").append(snapshot.windowDisplayable)
+            append(",\"windowX\":").append(snapshot.windowX)
+            append(",\"windowY\":").append(snapshot.windowY)
+            append(",\"windowWidth\":").append(snapshot.windowWidth)
+            append(",\"windowHeight\":").append(snapshot.windowHeight)
+            append("}")
+        }
+    }
+
+    private fun commandJson(result: DesktopControlCommandResult): String {
+        return buildString {
+            append("{\"accepted\":").append(result.accepted).append(",")
+            appendJsonField("message", result.message)
+            append("}")
+        }
+    }
+
+    private fun errorJson(message: String): String {
+        return buildString {
+            append("{")
+            appendJsonField("error", message)
+            append("}")
+        }
+    }
+
+    private fun StringBuilder.appendJsonField(name: String, value: String?) {
+        append('"').append(jsonEscape(name)).append('"').append(":")
+        if (value == null) {
+            append("null")
+        } else {
+            append('"').append(jsonEscape(value)).append('"')
+        }
+    }
+
+    private fun jsonEscape(value: String): String {
+        return buildString {
+            value.forEach { ch ->
+                when (ch) {
+                    '\\' -> append("\\\\")
+                    '"' -> append("\\\"")
+                    '\n' -> append("\\n")
+                    '\r' -> append("\\r")
+                    '\t' -> append("\\t")
+                    else -> append(ch)
+                }
+            }
+        }
+    }
+
+    private fun queryParams(rawQuery: String): Map<String, String> {
+        if (rawQuery.isBlank()) {
+            return emptyMap()
+        }
+        return rawQuery.split('&')
+            .mapNotNull { part ->
+                val keyValue = part.split('=', limit = 2)
+                val key = urlDecode(keyValue.firstOrNull().orEmpty()).takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val value = urlDecode(keyValue.getOrNull(1).orEmpty())
+                key to value
+            }
+            .toMap()
+    }
+
+    private fun urlDecode(value: String): String {
+        return URLDecoder.decode(value.replace("+", "%2B"), Charsets.UTF_8)
+    }
+
+    private fun parseSimpleJsonStringField(body: String, name: String): String? {
+        val pattern = """"${Regex.escape(name)}"\s*:\s*"([^"]*)"""".toRegex()
+        return pattern.find(body)?.groupValues?.getOrNull(1)
+    }
+
+    private fun <T> runOnEdt(action: () -> T): T {
+        if (SwingUtilities.isEventDispatchThread()) {
+            return action()
+        }
+        var result: Result<T>? = null
+        val latch = CountDownLatch(1)
+        SwingUtilities.invokeLater {
+            result = runCatching(action)
+            latch.countDown()
+        }
+        check(latch.await(5, TimeUnit.SECONDS)) {
+            "Timed out waiting for the desktop UI thread."
+        }
+        return requireNotNull(result).getOrThrow()
+    }
+
+    companion object {
+        private const val ENABLE_PROPERTY = "serialslinger.desktopControl"
+        private const val ENABLE_ENV = "SERIALSLINGER_DESKTOP_CONTROL"
+        private const val PORT_PROPERTY = "serialslinger.desktopControl.port"
+        private const val PORT_ENV = "SERIALSLINGER_DESKTOP_CONTROL_PORT"
+
+        fun shouldEnable(): Boolean {
+            val configured = System.getProperty(ENABLE_PROPERTY)
+                ?: System.getenv(ENABLE_ENV)
+                ?: return false
+            return configured.equals("true", ignoreCase = true) ||
+                configured == "1" ||
+                configured.equals("yes", ignoreCase = true)
+        }
+
+        fun start(frame: SerialSlingerDesktopFrame): DesktopControlServer {
+            val requestedPort = (
+                System.getProperty(PORT_PROPERTY)
+                    ?: System.getenv(PORT_ENV)
+                )?.toIntOrNull()?.coerceIn(0, 65_535) ?: 0
+            val address = InetSocketAddress(InetAddress.getLoopbackAddress(), requestedPort)
+            val server = HttpServer.create(address, 0)
+            val discoveryFile = Path.of(
+                System.getProperty("java.io.tmpdir"),
+                "serialslinger-desktop-control-${ProcessHandle.current().pid()}.json",
+            )
+            val controlServer = DesktopControlServer(frame, server, discoveryFile)
+            server.createContext("/") { exchange -> controlServer.handle(exchange) }
+            server.executor = Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "SerialSlinger Desktop Control").apply {
+                    isDaemon = true
+                }
+            }
+            server.start()
+            Files.writeString(
+                discoveryFile,
+                """{"pid":${ProcessHandle.current().pid()},"baseUrl":"${controlServer.baseUrl}","port":${server.address.port}}""",
+            )
+            return controlServer
+        }
     }
 }
 
@@ -231,6 +512,52 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         CONTINUE,
     }
 
+    private data class DeviceProductUiProfile(
+        val productLabel: String,
+        val connectionStatusSubject: String,
+        val supportsFirmwareUpdate: Boolean,
+        val supportsAutomaticFirmwareUpdates: Boolean,
+        val supportsBootloaderInstall: Boolean,
+        val supportsBarePcbBootloaderInstall: Boolean,
+    )
+
+    private enum class DeviceMode(
+        val label: String,
+        val productName: String,
+        val probeOrder: PortProbeOrder,
+        val uiProfile: DeviceProductUiProfile,
+    ) {
+        SIGNALSLINGER(
+            "SignalSlinger",
+            "SignalSlinger",
+            PortProbeOrder.SIGNALSLINGER_ONLY,
+            DeviceProductUiProfile(
+                productLabel = "SignalSlinger",
+                connectionStatusSubject = "SignalSlinger",
+                supportsFirmwareUpdate = true,
+                supportsAutomaticFirmwareUpdates = true,
+                supportsBootloaderInstall = true,
+                supportsBarePcbBootloaderInstall = true,
+            ),
+        ),
+        ARDUCON(
+            "Arducon",
+            "Arducon",
+            PortProbeOrder.ARDUCON_ONLY,
+            DeviceProductUiProfile(
+                productLabel = "Arducon",
+                connectionStatusSubject = "device",
+                supportsFirmwareUpdate = true,
+                supportsAutomaticFirmwareUpdates = true,
+                supportsBootloaderInstall = true,
+                supportsBarePcbBootloaderInstall = false,
+            ),
+        ),
+        ;
+
+        override fun toString(): String = label
+    }
+
     private val cloneAccentColor = Color(0x1E, 0x40, 0xAF)
     private val cloneAccentBorderColor = Color(0x93, 0xC5, 0xFD)
     private val cloneAccentBackground = Color(0xEF, 0xF6, 0xFF)
@@ -244,6 +571,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val synchronizedForeground = Color(0x16, 0x65, 0x34)
     private val portModel = DefaultComboBoxModel<SignalSlingerPortProbe>()
     private val portComboBox = JComboBox(portModel)
+    private val deviceModeCombo = JComboBox(DefaultComboBoxModel(DeviceMode.entries.toTypedArray()))
     private val autoDetectButton = JButton("Find Device")
     private var cloneSessionTemplateLocked: Boolean = false
     private val submitButton = createAccentButton(
@@ -287,15 +615,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
     private val contentSplitPane by lazy { JSplitPane(JSplitPane.HORIZONTAL_SPLIT, formScroll, JPanel()) }
+    private var deviceSettingsSectionPanel: JPanel? = null
+    private var timedEventSettingsPanel: JPanel? = null
+    private var deviceDataSectionPanel: JPanel? = null
 
     private fun codeSpeedOptions(): List<String> = (5..20).map { DesktopInputSupport.formatCodeSpeedWpm(it) }
 
     private fun batteryThresholdOptions(): List<String> = (35..41).map { "%.1f V".format(it / 10.0) }
 
+    private fun pttResetOptions(): List<String> = listOf("PTT Resets OFF", "PTT Resets ON")
+
     private val stationIdField = JTextField()
+    private val timedEventTypeRowLabel = JLabel("Event Type")
     private val eventTypeCombo =
         JComboBox(DefaultComboBoxModel(DesktopInputSupport.selectableEventTypes().toTypedArray()))
-    private val foxRoleCombo = JComboBox<FoxRole>()
+    private val arduconEventTypeRowLabel = JLabel("Event Type")
+    private val arduconEventTypeField = JTextField()
+    private val foxRoleCombo = JComboBox<Any>()
     private val patternTextField = JTextField()
     private val idSpeedField = JComboBox(DefaultComboBoxModel(codeSpeedOptions().toTypedArray()))
     private val devicePatternSpeedLabel = JLabel("Pattern Speed")
@@ -322,10 +658,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val finishTimeAbsoluteMirrorLabel = JLabel("Current setting:")
     private val finishTimeEditorHost = createScheduleTimeEditorHost()
     private val daysField = JSpinner(SpinnerNumberModel(1, 1, 255, 1))
+    private val daysToRunRowLabel = JLabel("Days To Run")
     private val daysRemainingLabel = JLabel(" ")
     private val startsInField = JTextField()
     private val lastsField = JTextField()
-    private val lastsRowLabel = JLabel("Lasts")
+    private val lastsRowLabel = JLabel("Duration")
     private val disableEventButton = JButton("Disable Event")
     private val currentFrequencyField = JTextField()
     private val currentBankField = JTextField()
@@ -339,6 +676,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val frequencyBLabel = JLabel("Frequency B")
     private val batteryThresholdField = JComboBox(DefaultComboBoxModel(batteryThresholdOptions().toTypedArray()))
     private val batteryModeCombo = JComboBox(DefaultComboBoxModel(ExternalBatteryControlMode.entries.toTypedArray()))
+    private val dtmfPasswordRowLabel = JLabel("DTMF Password")
+    private val dtmfPasswordField = JTextField()
+    private val amToneRowLabel = JLabel("AM Tone")
+    private val amToneField = JComboBox(DefaultComboBoxModel((0..6).map { it.toString() }.toTypedArray()))
+    private val pttResetRowLabel = JLabel("PTT Reset")
+    private val pttResetField = JComboBox(DefaultComboBoxModel(pttResetOptions().toTypedArray()))
     private val transmissionsField = JTextField()
     private val versionInfoField = JTextField()
     private val internalBatteryField = JTextField()
@@ -357,11 +700,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val finishTimeRowLabel = JLabel("Finish Time")
     private val currentFrequencyRowLabel = JLabel("Frequency")
     private val currentBankRowLabel = JLabel("Memory Bank")
+    private val internalBatteryRowLabel = JLabel("Internal Battery")
     private val currentTemperatureRowLabel = JLabel("Current Temperature")
     private val minimumTemperatureRowLabel = JLabel("Minimum Temperature")
     private val maximumTemperatureRowLabel = JLabel("Maximum Temperature")
     private val maximumEverTemperatureRowLabel = JLabel("Maximum Ever Temperature")
     private val thermalShutdownThresholdRowLabel = JLabel("Thermal Shutdown Threshold")
+    private val externalBatteryControlRowLabel = JLabel("Ext. Bat. Ctrl")
     private val transmissionsRowLabel = JLabel("External device being controlled")
     private val defaultRowLabelForeground = currentTimeRowLabel.foreground
     private val currentTimeRowPanel by lazy { buildCurrentTimeRow() }
@@ -422,8 +767,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val portMemory: DesktopPortMemory = PreferencesDesktopPortMemory
     private val displayPreferencesStore: DesktopDisplayPreferencesStore = PreferencesDesktopDisplayPreferencesStore
     private val sessionLog = DesktopSessionLog()
+    private var desktopControlServer: DesktopControlServer? = null
     private lateinit var showLogMenuItem: JCheckBoxMenuItem
     private lateinit var showRawSerialMenuItem: JCheckBoxMenuItem
+    private lateinit var updateFirmwareMenuItem: JMenuItem
     private lateinit var automaticFirmwareUpdatesMenuItem: JCheckBoxMenuItem
     private lateinit var frequencyKhzMenuItem: JRadioButtonMenuItem
     private lateinit var frequencyMhzMenuItem: JRadioButtonMenuItem
@@ -485,8 +832,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         SerialSlingerAppIcon.install(this)
         addWindowListener(
             object : WindowAdapter() {
+                override fun windowOpened(event: WindowEvent) {
+                    maybeStartDesktopControlServer()
+                }
+
                 override fun windowClosing(event: WindowEvent) {
                     stopTemperatureLoggingForShutdown()
+                    desktopControlServer?.stop()
                 }
             },
         )
@@ -504,6 +856,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         systemTimeField.isEditable = false
         currentFrequencyField.isEditable = false
         currentBankField.isEditable = false
+        arduconEventTypeField.isEditable = false
         startsInField.isEditable = false
         lastsField.isEditable = false
         versionInfoField.isEditable = false
@@ -519,6 +872,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureInformationalField(systemTimeField)
         configureInformationalField(currentFrequencyField)
         configureInformationalField(currentBankField)
+        configureInformationalField(arduconEventTypeField)
         configureInformationalField(startsInField)
         configureInformationalField(lastsField)
         configureInteractiveSelectionField(lastsField)
@@ -559,6 +913,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
         installTrimmedComboRenderer(eventTypeCombo)
         installTrimmedComboRenderer(foxRoleCombo)
+        installTrimmedComboRenderer(deviceModeCombo)
+        deviceModeCombo.selectedItem = preferredDeviceMode()
         installTrimmedComboRenderer(idSpeedField)
         installTrimmedComboRenderer(devicePatternSpeedField)
         installTrimmedComboRenderer(timedPatternSpeedField)
@@ -678,6 +1034,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
         disableEventButton.addActionListener { disableProgrammedEvent() }
         rawCommandField.addActionListener { sendRawSerialCommand() }
+        deviceModeCombo.addActionListener {
+            if (!updatingForm && !backgroundWorkInProgress) {
+                handleDeviceModeChanged()
+            }
+        }
         portComboBox.addActionListener {
             if (suppressPortSelectionHandling || backgroundWorkInProgress || updatingForm) {
                 return@addActionListener
@@ -685,7 +1046,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val selectedPath = selectedProbe()?.portInfo?.systemPortPath ?: return@addActionListener
             if (selectedPath == currentConnectedPortPath && currentState?.connectionState == ConnectionState.CONNECTED) {
                 autoDetectNoDeviceFound = false
-                showConnectionIndicator(ConnectionIndicatorState.CONNECTED, "Connected to SignalSlinger on ${selectedPath}")
+                showConnectionIndicator(ConnectionIndicatorState.CONNECTED, connectionIndicatorText(loadedSnapshot, selectedPath))
                 refreshAvailablePorts(silent = true)
                 setStatus("Connected to ${selectedPath}.")
                 return@addActionListener
@@ -700,7 +1061,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 try {
                     val eventType = eventTypeCombo.selectedItem as? EventType
                     if (eventType != null) {
-                        syncFoxRoleOptions(eventType, foxRoleCombo.selectedItem as FoxRole?)
+                        syncFoxRoleOptions(eventType, foxRoleCombo.selectedItem as? FoxRole)
                         updateTimedEventFrequencyVisibility(eventType)
                     }
                 } finally {
@@ -720,6 +1081,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             listOf(
                 DesktopLogEntry("Desktop UI launched.", DesktopLogCategory.APP),
                 DesktopLogEntry("SerialSlinger app version ${SerialSlingerAppVersion.value}.", DesktopLogCategory.APP),
+                DesktopLogEntry("Connected device type: none.", DesktopLogCategory.APP),
                 DesktopLogEntry("Process ID: ${ProcessHandle.current().pid()}.", DesktopLogCategory.APP),
                 DesktopLogEntry("Launch directory: ${System.getProperty("user.dir")}.", DesktopLogCategory.APP),
                 DesktopLogEntry("Current log file: ${sessionLog.currentLogFile()}", DesktopLogCategory.APP),
@@ -741,6 +1103,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             add(JLabel("Serial Port"))
             add(Box.createHorizontalStrut(8))
             add(portComboBox)
+            add(Box.createHorizontalStrut(12))
+            add(JLabel("Device Mode"))
+            add(Box.createHorizontalStrut(8))
+            add(deviceModeCombo)
             add(Box.createHorizontalStrut(8))
             add(autoDetectButton)
             add(Box.createHorizontalStrut(8))
@@ -881,18 +1247,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         addActionListener { setRawSerialVisible(isSelected) }
                     }
                     add(showRawSerialMenuItem)
-                    add(
-                        JMenuItem("Update SignalSlinger Firmware...").apply {
-                            addActionListener { chooseSignalSlingerUpdatePackage() }
-                        },
-                    )
-                    add(
-                        JMenuItem("Update Arducon Firmware...").apply {
-                            addActionListener { chooseArduconUpdatePackage() }
-                        },
-                    )
+                    updateFirmwareMenuItem = JMenuItem().apply {
+                        addActionListener { chooseFirmwareUpdatePackageForSelectedProduct() }
+                    }
+                    add(updateFirmwareMenuItem)
                     automaticFirmwareUpdatesMenuItem = JCheckBoxMenuItem(
-                        "Automatic SignalSlinger Firmware Updates",
+                        "",
                         displayPreferences.automaticFirmwareUpdatesEnabled,
                     ).apply {
                         addActionListener { setAutomaticFirmwareUpdatesEnabled(isSelected) }
@@ -901,7 +1261,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     add(
                         JMenuItem("Install Bootloader on SignalSlinger...").apply {
                             installBootloaderMenuItem = this
-                            addActionListener { readDeviceThenChooseSignalSlingerWorkshopSetupPackage() }
+                            addActionListener { chooseBootloaderInstallPackageForSelectedProduct() }
                         },
                     )
                     add(
@@ -1299,9 +1659,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 title = "Device Settings",
                 helperText = "These settings are individual to each device. They are not applied when Clone is used.",
             ) { section ->
+                deviceSettingsSectionPanel = section
                 var row = 0
                 row = addSectionNote(section, row)
                 row = addRow(section, row, "Fox Role", foxRoleCombo)
+                row = addRow(section, row, arduconEventTypeRowLabel, arduconEventTypeField)
                 row = addRow(section, row, "Pattern Text", patternTextField)
                 row = addRow(section, row, devicePatternSpeedLabel, devicePatternSpeedField)
                 row = addRow(section, row, currentTimeRowLabel, currentTimeRowPanel)
@@ -1309,7 +1671,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 row = addRow(section, row, manualTimeRowLabel, manualTimeRowPanel)
                 row = addRow(section, row, currentFrequencyRowLabel, currentFrequencyField)
                 row = addRow(section, row, currentBankRowLabel, currentBankField)
-                row = addRow(section, row, "Ext. Bat. Ctrl", batteryModeCombo)
+                row = addRow(section, row, dtmfPasswordRowLabel, dtmfPasswordField)
+                row = addRow(section, row, pttResetRowLabel, pttResetField)
+                row = addRow(section, row, externalBatteryControlRowLabel, batteryModeCombo)
                 row = addRow(section, row, transmissionsRowLabel, transmissionsField)
                 addRow(section, row, "Low Battery Threshold", batteryThresholdField)
             })
@@ -1323,17 +1687,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     helperForeground = cloneAccentColor,
                     helperBackground = cloneAccentBackground,
                 ) { section ->
+                    timedEventSettingsPanel = section
                     var row = 0
                     row = addSectionNote(section, row)
-                    row = addRow(section, row, "Event Type", eventTypeCombo)
+                    row = addRow(section, row, timedEventTypeRowLabel, eventTypeCombo)
                     row = addRow(section, row, "Station ID", stationIdField)
                     row = addRow(section, row, "ID Speed", idSpeedField)
+                    row = addRow(section, row, amToneRowLabel, amToneField)
                     row = addRow(section, row, timedPatternSpeedLabel, timedPatternSpeedField)
                     row = addRow(section, row, startTimeRowLabel, startTimeEditorHost)
                     row = addRow(section, row, finishTimeRowLabel, finishTimeEditorHost)
                     row = addRow(section, row, "Event Status", buildEventStatusRow())
                     row = addRow(section, row, lastsRowLabel, lastsField)
-                    row = addRow(section, row, "Days To Run", buildDaysToRunRow())
+                    row = addRow(section, row, daysToRunRowLabel, buildDaysToRunRow())
                     row = addRow(section, row, frequency1Label, frequency1Field)
                     row = addRow(section, row, frequency2Label, frequency2Field)
                     row = addRow(section, row, frequency3Label, frequency3Field)
@@ -1342,8 +1708,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             add(Box.createVerticalStrut(12))
             add(buildSectionPanel("Device Data") { section ->
+                deviceDataSectionPanel = section
                 var row = 0
-                row = addRow(section, row, "Internal Battery", internalBatteryField)
+                row = addRow(section, row, internalBatteryRowLabel, internalBatteryField)
                 row = addRow(section, row, "External Battery", externalBatteryField)
                 row = addRow(section, row, maximumEverTemperatureRowLabel, maximumEverTemperatureField)
                 row = addRow(section, row, maximumTemperatureRowLabel, maximumTemperatureField)
@@ -1381,6 +1748,112 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             buildRows(this)
         }
+    }
+
+    private fun updateProductSectionTitles(snapshot: DeviceSnapshot?) {
+        updateProductSectionTitles(productLabel(snapshot))
+        updateProductSpecificRowVisibility(snapshot)
+    }
+
+    private fun updateProductSectionTitles(productLabel: String) {
+        setSectionTitle(deviceSettingsSectionPanel, "$productLabel Settings")
+        setSectionTitle(deviceDataSectionPanel, "$productLabel Data")
+    }
+
+    private fun productLabel(snapshot: DeviceSnapshot?): String {
+        return when {
+            snapshot == null -> "Device"
+            snapshot.info.productName.equals("Arducon", ignoreCase = true) -> "Arducon"
+            snapshot.info.productName.equals("SignalSlinger", ignoreCase = true) -> "SignalSlinger"
+            snapshot.info.productName.isNullOrBlank() -> "SignalSlinger"
+            else -> snapshot.info.productName.orEmpty()
+        }
+    }
+
+    private fun connectedDeviceRequiredMessage(): String {
+        return "Connect and load ${activeProductUiProfile().productLabel} first."
+    }
+
+    private fun updateProductSpecificRowVisibility(snapshot: DeviceSnapshot?) {
+        val showArduconOnlyRows =
+            snapshot?.info?.productName.equals("Arducon", ignoreCase = true) ||
+                (snapshot == null && selectedDeviceMode() == DeviceMode.ARDUCON)
+        val showDaysToRunRow = snapshot?.capabilities?.supportsDaysToRun != false &&
+            !(snapshot == null && selectedDeviceMode() == DeviceMode.ARDUCON)
+        val showFrequencyProfileRows = snapshot?.capabilities?.supportsFrequencyProfiles != false &&
+            !(snapshot == null && selectedDeviceMode() == DeviceMode.ARDUCON)
+        setRowVisible(dtmfPasswordRowLabel, dtmfPasswordField, showArduconOnlyRows)
+        setRowVisible(arduconEventTypeRowLabel, arduconEventTypeField, showArduconOnlyRows)
+        setRowVisible(timedEventTypeRowLabel, eventTypeCombo, !showArduconOnlyRows)
+        setRowVisible(amToneRowLabel, amToneField, showArduconOnlyRows)
+        setRowVisible(pttResetRowLabel, pttResetField, showArduconOnlyRows)
+        setRowVisible(externalBatteryControlRowLabel, batteryModeCombo, !showArduconOnlyRows)
+        setRowVisible(daysToRunRowLabel, daysField.parent ?: daysField, showDaysToRunRow)
+        setRowVisible(currentFrequencyRowLabel, currentFrequencyField, showFrequencyProfileRows)
+        setRowVisible(currentBankRowLabel, currentBankField, showFrequencyProfileRows)
+        updateTimedEventFrequencyVisibility(snapshot?.settings?.eventType ?: loadedSnapshot?.settings?.eventType ?: EventType.NONE)
+        deviceSettingsSectionPanel?.revalidate()
+        deviceSettingsSectionPanel?.repaint()
+        timedEventSettingsPanel?.revalidate()
+        timedEventSettingsPanel?.repaint()
+    }
+
+    private fun setRowVisible(label: JLabel, component: Component, visible: Boolean) {
+        label.isVisible = visible
+        component.isVisible = visible
+    }
+
+    private fun selectedDeviceMode(): DeviceMode {
+        return deviceModeCombo.selectedItem as? DeviceMode ?: DeviceMode.SIGNALSLINGER
+    }
+
+    private fun preferredDeviceMode(): DeviceMode {
+        return DeviceMode.entries.firstOrNull { it.name == displayPreferences.deviceModeName }
+            ?: DeviceMode.SIGNALSLINGER
+    }
+
+    private fun activeProductUiProfile(): DeviceProductUiProfile {
+        val snapshotProduct = loadedSnapshot?.info?.productName
+        return productUiProfileFor(snapshotProduct)
+    }
+
+    private fun productUiProfileFor(productName: String?): DeviceProductUiProfile {
+        return DeviceMode.entries.firstOrNull { mode ->
+            productName.equals(mode.productName, ignoreCase = true)
+        }?.uiProfile ?: selectedDeviceMode().uiProfile
+    }
+
+    private fun connectionIndicatorText(snapshot: DeviceSnapshot?, portPath: String): String {
+        val subject = productUiProfileFor(snapshot?.info?.productName).connectionStatusSubject
+        return "Connected to $subject on $portPath"
+    }
+
+    private fun connectionClockWarningText(snapshot: DeviceSnapshot?, portPath: String): String {
+        return "${connectionIndicatorText(snapshot, portPath)}. Device clock appears out of sync with system time."
+    }
+
+    private fun acceptsProduct(productName: String?): Boolean {
+        return productName.equals(selectedDeviceMode().productName, ignoreCase = true)
+    }
+
+    private fun acceptsProbeResult(probe: SignalSlingerPortProbe): Boolean {
+        return probe.state == PortProbeState.DETECTED && acceptsProduct(probe.productName)
+    }
+
+    private fun acceptedProbeOrder(): PortProbeOrder = selectedDeviceMode().probeOrder
+
+    private fun connectedDeviceLogEntry(snapshot: DeviceSnapshot?, portPath: String? = currentConnectedPortPath): DesktopLogEntry {
+        val port = portPath?.takeIf { it.isNotBlank() } ?: "unknown port"
+        return DesktopLogEntry(
+            "Connected device type: ${productLabel(snapshot)} on $port.",
+            DesktopLogCategory.DEVICE,
+        )
+    }
+
+    private fun setSectionTitle(panel: JPanel?, title: String) {
+        (panel?.border as? TitledBorder)?.title = title
+        panel?.revalidate()
+        panel?.repaint()
     }
 
     private fun addSectionNote(panel: JPanel, row: Int): Int {
@@ -1609,6 +2082,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         installComboCommitHandler(devicePatternSpeedField) { applyPatternSpeedChange() }
         installComboCommitHandler(timedPatternSpeedField) { applyPatternSpeedChange() }
         installComboCommitHandler(batteryThresholdField) { applyBatteryThresholdChange() }
+        installTextCommitHandler(dtmfPasswordField, "DTMF Password") { applyDtmfPasswordChange() }
+        installComboCommitHandler(amToneField) { applyAmToneChange() }
+        installComboCommitHandler(pttResetField) { applyPttResetChange() }
         installSpinnerCommitHandler(daysField, "Days To Run", hasMeaningfulChange = { true }) { applyDaysToRunChange() }
         installSpinnerCommitHandler(
             frequency1Field,
@@ -1641,8 +2117,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         foxRoleCombo.addActionListener {
             if (!updatingForm) {
-                (foxRoleCombo.selectedItem as? FoxRole)?.let { foxRole ->
-                    appendUserActionLog("Selected Fox Role: ${foxRole.uiLabel}.")
+                foxRoleCombo.selectedItem?.let { foxRole ->
+                    appendUserActionLog("Selected Fox Role: $foxRole.")
                 }
                 applyFoxRoleChange()
             }
@@ -1917,6 +2393,145 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return row + 1
     }
 
+    fun controlSnapshot(): DesktopControlSnapshot {
+        require(SwingUtilities.isEventDispatchThread())
+        return DesktopControlSnapshot(
+            version = SerialSlingerAppVersion.value,
+            deviceMode = selectedDeviceMode().label,
+            busy = backgroundWorkInProgress,
+            connectionState = currentState?.connectionState?.name ?: ConnectionState.DISCONNECTED.name,
+            connectionIndicator = connectionIndicatorMessage,
+            status = statusLabel.text.orEmpty(),
+            connectedPort = currentConnectedPortPath,
+            selectedPort = selectedProbe()?.portInfo?.systemPortPath,
+            product = loadedSnapshot?.info?.productName,
+            softwareVersion = loadedSnapshot?.info?.softwareVersion,
+            hardwareBuild = loadedSnapshot?.info?.hardwareBuild,
+            windowVisible = isVisible,
+            windowDisplayable = isDisplayable,
+            windowX = location.x,
+            windowY = location.y,
+            windowWidth = width,
+            windowHeight = height,
+        )
+    }
+
+    fun controlSetDeviceMode(modeLabel: String): DesktopControlCommandResult {
+        require(SwingUtilities.isEventDispatchThread())
+        val mode = DeviceMode.entries.firstOrNull {
+            it.label.equals(modeLabel, ignoreCase = true) ||
+                it.productName.equals(modeLabel, ignoreCase = true) ||
+                it.name.equals(modeLabel, ignoreCase = true)
+        } ?: return DesktopControlCommandResult(false, "Unknown device mode `$modeLabel`.")
+        if (backgroundWorkInProgress) {
+            return DesktopControlCommandResult(false, "Busy: ${statusLabel.text.orEmpty()}")
+        }
+        if (selectedDeviceMode() != mode) {
+            deviceModeCombo.selectedItem = mode
+        }
+        return DesktopControlCommandResult(true, "Device Mode set to ${mode.label}.")
+    }
+
+    fun controlFindDevice(): DesktopControlCommandResult {
+        require(SwingUtilities.isEventDispatchThread())
+        if (backgroundWorkInProgress) {
+            return DesktopControlCommandResult(false, "Busy: ${statusLabel.text.orEmpty()}")
+        }
+        autoDetectPorts()
+        return DesktopControlCommandResult(true, "Find Device started.")
+    }
+
+    fun controlSendRawCommand(command: String): DesktopControlCommandResult {
+        require(SwingUtilities.isEventDispatchThread())
+        val trimmed = command.trim()
+        if (trimmed.isBlank()) {
+            return DesktopControlCommandResult(false, "Raw command is blank.")
+        }
+        if (backgroundWorkInProgress) {
+            return DesktopControlCommandResult(false, "Busy: ${statusLabel.text.orEmpty()}")
+        }
+        rawCommandField.text = trimmed
+        sendRawSerialCommand()
+        return DesktopControlCommandResult(true, "Raw command started: $trimmed")
+    }
+
+    fun controlShowWindow(x: Int?, y: Int?): DesktopControlCommandResult {
+        require(SwingUtilities.isEventDispatchThread())
+        if (x != null && y != null) {
+            setLocation(x, y)
+        }
+        extendedState = extendedState and Frame.ICONIFIED.inv()
+        isVisible = true
+        toFront()
+        requestFocus()
+        return DesktopControlCommandResult(true, "Window shown at ${location.x},${location.y}.")
+    }
+
+    private fun maybeStartDesktopControlServer() {
+        if (desktopControlServer != null) {
+            return
+        }
+        if (!DesktopControlServer.shouldEnable()) {
+            return
+        }
+        desktopControlServer = DesktopControlServer.start(this).also { server ->
+            appendLog(
+                "Desktop Control",
+                listOf(
+                    DesktopLogEntry(
+                        "Desktop control server listening at ${server.baseUrl}; discovery file: ${server.discoveryFile}",
+                        DesktopLogCategory.APP,
+                    ),
+                ),
+            )
+        }
+    }
+
+    private fun handleDeviceModeChanged() {
+        val mode = selectedDeviceMode()
+        displayPreferences = displayPreferences.copy(deviceModeName = mode.name)
+        persistDisplayPreferences()
+        appendLog(
+            "Device Mode",
+            listOf(DesktopLogEntry("Device mode set to ${mode.label}. Other device types will be ignored.", DesktopLogCategory.APP)),
+        )
+        val wasUpdatingForm = updatingForm
+        updatingForm = true
+        try {
+            clearDeviceStateForDeviceModeChange()
+            clearFormForUnread()
+            updateProductSectionTitles(null)
+            updateAdvancedDeviceDataRefreshTimer()
+        } finally {
+            updatingForm = wasUpdatingForm
+        }
+        showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "Not Connected")
+        setStatus("${mode.label} mode selected.")
+        knownProbeResults.clear()
+        autoDetectNoDeviceFound = false
+        updateAdvancedMenuItems()
+        refreshAvailablePorts(silent = true)
+    }
+
+    private fun clearDeviceStateForDeviceModeChange() {
+        stopAdvancedDeviceDataRefreshTimer()
+        if (temperatureLogTimer != null) {
+            setTemperatureLoggingEnabled(false)
+        }
+        try {
+            currentTransport?.disconnect()
+        } catch (_: Exception) {
+        }
+        currentTransport = null
+        currentConnectedPortPath = null
+        currentState = null
+        loadedSnapshot = null
+        temperatureResetCommandsSupported = null
+        cloneTemplateSettings = null
+        setCloneSessionTemplateLocked(false)
+        updateCloneTemplateLabel("Clone template not set")
+    }
+
     private fun smartPollPorts() {
         if (backgroundWorkInProgress) {
             return
@@ -2018,6 +2633,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         currentState = updatedState
         loadedSnapshot = updatedState?.snapshot
+        updateProductSectionTitles(loadedSnapshot)
         updateAdvancedDeviceDataRefreshTimer()
         consecutiveDeviceTimeCheckNoResponseCount = 0
         clockPhaseWarningActive = false
@@ -2061,7 +2677,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         passiveProbeInProgress = true
         Thread {
-            val result = SignalSlingerPortDiscovery.probePort(candidate)
+            val result = SignalSlingerPortDiscovery.probePort(candidate, probeOrder = acceptedProbeOrder())
 
             SwingUtilities.invokeLater {
                 passiveProbeInProgress = false
@@ -2072,6 +2688,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun applyPassiveProbeResult(result: SignalSlingerPortProbe) {
         val previous = knownProbeResults[result.portInfo.systemPortPath]
+        if (result.state == PortProbeState.DETECTED && !acceptsProbeResult(result)) {
+            knownProbeResults[result.portInfo.systemPortPath] = result.copy(
+                state = PortProbeState.NOT_DETECTED,
+                summary = "Ignored ${result.detectedProductLabel()} in ${selectedDeviceMode().label} mode",
+            )
+            refreshAvailablePorts(silent = true)
+            return
+        }
         knownProbeResults[result.portInfo.systemPortPath] = result
         if (backgroundWorkInProgress) {
             return
@@ -2087,12 +2711,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 if (currentConnectedPortPath == null || autoDetectNoDeviceFound) {
                     autoDetectNoDeviceFound = false
                 }
+                if (currentConnectedPortPath == null || result.portInfo.systemPortPath == currentConnectedPortPath) {
+                    updateProductSectionTitles(result.detectedProductLabel())
+                }
                 refreshAvailablePorts(silent = true)
                 appendLog(
                     "Port Monitor",
                     listOf(
                         DesktopLogEntry(
                             "${result.detectedProductLabel()} is responding on ${result.portInfo.systemPortPath}.",
+                            DesktopLogCategory.DEVICE,
+                        ),
+                        DesktopLogEntry(
+                            "Detected device type: ${result.detectedProductLabel()} on ${result.portInfo.systemPortPath}.",
                             DesktopLogCategory.DEVICE,
                         ),
                     ),
@@ -2171,11 +2802,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         runInBackground("Looking for attached devices...") {
-            val preferredProbeAttempt = attemptAutoDetectPreferredPortRecovery(
-                initialAvailablePorts = ports,
-                selectedPortPath = selectedPortPath,
-                lastWorkingPortPath = lastWorkingPortPath,
-            )
+            val preferredProbeAttempt =
+                if (connectedPortPath == null && shouldTryPreferredPortRecovery(selectedPortPath, lastWorkingPortPath, ports)) {
+                    attemptAutoDetectPreferredPortRecovery(
+                        initialAvailablePorts = ports,
+                        selectedPortPath = selectedPortPath,
+                        lastWorkingPortPath = lastWorkingPortPath,
+                    )
+                } else {
+                    PreferredProbeAttempt(
+                        probeResult = null,
+                        loadResult = null,
+                        attemptCount = 0,
+                        probedPath = null,
+                    )
+                }
             val preferredProbeResult = preferredProbeAttempt.probeResult
             val preferredLoadResult = preferredProbeAttempt.loadResult
             if (preferredLoadResult != null) {
@@ -2208,6 +2849,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             val scanResult = SignalSlingerPortDiscovery.findFirstDetectedPort(
                 ports = scannedPorts,
+                probeOrder = acceptedProbeOrder(),
                 onProbeComplete = { result ->
                     knownProbeResults[result.portInfo.systemPortPath] = result
                     SwingUtilities.invokeLater {
@@ -2215,6 +2857,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         selectPort(result.portInfo.systemPortPath)
                         setStatus(
                             if (result.state == PortProbeState.DETECTED) {
+                                updateProductSectionTitles(result.detectedProductLabel())
                                 "Detected ${result.detectedProductLabel()} on ${result.portInfo.systemPortPath}. Loading settings..."
                             } else {
                                 "Probed ${result.portInfo.systemPortPath}. Continuing search..."
@@ -2248,7 +2891,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 ?.takeIf { path -> finalPorts.any { it.systemPortPath == path } }
                 ?.let { path ->
                     val preferredPath = DesktopSmartPollingPolicy.preferredPortPath(finalPorts, path) ?: path
-                    SignalSlingerPortDiscovery.probePort(resolvePortInfoFor(preferredPath))
+                    SignalSlingerPortDiscovery.probePort(resolvePortInfoFor(preferredPath), probeOrder = acceptedProbeOrder())
                 }
 
             SwingUtilities.invokeLater {
@@ -2318,7 +2961,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
                 if (connectedPortStillAvailable) {
                     autoDetectNoDeviceFound = false
-                    showConnectionIndicator(ConnectionIndicatorState.CONNECTED, "Connected to device on ${connectedPortPath}")
+                    showConnectionIndicator(ConnectionIndicatorState.CONNECTED, connectionIndicatorText(loadedSnapshot, connectedPortPath.orEmpty()))
                     refreshAvailablePorts(silent = true)
                     appendLog(
                         "Auto Detect",
@@ -2365,6 +3008,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return preferredLastWorkingPath
         }
         return DesktopSmartPollingPolicy.preferredPortPath(availablePorts, selectedPortPath)
+    }
+
+    private fun shouldTryPreferredPortRecovery(
+        selectedPortPath: String?,
+        lastWorkingPortPath: String?,
+        availablePorts: List<DesktopSerialPortInfo>,
+    ): Boolean {
+        val preferredPath = preferredAutoDetectProbePath(
+            availablePorts = availablePorts,
+            selectedPortPath = selectedPortPath,
+            lastWorkingPortPath = lastWorkingPortPath,
+        ) ?: return false
+        return DesktopSmartPollingPolicy.aliasCandidates(preferredPath).any { candidatePath ->
+            acceptsProduct(knownProbeResults[candidatePath]?.productName)
+        }
     }
 
     private fun isTransientAutoDetectProbeFailure(result: SignalSlingerPortProbe?): Boolean {
@@ -2425,6 +3083,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         appBaud = connection.result.state.snapshot?.info?.appBaud,
                         lastProbedAtMs = System.currentTimeMillis(),
                     )
+                    if (!acceptsProduct(productName)) {
+                        connection.transport.disconnect()
+                        return PreferredProbeAttempt(
+                            probeResult = probeResult.copy(
+                                state = PortProbeState.NOT_DETECTED,
+                                summary = "Ignored $productName in ${selectedDeviceMode().label} mode",
+                            ),
+                            loadResult = null,
+                            attemptCount = attemptCount,
+                            probedPath = candidatePath,
+                        )
+                    }
                     return PreferredProbeAttempt(
                         probeResult = probeResult,
                         loadResult = connection.copy(
@@ -2735,7 +3405,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         showConnectionIndicator(
             ConnectionIndicatorState.SEARCHING,
-            "Reloading $selectedPath as the active SignalSlinger...",
+            "Reloading $selectedPath as the active device...",
         )
         runInBackground("Reloading $selectedPath...") {
             val reloadedConnection = loadPort(selectedPath)
@@ -2803,6 +3473,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         runInBackground("Loading settings from ${probe.portInfo.systemPortPath}...") {
             val loadResult = loadPortWithAliasFallback(probe.portInfo.systemPortPath)
+            if (!acceptsProduct(loadResult.result.state.snapshot?.info?.productName)) {
+                loadResult.transport.disconnect()
+                SwingUtilities.invokeLater {
+                    setStatus("Ignored ${productLabel(loadResult.result.state.snapshot)} because ${selectedDeviceMode().label} mode is selected.")
+                    showConnectionIndicator(ConnectionIndicatorState.DISCONNECTED, "Not Connected")
+                }
+                return@runInBackground
+            }
             SwingUtilities.invokeLater {
                 applyLoadedConnection(loadResult)
                 setStatus("Loaded settings from ${loadResult.portPath}.")
@@ -2874,9 +3552,112 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 },
             )
             val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
-            val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings)
+            val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings, targetSnapshot.capabilities)
             val validated = editable.toValidatedDeviceSettings()
             val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
+
+            if (targetSnapshot.info.productName.equals("Arducon", ignoreCase = true)) {
+                setBusyProgress(20, 100, "Writing Arducon clone settings")
+                val submitResult = DeviceSessionController.submitEdits(
+                    targetRefresh.state,
+                    editable,
+                    transport,
+                    progress = { completed, total ->
+                        setBusyProgressRange(20, 62, completed, total, commandProgressLabel(completed, total))
+                    },
+                )
+                setBusyProgress(70, 100, "Refreshing cloned settings")
+                val refreshed = DeviceSessionController.refreshFromDevice(
+                    submitResult.state,
+                    transport,
+                    startEditing = true,
+                    progress = { completed, total ->
+                        setBusyProgressRange(70, 92, completed, total, commandProgressLabel(completed, total))
+                    },
+                )
+                requireLoadResponses(currentConnectedPortPath.orEmpty(), refreshed)
+                setBusyProgress(94, 100, "Checking device time")
+                val clockSample = postLoadClockSample(transport, refreshed.state.snapshot)
+                val refreshedWithClock = mergeLoadResults(refreshed, clockSample?.first)
+                val syncResult =
+                    if (clockSample?.second?.phaseErrorMillis?.let(::hasClockPhaseWarning) == true) {
+                        performAlignedTimeSync(
+                            transport = transport,
+                            state = refreshedWithClock.state,
+                            snapshot = requireNotNull(refreshedWithClock.state.snapshot),
+                        )
+                    } else {
+                        null
+                    }
+                val finalRefresh =
+                    syncResult?.let { sync ->
+                        mergeLoadResults(
+                            refreshedWithClock,
+                            DeviceLoadResult(
+                                state = sync.finalAttempt.state,
+                                commandsSent = emptyList(),
+                                linesReceived = emptyList(),
+                                traceEntries = buildSyncTraceEntries(sync),
+                            ),
+                        )
+                    } ?: refreshedWithClock
+                setBusyProgress(100, 100, "Done")
+
+                currentState = finalRefresh.state
+                loadedSnapshot = finalRefresh.state.snapshot
+
+                SwingUtilities.invokeLater {
+                    if (syncResult != null) {
+                        deviceTimeOffset = Duration.ofMillis(-(syncResult.finalAttempt.phaseErrorMillis ?: 0L))
+                        lastDeviceTimeCheckAtMs = System.currentTimeMillis()
+                    } else {
+                        clockSample?.second?.let(::applyClockDisplayAnchor)
+                    }
+                    applySnapshotToForm(
+                        finalRefresh.state.snapshot,
+                        recalculateClockOffset = clockSample == null && syncResult == null,
+                    )
+                    appendWriteLog(
+                        title = "Clone",
+                        writePlan = writePlan,
+                        result = submitResult,
+                        leadEntries = listOf(
+                            DesktopLogEntry(
+                                message = "Using Arducon serial command clone writes.",
+                                category = DesktopLogCategory.APP,
+                                timestampMs = submitResult.submitTraceEntries.firstOrNull()?.timestampMs ?: System.currentTimeMillis(),
+                            ),
+                        ),
+                        preRefreshResult = targetRefresh,
+                        refreshResult = finalRefresh,
+                        comparedFieldKeys = cloneComparedFieldKeys(targetSnapshot.capabilities),
+                    )
+                    updateClockPhaseWarning(syncResult?.finalAttempt?.phaseErrorMillis ?: clockSample?.second?.phaseErrorMillis)
+                    updateCloneTemplateLabel(
+                        cloneTemplateAttachedDeviceStateMessage(),
+                        Color(0x9A, 0x67, 0x11),
+                    )
+                    showConnectionIndicator(
+                        ConnectionIndicatorState.CONNECTED,
+                        if (syncResult?.succeeded == false) {
+                            "Clone completed on ${currentConnectedPortPath.orEmpty()}, but device time sync needs attention."
+                        } else if (writePlan.changes.isEmpty()) {
+                            "Clone succeeded. Timed Event Settings already matched ${currentConnectedPortPath.orEmpty()}."
+                        } else {
+                            "Clone succeeded on ${currentConnectedPortPath.orEmpty()}."
+                        },
+                    )
+                    setStatus(
+                        if (syncResult?.succeeded == false) {
+                            "Clone completed, but device time sync needs attention."
+                        } else {
+                            "Clone succeeded."
+                        },
+                    )
+                }
+                return@runInBackground
+            }
+
             setBusyProgress(20, 100, "Starting firmware clone")
             val firmwareCloneResult = FirmwareCloneSession.cloneFromTemplate(
                 transport = transport,
@@ -3020,7 +3801,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun reloadCloneTemplateFromAttachedDevice() {
         val portPath = currentConnectedPortPath
         if (portPath == null || currentState?.connectionState != ConnectionState.CONNECTED) {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         when (
@@ -3077,39 +3858,84 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun buildCloneEditableSettings(
         targetBaseSettings: DeviceSettings,
         templateSettings: DeviceSettings,
+        capabilities: DeviceCapabilities,
     ): EditableDeviceSettings {
         return EditableDeviceSettings.fromDeviceSettings(targetBaseSettings).copy(
-            stationId = SettingsField("stationId", "Station ID", targetBaseSettings.stationId, templateSettings.stationId),
-            eventType = SettingsField("eventType", "Event Type", targetBaseSettings.eventType, templateSettings.eventType),
-            idCodeSpeedWpm = SettingsField("idCodeSpeedWpm", "ID Speed", targetBaseSettings.idCodeSpeedWpm, templateSettings.idCodeSpeedWpm),
-            startTimeCompact = SettingsField("startTimeCompact", "Start Time", targetBaseSettings.startTimeCompact, templateSettings.startTimeCompact),
-            finishTimeCompact = SettingsField("finishTimeCompact", "Finish Time", targetBaseSettings.finishTimeCompact, templateSettings.finishTimeCompact),
-            daysToRun = SettingsField("daysToRun", "Days To Run", targetBaseSettings.daysToRun, templateSettings.daysToRun),
+            stationId = cloneField("stationId", "Station ID", targetBaseSettings.stationId, templateSettings.stationId, capabilities.supportsStationIdEditing),
+            eventType = cloneField("eventType", "Event Type", targetBaseSettings.eventType, templateSettings.eventType, capabilities.supportsEventTypeEditing),
+            foxRole = cloneField("foxRole", "Fox Role (FOX)", targetBaseSettings.foxRole, templateSettings.foxRole, capabilities.supportsFoxRoleEditing),
+            arduconFoxRoleCode = cloneField("arduconFoxRoleCode", "Arducon Fox Role", targetBaseSettings.arduconFoxRoleCode, templateSettings.arduconFoxRoleCode, capabilities.supportsFoxRoleEditing),
+            idCodeSpeedWpm = cloneField("idCodeSpeedWpm", "ID Speed", targetBaseSettings.idCodeSpeedWpm, templateSettings.idCodeSpeedWpm, capabilities.supportsIdCodeSpeedEditing),
+            dtmfPassword = cloneField("dtmfPassword", "DTMF Password", targetBaseSettings.dtmfPassword, templateSettings.dtmfPassword, capabilities.supportsDtmfPasswordEditing),
+            amToneFrequency = cloneField("amToneFrequency", "AM Tone", targetBaseSettings.amToneFrequency, templateSettings.amToneFrequency, capabilities.supportsAmToneEditing),
+            pttResetSetting = cloneField("pttResetSetting", "PTT Reset", targetBaseSettings.pttResetSetting, templateSettings.pttResetSetting, capabilities.supportsPttResetEditing),
+            startTimeCompact = cloneField("startTimeCompact", "Start Time", targetBaseSettings.startTimeCompact, templateSettings.startTimeCompact, capabilities.supportsScheduling),
+            finishTimeCompact = cloneField("finishTimeCompact", "Finish Time", targetBaseSettings.finishTimeCompact, templateSettings.finishTimeCompact, capabilities.supportsScheduling),
+            daysToRun = cloneField("daysToRun", "Days To Run", targetBaseSettings.daysToRun, templateSettings.daysToRun, capabilities.supportsScheduling && capabilities.supportsDaysToRun),
             patternCodeSpeedWpm = targetBaseSettings.patternCodeSpeedWpm.let { targetPatternSpeed ->
                 SettingsField(
                     "patternCodeSpeedWpm",
                     "Pattern Speed",
                     targetPatternSpeed,
-                    cloneTemplatePatternSpeedFor(templateSettings) ?: targetPatternSpeed,
+                    if (capabilities.supportsPatternEditing) {
+                        cloneTemplatePatternSpeedFor(templateSettings) ?: targetPatternSpeed
+                    } else {
+                        targetPatternSpeed
+                    },
                 )
             },
-            lowFrequencyHz = SettingsField("lowFrequencyHz", "Frequency 1 (FRE 1)", targetBaseSettings.lowFrequencyHz, templateSettings.lowFrequencyHz),
-            mediumFrequencyHz = SettingsField("mediumFrequencyHz", "Frequency 2 (FRE 2)", targetBaseSettings.mediumFrequencyHz, templateSettings.mediumFrequencyHz),
-            highFrequencyHz = SettingsField("highFrequencyHz", "Frequency 3 (FRE 3)", targetBaseSettings.highFrequencyHz, templateSettings.highFrequencyHz),
-            beaconFrequencyHz = SettingsField("beaconFrequencyHz", "Frequency B (FRE B)", targetBaseSettings.beaconFrequencyHz, templateSettings.beaconFrequencyHz),
+            lowFrequencyHz = cloneField("lowFrequencyHz", "Frequency 1 (FRE 1)", targetBaseSettings.lowFrequencyHz, templateSettings.lowFrequencyHz, capabilities.supportsFrequencyProfiles),
+            mediumFrequencyHz = cloneField("mediumFrequencyHz", "Frequency 2 (FRE 2)", targetBaseSettings.mediumFrequencyHz, templateSettings.mediumFrequencyHz, capabilities.supportsFrequencyProfiles),
+            highFrequencyHz = cloneField("highFrequencyHz", "Frequency 3 (FRE 3)", targetBaseSettings.highFrequencyHz, templateSettings.highFrequencyHz, capabilities.supportsFrequencyProfiles),
+            beaconFrequencyHz = cloneField("beaconFrequencyHz", "Frequency B (FRE B)", targetBaseSettings.beaconFrequencyHz, templateSettings.beaconFrequencyHz, capabilities.supportsFrequencyProfiles),
         )
     }
 
+    private fun <T> cloneField(
+        key: String,
+        label: String,
+        currentValue: T,
+        templateValue: T,
+        supported: Boolean,
+    ): SettingsField<T> = SettingsField(key, label, currentValue, if (supported) templateValue else currentValue)
+
     private fun cloneComparedFieldKeys(capabilities: DeviceCapabilities): List<SettingKey> {
         return buildList {
-            add(SettingKey.STATION_ID)
-            add(SettingKey.EVENT_TYPE)
-            add(SettingKey.ID_CODE_SPEED_WPM)
-            if (cloneTemplateSettings?.let { DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(it.eventType) } == true) {
+            if (capabilities.supportsStationIdEditing) {
+                add(SettingKey.STATION_ID)
+            }
+            if (capabilities.supportsEventTypeEditing) {
+                add(SettingKey.EVENT_TYPE)
+            }
+            if (capabilities.supportsFoxRoleEditing) {
+                if (loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true)) {
+                    add(SettingKey.ARDUCON_FOX_ROLE)
+                } else {
+                    add(SettingKey.FOX_ROLE)
+                }
+            }
+            if (capabilities.supportsIdCodeSpeedEditing) {
+                add(SettingKey.ID_CODE_SPEED_WPM)
+            }
+            if (capabilities.supportsDtmfPasswordEditing) {
+                add(SettingKey.DTMF_PASSWORD)
+            }
+            if (capabilities.supportsAmToneEditing) {
+                add(SettingKey.AM_TONE_FREQUENCY)
+            }
+            if (capabilities.supportsPttResetEditing) {
+                add(SettingKey.PTT_RESET_SETTING)
+            }
+            if (
+                capabilities.supportsPatternEditing &&
+                cloneTemplateSettings?.let { DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(it.eventType) } == true
+            ) {
                 add(SettingKey.PATTERN_CODE_SPEED_WPM)
             }
-            add(SettingKey.START_TIME)
-            add(SettingKey.FINISH_TIME)
+            if (capabilities.supportsScheduling) {
+                add(SettingKey.START_TIME)
+                add(SettingKey.FINISH_TIME)
+            }
             if (capabilities.supportsDaysToRun) {
                 add(SettingKey.DAYS_TO_RUN)
             }
@@ -3137,6 +3963,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val state = currentState ?: return
         val snapshot = loadedSnapshot ?: return
         val baseSettings = snapshot.settings
+        val submitState = state.copy(snapshot = snapshot)
 
         val editable = try {
             buildEditable(baseSettings)
@@ -3168,7 +3995,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
         runInBackground("Applying $description...", showBusyDialog = showBusyDialog) {
             val result = DeviceSessionController.submitEdits(
-                state,
+                submitState,
                 editable,
                 transport,
                 forceWriteKeys = forceWriteKeys,
@@ -3226,7 +4053,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 refreshClockSample?.second?.let(::applyClockDisplayAnchor)
                 applySnapshotToForm(
                     renderedState.snapshot,
-                    recalculateClockOffset = refreshClockSample == null,
+                    recalculateClockOffset =
+                        refreshClockSample == null && writePlan.changes.any { it.fieldKey == SettingKey.CURRENT_TIME },
                 )
                 if (updatesTimedEventTemplate && changeSucceeded) {
                     updateCloneTemplateLabel(
@@ -3297,6 +4125,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             stationId = if (SettingKey.STATION_ID in changedKeys) expected.stationId else current.stationId,
             eventType = if (SettingKey.EVENT_TYPE in changedKeys) expected.eventType else current.eventType,
             foxRole = if (SettingKey.FOX_ROLE in changedKeys) expected.foxRole else current.foxRole,
+            arduconFoxRoleCode = if (SettingKey.ARDUCON_FOX_ROLE in changedKeys) expected.arduconFoxRoleCode else current.arduconFoxRoleCode,
             patternText = if (SettingKey.PATTERN_TEXT in changedKeys) expected.patternText else current.patternText,
             idCodeSpeedWpm = if (SettingKey.ID_CODE_SPEED_WPM in changedKeys) expected.idCodeSpeedWpm else current.idCodeSpeedWpm,
             patternCodeSpeedWpm = if (SettingKey.PATTERN_CODE_SPEED_WPM in changedKeys) {
@@ -3344,6 +4173,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             } else {
                 current.transmissionsEnabled
             },
+            dtmfPassword = if (SettingKey.DTMF_PASSWORD in changedKeys) expected.dtmfPassword else current.dtmfPassword,
+            amToneFrequency = if (SettingKey.AM_TONE_FREQUENCY in changedKeys) expected.amToneFrequency else current.amToneFrequency,
+            pttResetSetting = if (SettingKey.PTT_RESET_SETTING in changedKeys) expected.pttResetSetting else current.pttResetSetting,
         )
     }
 
@@ -3365,8 +4197,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun applyFoxRoleChange() {
         applyImmediateEdit("Fox Role", updatesTimedEventTemplate = false) { base ->
+            val selectedArduconRole = foxRoleCombo.selectedItem as? ArduconFoxRole
             EditableDeviceSettings.fromDeviceSettings(base).copy(
-                foxRole = SettingsField("foxRole", "Fox Role (FOX)", base.foxRole, foxRoleCombo.selectedItem as FoxRole?),
+                foxRole = SettingsField("foxRole", "Fox Role (FOX)", base.foxRole, foxRoleCombo.selectedItem as? FoxRole),
+                arduconFoxRoleCode = SettingsField(
+                    "arduconFoxRoleCode",
+                    "Arducon Fox Role",
+                    base.arduconFoxRoleCode,
+                    selectedArduconRole?.numericalDesignator ?: base.arduconFoxRoleCode,
+                ),
             )
         }
     }
@@ -3417,16 +4256,71 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun applyDtmfPasswordChange() {
+        applyImmediateEdit("DTMF Password", updatesTimedEventTemplate = false) { base ->
+            EditableDeviceSettings.fromDeviceSettings(base).copy(
+                dtmfPassword = SettingsField(
+                    "dtmfPassword",
+                    "DTMF Password",
+                    base.dtmfPassword,
+                    dtmfPasswordField.text.trim(),
+                ),
+            )
+        }
+    }
+
+    private fun applyAmToneChange() {
+        applyImmediateEdit("AM Tone", updatesTimedEventTemplate = true) { base ->
+            EditableDeviceSettings.fromDeviceSettings(base).copy(
+                amToneFrequency = SettingsField(
+                    "amToneFrequency",
+                    "AM Tone",
+                    base.amToneFrequency,
+                    (amToneField.selectedItem as? String)?.toIntOrNull(),
+                ),
+            )
+        }
+    }
+
+    private fun applyPttResetChange() {
+        applyImmediateEdit("PTT Reset", updatesTimedEventTemplate = false) { base ->
+            EditableDeviceSettings.fromDeviceSettings(base).copy(
+                pttResetSetting = SettingsField(
+                    "pttResetSetting",
+                    "PTT Reset",
+                    base.pttResetSetting,
+                    selectedPttResetValue(),
+                ),
+            )
+        }
+    }
+
+    private fun selectedPttResetValue(): Int? {
+        return when (pttResetField.selectedItem as? String) {
+            "PTT Resets OFF" -> 0
+            "PTT Resets ON" -> 1
+            else -> null
+        }
+    }
+
+    private fun formatPttResetSetting(value: Int?): String {
+        return when (value) {
+            0 -> "PTT Resets OFF"
+            1 -> "PTT Resets ON"
+            else -> "Not Set"
+        }
+    }
+
     private fun applyChampionshipSettingsFromMenu() {
         if (updatingForm || backgroundWorkInProgress) {
             return
         }
         val transport = currentTransport ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         val state = currentState ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         val settings = loadedSnapshot?.settings ?: run {
@@ -3676,7 +4570,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun showLastsDurationDialog() {
-        if (isScheduleInteractionSuppressed() || !canEditLastsDuration()) {
+        if (isScheduleInteractionSuppressed() || !canEditDuration()) {
             return
         }
         val snapshot = loadedSnapshot ?: return
@@ -3736,7 +4630,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 JOptionPane.showConfirmDialog(
                     this,
                     panel,
-                    "Lasts",
+                    "Duration",
                     JOptionPane.OK_CANCEL_OPTION,
                     JOptionPane.PLAIN_MESSAGE,
                 )
@@ -3752,63 +4646,60 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             JOptionPane.showMessageDialog(
                 this,
                 "Event duration must be at least 5 minutes.",
-                "Lasts",
+                "Duration",
                 JOptionPane.WARNING_MESSAGE,
             )
             return
         }
 
         val requestedDuration = Duration.ofMinutes(requestedMinutes.toLong())
-        chooseScheduleChangeDurationResolution(
-            currentDaysToRun = snapshot.settings.daysToRun,
-            proposedDuration = requestedDuration,
-            onCancel = {},
-        ) { preserveDaysToRun, effectiveDuration ->
-            clearRelativeScheduleDisplayOverrides()
-            val editRequest =
-                try {
-                    ScheduleSubmitSupport.absoluteDurationEdit(
-                        currentSettings = snapshot.settings,
-                        requestedDuration = effectiveDuration ?: requestedDuration,
-                        preserveDaysToRun = preserveDaysToRun,
-                    )
-                } catch (exception: IllegalArgumentException) {
-                    JOptionPane.showMessageDialog(
-                        this,
-                        exception.message ?: "Invalid Lasts value.",
-                        "Lasts",
-                        JOptionPane.WARNING_MESSAGE,
-                    )
-                    return@chooseScheduleChangeDurationResolution
-                } catch (exception: IllegalStateException) {
-                    JOptionPane.showMessageDialog(
-                        this,
-                        exception.message ?: "Invalid Lasts value.",
-                        "Lasts",
-                        JOptionPane.WARNING_MESSAGE,
-                    )
-                    return@chooseScheduleChangeDurationResolution
-                }
-            applyImmediateEdit(
-                "Lasts",
-                updatesTimedEventTemplate = true,
-                forceWriteKeys = editRequest.forceWriteKeys,
-            ) { base ->
-                EditableDeviceSettings.fromDeviceSettings(base).copy(
-                    startTimeCompact = SettingsField(
-                        "startTimeCompact",
-                        "Start Time",
-                        base.startTimeCompact,
-                        editRequest.startTimeCompact,
-                    ),
-                    finishTimeCompact = SettingsField(
-                        "finishTimeCompact",
-                        "Finish Time",
-                        base.finishTimeCompact,
-                        editRequest.finishTimeCompact,
-                    ),
+        applyDurationChange(
+            snapshot = snapshot,
+            requestedDuration = requestedDuration,
+        )
+    }
+
+    private fun applyDurationChange(
+        snapshot: DeviceSnapshot,
+        requestedDuration: Duration,
+    ) {
+        clearRelativeScheduleDisplayOverrides()
+        val finishTimeCompact =
+            try {
+                DesktopInputSupport.finishTimeCompactForDurationEdit(
+                    startTimeCompact = snapshot.settings.startTimeCompact,
+                    currentTimeCompact = displayedDeviceTimeCompact(),
+                    duration = requestedDuration,
                 )
-            }
+            } catch (exception: IllegalArgumentException) {
+                JOptionPane.showMessageDialog(
+                    this,
+                    exception.message ?: "Invalid Duration value.",
+                    "Duration",
+                    JOptionPane.WARNING_MESSAGE,
+                )
+                return
+            } catch (exception: IllegalStateException) {
+                JOptionPane.showMessageDialog(
+                    this,
+                    exception.message ?: "Invalid Duration value.",
+                    "Duration",
+                    JOptionPane.WARNING_MESSAGE,
+                )
+                return
+        }
+        applyImmediateEdit(
+            "Duration",
+            updatesTimedEventTemplate = true,
+        ) { base ->
+            EditableDeviceSettings.fromDeviceSettings(base).copy(
+                finishTimeCompact = SettingsField(
+                    "finishTimeCompact",
+                    "Finish Time",
+                    base.finishTimeCompact,
+                    finishTimeCompact,
+                ),
+            )
         }
     }
 
@@ -4149,7 +5040,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
         val snapshot = loadedSnapshot ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         if (!snapshot.capabilities.supportsScheduling) {
@@ -4236,15 +5127,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         val transport = currentTransport ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         val state = currentState ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         val snapshot = loadedSnapshot ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         if (!snapshot.capabilities.supportsScheduling) {
@@ -4697,11 +5588,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
         val activeTransport = transport ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         val activeState = state ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
 
@@ -4927,14 +5818,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun applySnapshotToForm(snapshot: DeviceSnapshot?, recalculateClockOffset: Boolean = true) {
         clearPendingImmediateEdit()
         if (snapshot == null) {
+            updateProductSectionTitles(null)
             clearFormForUnread()
             return
         }
 
+        updateProductSectionTitles(snapshot)
         val settings = snapshot.settings
         val timedSettings = snapshot.settings
         val frequencies = FrequencySupport.describeFrequencies(settings)
         val stationIdEditingSupported = snapshot.capabilities.supportsStationIdEditing
+        val eventTypeEditingSupported = snapshot.capabilities.supportsEventTypeEditing
+        val foxRoleEditingSupported = snapshot.capabilities.supportsFoxRoleEditing
+        val idCodeSpeedEditingSupported = snapshot.capabilities.supportsIdCodeSpeedEditing
+        val dtmfPasswordEditingSupported = snapshot.capabilities.supportsDtmfPasswordEditing
+        val amToneEditingSupported = snapshot.capabilities.supportsAmToneEditing
+        val pttResetEditingSupported = snapshot.capabilities.supportsPttResetEditing
         val schedulingSupported = snapshot.capabilities.supportsScheduling
         val daysToRunSupported = snapshot.capabilities.supportsDaysToRun
         val patternEditingSupported = snapshot.capabilities.supportsPatternEditing
@@ -4944,16 +5843,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val extendedTemperatureReadbackSupported = snapshot.capabilities.supportsExtendedTemperatureReadback
         updatingForm = true
         try {
+            val arduconRole = EventProfileSupport.arduconFoxRoleForDesignator(settings.arduconFoxRoleCode)
             stationIdField.text = timedSettings.stationId
-            eventTypeCombo.selectedItem =
-                timedSettings.eventType.takeIf { it in DesktopInputSupport.selectableEventTypes() }
-                    ?: DesktopInputSupport.selectableEventTypes().first()
-            syncFoxRoleOptions(settings.eventType, settings.foxRole)
-            patternTextField.text = DesktopInputSupport.displayPatternText(
-                eventType = settings.eventType,
-                foxRole = settings.foxRole,
-                storedPatternText = settings.patternText,
+            syncEventTypeOptions(timedSettings.eventType, snapshot)
+            eventTypeCombo.selectedItem = timedSettings.eventType
+            setInformationalFieldText(
+                arduconEventTypeField,
+                formatEventTypeLabel(timedSettings.eventType),
+                unreadPlaceholder = false,
             )
+            syncFoxRoleOptions(settings.eventType, settings.foxRole, arduconRole)
+            patternTextField.text = arduconRole?.morsePatternSent
+                ?: DesktopInputSupport.displayPatternText(
+                    eventType = settings.eventType,
+                    foxRole = settings.foxRole,
+                    storedPatternText = settings.patternText,
+                )
             updatePatternTextEditability(settings.eventType, !backgroundWorkInProgress)
             idSpeedField.selectedItem = DesktopInputSupport.formatCodeSpeedWpm(timedSettings.idCodeSpeedWpm)
             devicePatternSpeedField.selectedItem = DesktopInputSupport.formatCodeSpeedWpm(settings.patternCodeSpeedWpm)
@@ -4982,6 +5887,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             updateTimedEventFrequencyVisibility(timedSettings.eventType)
             updatePatternSpeedVisibility(settings.eventType)
+            dtmfPasswordField.text = settings.dtmfPassword.orEmpty()
+            amToneField.selectedItem = settings.amToneFrequency?.coerceIn(0, 6)?.toString() ?: "0"
+            pttResetField.selectedItem = formatPttResetSetting(settings.pttResetSetting)
             if (externalBatteryControlSupported) {
                 batteryThresholdField.selectedItem = settings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) }
                 batteryModeCombo.selectedItem = settings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF
@@ -4992,15 +5900,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             updateTransmissionsField(settings.transmissionsEnabled)
             updateUnsupportedCapabilityHints(
                 stationIdEditingSupported = stationIdEditingSupported,
+                eventTypeEditingSupported = eventTypeEditingSupported,
+                foxRoleEditingSupported = foxRoleEditingSupported,
+                idCodeSpeedEditingSupported = idCodeSpeedEditingSupported,
+                dtmfPasswordEditingSupported = dtmfPasswordEditingSupported,
+                amToneEditingSupported = amToneEditingSupported,
+                pttResetEditingSupported = pttResetEditingSupported,
                 patternEditingSupported = patternEditingSupported,
                 frequencyProfilesSupported = frequencyProfilesSupported,
                 externalBatteryControlSupported = externalBatteryControlSupported,
             )
+            updateDeviceDataVisibility(snapshot)
             setInformationalFieldText(versionInfoField, DesktopInputSupport.formatReportedVersion(
                 softwareVersion = snapshot.info.softwareVersion,
                 hardwareBuild = snapshot.info.hardwareBuild,
                 bootloaderVersion = snapshot.info.bootloaderVersion,
                 bootloaderProtocolVersion = snapshot.info.bootloaderProtocolVersion,
+                bootloaderProtocol = snapshot.info.bootloaderProtocol,
             ), unreadPlaceholder = false)
             setInformationalFieldText(internalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.internalBatteryVolts), unreadPlaceholder = false)
             setInformationalFieldText(externalBatteryField, DesktopInputSupport.formatVoltageOrWaiting(snapshot.status.externalBatteryVolts), unreadPlaceholder = false)
@@ -5053,6 +5969,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         val temperatureReadbackSupported = snapshot.capabilities.supportsTemperatureReadback
         val extendedTemperatureReadbackSupported = snapshot.capabilities.supportsExtendedTemperatureReadback
+        updateDeviceDataVisibility(snapshot)
         updatingForm = true
         try {
             setInformationalFieldText(
@@ -5114,6 +6031,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun updateDeviceDataVisibility(snapshot: DeviceSnapshot?) {
+        val isArducon = snapshot?.info?.productName.equals("Arducon", ignoreCase = true)
+        internalBatteryRowLabel.isVisible = !isArducon
+        internalBatteryField.isVisible = !isArducon
+        minimumTemperatureRowLabel.isVisible = !isArducon
+        minimumTemperatureField.isVisible = !isArducon
+        revalidate()
+        repaint()
+    }
+
     private fun updateTransmissionsField(isEnabled: Boolean) {
         val showWarning = !isEnabled
         transmissionsRowLabel.isVisible = showWarning
@@ -5129,6 +6056,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun updateUnsupportedCapabilityHints(
         stationIdEditingSupported: Boolean,
+        eventTypeEditingSupported: Boolean,
+        foxRoleEditingSupported: Boolean,
+        idCodeSpeedEditingSupported: Boolean,
+        dtmfPasswordEditingSupported: Boolean,
+        amToneEditingSupported: Boolean,
+        pttResetEditingSupported: Boolean,
         patternEditingSupported: Boolean,
         frequencyProfilesSupported: Boolean,
         externalBatteryControlSupported: Boolean,
@@ -5140,10 +6073,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
 
         val patternTooltip = "This device does not support pattern editing in SerialSlinger."
-        setUnsupportedCapabilityHint(eventTypeCombo, patternEditingSupported, patternTooltip)
-        setUnsupportedCapabilityHint(foxRoleCombo, patternEditingSupported, patternTooltip)
+        setUnsupportedCapabilityHint(eventTypeCombo, eventTypeEditingSupported, "This device does not support Event Type editing in SerialSlinger.")
+        setUnsupportedCapabilityHint(foxRoleCombo, foxRoleEditingSupported, "This device does not support Fox Role editing in SerialSlinger.")
+        setUnsupportedCapabilityHint(dtmfPasswordField, dtmfPasswordEditingSupported, "This device does not support DTMF Password editing in SerialSlinger.")
+        setUnsupportedCapabilityHint(amToneField, amToneEditingSupported, "This device does not support AM Tone editing in SerialSlinger.")
+        setUnsupportedCapabilityHint(pttResetField, pttResetEditingSupported, "This device does not support PTT Reset editing in SerialSlinger.")
         setUnsupportedCapabilityHint(patternTextField, patternEditingSupported, patternTooltip)
-        setUnsupportedCapabilityHint(idSpeedField, patternEditingSupported, patternTooltip)
+        setUnsupportedCapabilityHint(idSpeedField, idCodeSpeedEditingSupported, "This device does not support ID Speed editing in SerialSlinger.")
         setUnsupportedCapabilityHint(devicePatternSpeedField, patternEditingSupported, patternTooltip)
         setUnsupportedCapabilityHint(timedPatternSpeedField, patternEditingSupported, patternTooltip)
 
@@ -5172,28 +6108,63 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         component.toolTipText = if (supported) null else unsupportedTooltip
     }
 
-    private fun syncFoxRoleOptions(eventType: EventType, selectedRole: FoxRole?) {
+    private fun syncFoxRoleOptions(
+        eventType: EventType,
+        selectedRole: FoxRole?,
+        selectedArduconRole: ArduconFoxRole? = null,
+    ) {
+        if (loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true)) {
+            val options = EventProfileSupport.arduconFoxRoles
+            foxRoleCombo.model = DefaultComboBoxModel(options.toTypedArray<Any>())
+            foxRoleCombo.selectedItem = selectedArduconRole ?: options.firstOrNull()
+            return
+        }
         val options = DesktopInputSupport.foxRoleOptions(eventType)
-        val model = DefaultComboBoxModel(options.toTypedArray())
+        val model = DefaultComboBoxModel(options.toTypedArray<Any>())
         foxRoleCombo.model = model
         foxRoleCombo.selectedItem = selectedRole?.takeIf { it in options } ?: options.firstOrNull()
     }
 
+    private fun syncEventTypeOptions(
+        eventType: EventType,
+        snapshot: DeviceSnapshot,
+    ) {
+        val selectableTypes = DesktopInputSupport.selectableEventTypes()
+        val options =
+            if (!snapshot.capabilities.supportsEventTypeEditing && eventType !in selectableTypes) {
+                listOf(eventType) + selectableTypes
+            } else {
+                selectableTypes
+            }
+        eventTypeCombo.model = DefaultComboBoxModel(options.toTypedArray())
+    }
+
     private fun updateTimedEventFrequencyVisibility(eventType: EventType) {
         val visibility = DesktopInputSupport.timedEventFrequencyVisibility(eventType)
-        frequency1Label.isVisible = visibility.showFrequency1
-        frequency1Field.isVisible = visibility.showFrequency1
-        frequency2Label.isVisible = visibility.showFrequency2
-        frequency2Field.isVisible = visibility.showFrequency2
-        frequency3Label.isVisible = visibility.showFrequency3
-        frequency3Field.isVisible = visibility.showFrequency3
-        frequencyBLabel.isVisible = visibility.showFrequencyB
-        frequencyBField.isVisible = visibility.showFrequencyB
+        val frequencyProfilesSupported = loadedSnapshot?.capabilities?.supportsFrequencyProfiles != false &&
+            !(loadedSnapshot == null && selectedDeviceMode() == DeviceMode.ARDUCON)
+        frequency1Label.isVisible = frequencyProfilesSupported && visibility.showFrequency1
+        frequency1Field.isVisible = frequencyProfilesSupported && visibility.showFrequency1
+        frequency2Label.isVisible = frequencyProfilesSupported && visibility.showFrequency2
+        frequency2Field.isVisible = frequencyProfilesSupported && visibility.showFrequency2
+        frequency3Label.isVisible = frequencyProfilesSupported && visibility.showFrequency3
+        frequency3Field.isVisible = frequencyProfilesSupported && visibility.showFrequency3
+        frequencyBLabel.isVisible = frequencyProfilesSupported && visibility.showFrequencyB
+        frequencyBField.isVisible = frequencyProfilesSupported && visibility.showFrequencyB
         revalidate()
         repaint()
     }
 
     private fun updatePatternSpeedVisibility(eventType: EventType) {
+        if (loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true)) {
+            devicePatternSpeedLabel.isVisible = false
+            devicePatternSpeedField.isVisible = false
+            timedPatternSpeedLabel.isVisible = false
+            timedPatternSpeedField.isVisible = false
+            revalidate()
+            repaint()
+            return
+        }
         val timedEventOwned = DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(eventType)
         devicePatternSpeedLabel.isVisible = !timedEventOwned
         devicePatternSpeedField.isVisible = !timedEventOwned
@@ -5345,6 +6316,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         appendLog(title, entries)
     }
 
+    private fun chooseFirmwareUpdatePackageForSelectedProduct() {
+        when (selectedDeviceMode()) {
+            DeviceMode.SIGNALSLINGER -> chooseSignalSlingerUpdatePackage()
+            DeviceMode.ARDUCON -> chooseArduconUpdatePackage()
+        }
+    }
+
     private fun chooseSignalSlingerUpdatePackage() {
         val portPath = currentConnectedPortPath ?: selectedProbe()?.portInfo?.systemPortPath
         if (portPath.isNullOrBlank()) {
@@ -5471,6 +6449,56 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "2.0.0",
         ) ?: return null
         return input.trim().removePrefix("v").takeIf(String::isNotBlank)
+    }
+
+    private fun chooseBootloaderInstallPackageForSelectedProduct() {
+        when (selectedDeviceMode()) {
+            DeviceMode.SIGNALSLINGER -> readDeviceThenChooseSignalSlingerWorkshopSetupPackage()
+            DeviceMode.ARDUCON -> chooseArduconWorkshopSetupPackage()
+        }
+    }
+
+    private fun chooseArduconWorkshopSetupPackage() {
+        val port = currentConnectedPortPath ?: selectedProbe()?.portInfo?.systemPortPath
+        val sourceChoice = JOptionPane.showOptionDialog(
+            this,
+            "Choose the bootloader package for Arducon ATmega328P.",
+            "Install Bootloader on Arducon",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            arrayOf("Download Latest", "Choose Local Package", "Download Version", "Cancel"),
+            "Download Latest",
+        )
+        if (sourceChoice == 3 || sourceChoice == JOptionPane.CLOSED_OPTION) {
+            return
+        }
+
+        when (sourceChoice) {
+            0 -> prepareArduconUpdatesFromLatestGitHubRelease(port)
+            2 -> {
+                val version = chooseArduconGitHubReleaseVersion() ?: return
+                prepareArduconUpdatesFromGitHubReleaseVersion(port, version)
+            }
+            else -> {
+                val chooser = JFileChooser().apply {
+                    dialogTitle = "Install Bootloader on Arducon"
+                    fileSelectionMode = JFileChooser.FILES_ONLY
+                    isFileHidingEnabled = false
+                    currentDirectory = desktopArduconReleaseCacheDirectory()
+                    fileFilter = FileNameExtensionFilter("Arducon release package (*.zip, *.json)", "zip", "json")
+                }
+                if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+                    return
+                }
+                val selectedFile = chooser.selectedFile
+                if (selectedFile.extension.equals("zip", ignoreCase = true)) {
+                    prepareArduconUpdatesFromPackageFile(port, selectedFile)
+                } else {
+                    prepareArduconUpdatesFromReleaseInfo(port, selectedFile)
+                }
+            }
+        }
     }
 
     private fun readDeviceThenChooseSignalSlingerWorkshopSetupPackage() {
@@ -5813,6 +6841,103 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun prepareArduconUpdatesFromLatestGitHubRelease(port: String?) {
+        runInBackground(
+            status = "Installing Arducon bootloader...",
+            showBusyDialog = true,
+            busyDialogTitle = "Installing Bootloader",
+            busyDialogPrimaryMessage = "This may take several minutes.",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                val selection = ArduconReleaseCache(desktopArduconReleaseCacheDirectory()).selectLatestForUpdate(
+                    currentFirmwareVersion = null,
+                    preferResidentWhenLatestMatches = false,
+                )
+                logEntries += DesktopLogEntry(selection.message, DesktopLogCategory.APP)
+                selection.downloadFailure?.let { failure ->
+                    logEntries += DesktopLogEntry("GitHub update check failed: $failure", DesktopLogCategory.APP)
+                }
+                performArduconWorkshopSetup(port, selection.manifestFile, logEntries)
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Install Bootloader", logEntries)
+                }
+                throw IllegalStateException(friendlyArduconBootloaderInstallFailureMessage(exception), exception)
+            }
+        }
+    }
+
+    private fun prepareArduconUpdatesFromGitHubReleaseVersion(
+        port: String?,
+        requestedVersion: String,
+    ) {
+        runInBackground(
+            status = "Installing Arducon bootloader...",
+            showBusyDialog = true,
+            busyDialogTitle = "Installing Bootloader",
+            busyDialogPrimaryMessage = "This may take several minutes.",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                val selection = ArduconReleaseCache(desktopArduconReleaseCacheDirectory()).selectGitHubReleaseForUpdate(requestedVersion)
+                logEntries += DesktopLogEntry(selection.message, DesktopLogCategory.APP)
+                performArduconWorkshopSetup(port, selection.manifestFile, logEntries)
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Install Bootloader", logEntries)
+                }
+                throw IllegalStateException(friendlyArduconBootloaderInstallFailureMessage(exception), exception)
+            }
+        }
+    }
+
+    private fun prepareArduconUpdatesFromPackageFile(
+        port: String?,
+        packageFile: File,
+    ) {
+        runInBackground(
+            status = "Installing Arducon bootloader...",
+            showBusyDialog = true,
+            busyDialogTitle = "Installing Bootloader",
+            busyDialogPrimaryMessage = "This may take several minutes.",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                val selection = ArduconReleaseCache(desktopArduconReleaseCacheDirectory()).importReleasePackage(packageFile)
+                logEntries += DesktopLogEntry("Imported Arducon ${selection.release.version} setup package for ${selection.release.board}.", DesktopLogCategory.APP)
+                performArduconWorkshopSetup(port, selection.manifestFile, logEntries)
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Install Bootloader", logEntries)
+                }
+                throw IllegalStateException(friendlyArduconBootloaderInstallFailureMessage(exception), exception)
+            }
+        }
+    }
+
+    private fun prepareArduconUpdatesFromReleaseInfo(
+        port: String?,
+        manifestFile: File,
+    ) {
+        runInBackground(
+            status = "Installing Arducon bootloader...",
+            showBusyDialog = true,
+            busyDialogTitle = "Installing Bootloader",
+            busyDialogPrimaryMessage = "This may take several minutes.",
+        ) {
+            val logEntries = mutableListOf<DesktopLogEntry>()
+            try {
+                performArduconWorkshopSetup(port, manifestFile, logEntries)
+            } catch (exception: Exception) {
+                SwingUtilities.invokeLater {
+                    appendLog("Install Bootloader", logEntries)
+                }
+                throw IllegalStateException(friendlyArduconBootloaderInstallFailureMessage(exception), exception)
+            }
+        }
+    }
+
     private fun performSignalSlingerWorkshopSetup(
         board: String,
         port: String?,
@@ -5883,6 +7008,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             workingDirectory = packageDir,
             logEntries = logEntries,
             stepName = "Checking tools",
+            productLabel = "Arducon",
         )
 
         setBusyProgress(32, 100, "Searching for attached programmer...")
@@ -5910,6 +7036,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             stepName = "Checking programmer",
             retryProgressCompleted = 32,
             retryProgressLabel = "Searching for attached programmer...",
+            productLabel = "Arducon",
         )
 
         require(confirmSignalSlingerFuseWrite(manifest, port)) {
@@ -5945,6 +7072,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             stepName = "Programming",
             retryProgressCompleted = 45,
             retryProgressLabel = "Programming. This may take several minutes.",
+            productLabel = "Arducon",
         )
 
         val verification = if (serialVerification) {
@@ -6018,6 +7146,136 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun performArduconWorkshopSetup(
+        port: String?,
+        manifestFile: File,
+        logEntries: MutableList<DesktopLogEntry>,
+    ) {
+        fun log(message: String, category: DesktopLogCategory = DesktopLogCategory.APP) {
+            logEntries += DesktopLogEntry(message, category)
+        }
+
+        setBusyProgress(5, 100, "Checking file")
+        log("Installing Arducon bootloader from ${manifestFile.name}.")
+        val manifest = ArduconFirmwareUpdate.parseReleaseInfo(Files.readString(manifestFile.toPath()))
+        ArduconFirmwareUpdate.validateReleaseManifest(manifest)
+        require(manifest.product == "Arducon") {
+            "Setup package product `${manifest.product}` is not supported."
+        }
+        require(manifest.board == "ATmega328P") {
+            "Setup package ${manifest.board} does not match Arducon ATmega328P."
+        }
+        val workshopSetup = manifest.workshopSetup
+            ?: error("This Arducon package does not include the setup tools needed to install a bootloader.\n\nAsk the Arducon project for a parity release package with first-install metadata and workshop setup scripts, then try again.")
+        val launcherFile = runCatching { manifest.setupLauncherFile() }.getOrElse {
+            error("This Arducon package does not include the setup launcher needed to install a bootloader.\n\nAsk the Arducon project for a parity release package with the workshop setup launcher, then try again.")
+        }
+        val packageDir = manifestFile.parentFile
+        verifyArduconWorkshopSetupFiles(manifest, packageDir, logEntries)
+        val launcher = packageDir.resolve(launcherFile.fileName)
+        require(launcher.isFile) {
+            "Workshop setup launcher `${launcherFile.fileName}` was not found next to `${manifestFile.name}`."
+        }
+        requireWorkshopSetupScriptsSupportHardenedFlow(launcher, manifest, packageDir)
+        val powershell = findPowerShellExecutable()
+        val setupScriptOptions = arduconWorkshopSetupScriptOptions()
+        log("Using PowerShell executable: $powershell")
+        log("Setup package: ${manifest.product} ${manifest.version} ${manifest.board}")
+        log("Setup backend: ${setupScriptOptions.backend}")
+        log(arduconWorkshopSetupSummary(workshopSetup))
+        if (workshopSetup.supportedProgrammers.isNotEmpty()) {
+            log("Supported programmers: ${workshopSetup.supportedProgrammers.joinToString(", ")}")
+        }
+        log("Serial verification: ${if (port != null) "enabled on $port" else "skipped; no loaded Arducon serial port was selected"}.")
+        port?.let {
+            releaseCurrentSerialConnectionForWorkshopSetup(it, logEntries)
+        }
+
+        setBusyProgress(20, 100, "Checking tools")
+        runWorkshopSetupProcess(
+            command = buildList {
+                addAll(listOf(powershell, "-ExecutionPolicy", "Bypass", "-File", launcher.absolutePath))
+                addAll(setupScriptOptions.backendArgs)
+                addAll(listOf("-CheckPrereqs", "-SkipSerialValidation"))
+            },
+            workingDirectory = packageDir,
+            logEntries = logEntries,
+            stepName = "Checking tools",
+        )
+
+        setBusyProgress(32, 100, "Searching for attached programmer...")
+        runRecoverableWorkshopSetupProcess(
+            command = buildList {
+                addAll(listOf(powershell, "-ExecutionPolicy", "Bypass", "-File", launcher.absolutePath))
+                addAll(setupScriptOptions.backendArgs)
+                addAll(listOf("-CheckProgrammer", "-SkipSerialValidation"))
+            },
+            workingDirectory = packageDir,
+            logEntries = logEntries,
+            stepName = "Checking programmer",
+            retryProgressCompleted = 32,
+            retryProgressLabel = "Searching for attached programmer...",
+        )
+
+        require(confirmArduconFuseWrite(manifest, port)) {
+            "Arducon bootloader installation cancelled before fuse write."
+        }
+
+        setBusyProgress(45, 100, "Programming. This may take several minutes.")
+        runRecoverableWorkshopSetupProcess(
+            command = buildList {
+                addAll(listOf(powershell, "-ExecutionPolicy", "Bypass", "-File", launcher.absolutePath))
+                addAll(setupScriptOptions.backendArgs)
+                port?.let { addAll(listOf("-Port", it)) }
+                addAll(listOf("-ProgramFuses", "-ConfirmFuseWrite", "-SkipSerialValidation"))
+            },
+            workingDirectory = packageDir,
+            logEntries = logEntries,
+            stepName = "Programming",
+            retryProgressCompleted = 45,
+            retryProgressLabel = "Programming. This may take several minutes.",
+        )
+
+        log("Arducon bootloader installation completed.")
+        val refreshedConnection = if (port != null) {
+            setBusyProgress(96, 100, "Reloading Arducon")
+            runCatching {
+                loadPortWithAliasFallback(port)
+            }.onFailure { failure ->
+                log("Arducon bootloader installation completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}")
+            }.getOrNull()
+        } else {
+            null
+        }
+        SwingUtilities.invokeLater {
+            appendLog("Install Bootloader", logEntries)
+            if (refreshedConnection != null) {
+                applyLoadedConnection(
+                    refreshedConnection.copy(
+                        loadLogTitle = "Install Bootloader",
+                        loadLogLeadEntries = listOf(
+                            DesktopLogEntry(
+                                "Reloaded Arducon after bootloader installation so the visible device information reflects the installed firmware.",
+                                DesktopLogCategory.APP,
+                            ),
+                        ),
+                    ),
+                )
+            } else {
+                clearFormForUnread()
+            }
+            setStatus("Arducon bootloader installed.")
+            playCompletionBeep()
+            showAppMessageDialog(
+                if (refreshedConnection != null) {
+                    "Arducon bootloader installed.\n\nThe displayed device information has been refreshed."
+                } else {
+                    "Arducon bootloader installed.\n\nProgramming was verified through the programmer. Serial communication was not checked because no loaded Arducon serial port was selected."
+                },
+            )
+        }
+    }
+
     private fun pauseSignalSlingerBeforeWorkshopSetup(
         port: String,
         manifest: SignalSlingerReleaseInfo,
@@ -6062,6 +7320,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             WorkshopSetupScriptOptions(
                 backend = "Auto",
                 backendArgs = emptyList(),
+            )
+        }
+    }
+
+    private fun arduconWorkshopSetupScriptOptions(): WorkshopSetupScriptOptions {
+        val isWindows = System.getProperty("os.name").orEmpty().contains("Windows", ignoreCase = true)
+        return if (isWindows) {
+            WorkshopSetupScriptOptions(
+                backend = "Auto",
+                backendArgs = emptyList(),
+            )
+        } else {
+            WorkshopSetupScriptOptions(
+                backend = "Avrdude",
+                backendArgs = listOf("-Backend", "Avrdude"),
             )
         }
     }
@@ -6367,6 +7640,29 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun verifyArduconWorkshopSetupFiles(
+        manifest: ArduconReleaseInfo,
+        packageDir: File,
+        logEntries: MutableList<DesktopLogEntry>,
+    ) {
+        val filesToVerify = buildList {
+            add(manifest.updateFile())
+            add(manifest.bootloaderFile())
+            add(manifest.firstInstallFile())
+            add(manifest.setupLauncherFile())
+            runCatching { manifest.setupHelperFile() }.getOrNull()?.let(::add)
+            addAll(manifest.workshopSetupToolFiles())
+        }.distinctBy { it.fileName }
+        filesToVerify.forEach { releaseFile ->
+            val file = packageDir.resolve(releaseFile.fileName)
+            require(file.isFile) {
+                "Release package is missing `${releaseFile.fileName}`."
+            }
+            ArduconFirmwareUpdate.verifyReleaseFileHash(releaseFile, Files.readAllBytes(file.toPath()))
+            logEntries += DesktopLogEntry("Checked ${releaseFile.fileName}.", DesktopLogCategory.APP)
+        }
+    }
+
     private fun requireWorkshopSetupScriptsSupportHardenedFlow(
         launcher: File,
         manifest: SignalSlingerReleaseInfo,
@@ -6385,6 +7681,28 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         ) {
             throw OutdatedWorkshopSetupPackageException(
                 "This saved SignalSlinger setup package has out-of-date setup scripts.",
+            )
+        }
+    }
+
+    private fun requireWorkshopSetupScriptsSupportHardenedFlow(
+        launcher: File,
+        manifest: ArduconReleaseInfo,
+        packageDir: File,
+    ) {
+        val launcherText = Files.readString(launcher.toPath())
+        val toolText = manifest.workshopSetupToolFiles()
+            .map { releaseFile -> packageDir.resolve(releaseFile.fileName) }
+            .filter { file -> file.isFile && file.extension.equals("ps1", ignoreCase = true) }
+            .joinToString("\n") { file -> Files.readString(file.toPath()) }
+        val combinedScriptText = launcherText + "\n" + toolText
+        if (
+            !launcherText.contains("CheckProgrammer") ||
+            !combinedScriptText.contains("SS_SETUP_ERROR") ||
+            !combinedScriptText.contains("SS_SETUP_OK")
+        ) {
+            throw OutdatedWorkshopSetupPackageException(
+                "This saved Arducon setup package has out-of-date or missing setup scripts.",
             )
         }
     }
@@ -6426,6 +7744,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         workingDirectory: File,
         logEntries: MutableList<DesktopLogEntry>,
         stepName: String,
+        productLabel: String = "SignalSlinger",
     ) {
         logEntries += DesktopLogEntry("$stepName: ${command.joinToString(" ")}", DesktopLogCategory.APP)
         val process = ProcessBuilder(command)
@@ -6439,7 +7758,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 val line = stripTerminalFormatting(rawLine).trim()
                 if (line.isNotBlank()) {
                     logEntries += DesktopLogEntry(line, DesktopLogCategory.APP)
-                    failureReason = choosePreferredWorkshopSetupFailureReason(failureReason, workshopSetupFailureReason(line))
+                    failureReason = choosePreferredWorkshopSetupFailureReason(
+                        failureReason,
+                        workshopSetupFailureReason(line, productLabel),
+                    )
                     userFacingWorkshopSetupProgress(line, stepName)?.let { progress ->
                         setBusyProgress(progress.completed, 100, progress.label)
                     }
@@ -6478,11 +7800,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         stepName: String,
         retryProgressCompleted: Int,
         retryProgressLabel: String,
+        productLabel: String = "SignalSlinger",
     ) {
         var attempt = 1
         while (true) {
             try {
-                runWorkshopSetupProcess(command, workingDirectory, logEntries, stepName)
+                runWorkshopSetupProcess(command, workingDirectory, logEntries, stepName, productLabel)
                 return
             } catch (exception: WorkshopSetupProcessException) {
                 if (!exception.recoverable) {
@@ -6650,14 +7973,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun workshopSetupFailureReason(line: String): String? {
+        return workshopSetupFailureReason(line, productLabel = "SignalSlinger")
+    }
+
+    private fun workshopSetupFailureReason(line: String, productLabel: String): String? {
         val trimmed = line.trim().removePrefix("|").trim()
         parseStableWorkshopSetupLine(trimmed)?.let { stableLine ->
             if (stableLine.kind == "SS_SETUP_ERROR") {
-                return stableWorkshopSetupFailureReason(stableLine.tokens)
+                return stableWorkshopSetupFailureReason(stableLine.tokens, productLabel)
             }
         }
         if (trimmed.contains("No CMSIS-DAP devices found", ignoreCase = true)) {
-            return "No compatible Atmel-ICE/CMSIS-DAP programmer was found. Connect the programmer to this computer, connect it to the SignalSlinger UPDI header, then try again."
+            return "No compatible Atmel-ICE/CMSIS-DAP programmer was found. Connect the programmer to this computer, connect it to the $productLabel programmer header, then try again."
         }
         if (trimmed.contains("Unable to connect to USB device", ignoreCase = true)) {
             return "The programmer was found but could not be opened over USB. Unplug/replug the programmer and try again."
@@ -6687,25 +8014,25 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return "Microchip Studio atprogram.exe was not found.\n\nInstall Microchip Studio 7 on Windows, or use PowerShell 7 with pymcuprog instead.\n\nFor the pymcuprog path, open PowerShell and run:\npython -m pip install pymcuprog pyusb\n\nIf SerialSlinger is already open after installing tools, close and reopen it before trying again."
         }
         if (trimmed.startsWith("- PowerShell:", ignoreCase = true)) {
-            return "PowerShell is required for the SignalSlinger setup scripts.\n\nInstall PowerShell 7 from Microsoft, then close and reopen SerialSlinger before trying again."
+            return "PowerShell is required for the $productLabel setup scripts.\n\nInstall PowerShell 7 from Microsoft, then close and reopen SerialSlinger before trying again."
         }
         if (trimmed.contains("parameter name 'CheckProgrammer'", ignoreCase = true)) {
-            return "The selected SignalSlinger setup package has out-of-date setup scripts. Choose Download Latest to refresh the saved package, then try again."
+            return "The selected $productLabel setup package has out-of-date setup scripts. Choose Download Latest to refresh the saved package, then try again."
         }
         if (trimmed.contains("Atmel Studio atprogram.exe not found", ignoreCase = true)) {
             return "The validation script tried to use Windows atprogram.exe, which is not available on this Mac.\n\nInstall PowerShell 7, Python 3, pymcuprog, and pyusb, then try Install Bootloader again:\npython -m pip install pymcuprog pyusb"
         }
         if (trimmed.contains("Bootloader serial validation failed", ignoreCase = true)) {
-            return "Bootloader serial validation failed after programming.\n\nDisconnect and reconnect the SignalSlinger serial cable, make sure the correct serial port is selected, then use Reload SignalSlinger Data. If the device does not respond, try Install Bootloader again with the programmer still connected."
+            return "Bootloader serial validation failed after programming.\n\nDisconnect and reconnect the $productLabel serial cable, make sure the correct serial port is selected, then use Reload Device Data. If the device does not respond, try Install Bootloader again with the programmer still connected."
         }
         if (trimmed.contains("Read fuses failed", ignoreCase = true)) {
-            return "SerialSlinger could not read the device fuse settings through the programmer.\n\nUnplug and reconnect the programmer, make sure the SignalSlinger is powered, check the UPDI connection, then try Install Bootloader again."
+            return "SerialSlinger could not read the device fuse settings through the programmer.\n\nUnplug and reconnect the programmer, make sure the $productLabel is powered, check the programmer connection, then try Install Bootloader again."
         }
         if (trimmed.contains("Fuse verification failed", ignoreCase = true)) {
-            return "$trimmed\n\nUnplug and reconnect the programmer, make sure the SignalSlinger is powered, check the UPDI connection, then try Install Bootloader again."
+            return "$trimmed\n\nUnplug and reconnect the programmer, make sure the $productLabel is powered, check the programmer connection, then try Install Bootloader again."
         }
         if (trimmed.contains("failed with exit code", ignoreCase = true)) {
-            return "$trimmed\n\nTry the operation again after checking the programmer connection, SignalSlinger power, and the selected serial port."
+            return "$trimmed\n\nTry the operation again after checking the programmer connection, $productLabel power, and the selected serial port."
         }
         return null
     }
@@ -6732,11 +8059,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun stableWorkshopSetupFailureReason(tokens: Map<String, String>): String {
+        return stableWorkshopSetupFailureReason(tokens, productLabel = "SignalSlinger")
+    }
+
+    private fun stableWorkshopSetupFailureReason(tokens: Map<String, String>, productLabel: String): String {
         return when (tokens["code"]) {
             "no_programmer" -> {
                 val step = tokens["step"].orEmpty()
                 if (step.startsWith("write_fuse_offset_", ignoreCase = true)) {
-                    return "The programmer connection was lost while writing required fuse settings.\n\nUnplug and reconnect the programmer, make sure the SignalSlinger stays powered, then try Install Bootloader again."
+                    return "The programmer connection was lost while writing required fuse settings.\n\nUnplug and reconnect the programmer, make sure the $productLabel stays powered, then try Install Bootloader again."
                 }
                 val supportedTools = formatSupportedProgrammerList(tokens["detail"])
                 buildString {
@@ -6745,7 +8076,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         append("\n\nSupported programmers: ")
                         append(supportedTools)
                     }
-                    append("\n\nConnect the programmer to this computer, connect it to the SignalSlinger UPDI header, make sure the board is powered, then try again.")
+                    append("\n\nConnect the programmer to this computer, connect it to the $productLabel programmer header, make sure the board is powered, then try again.")
                 }
             }
             "missing_pymcuprog" ->
@@ -6755,9 +8086,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "usb_access_denied" ->
                 "The programmer was found but could not be opened over USB. Unplug/replug the programmer and check USB permissions, then try again."
             "target_not_detected" ->
-                "The programmer was found, but the SignalSlinger target did not respond. Check target power and the UPDI connection, then try again."
+                "The programmer was found, but the $productLabel target did not respond. Check target power and the programmer connection, then try again."
+            "missing_prereq" ->
+                "$productLabel setup cannot continue because a required tool or file is missing: ${tokens["detail"] ?: "unknown"}.\n\nInstall the missing prerequisite, close and reopen SerialSlinger if you changed PATH, then try Install Bootloader again."
+            "unsupported_backend" ->
+                "$productLabel setup cannot continue with the selected programming backend.\n\nInstall avrdude, close and reopen SerialSlinger if you changed PATH, then try Install Bootloader again."
             else ->
-                "SignalSlinger setup stopped during ${tokens["step"] ?: "setup"}.\n\nCheck the programmer connection, SignalSlinger power, and selected hardware/serial port, then try Install Bootloader again.\n\nSee the session log for details."
+                "$productLabel setup stopped during ${tokens["step"] ?: "setup"}.\n\nCheck the programmer connection, $productLabel power, and selected hardware/serial port, then try Install Bootloader again.\n\nSee the session log for details."
         }
     }
 
@@ -6862,6 +8197,54 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return confirmed.get()
     }
 
+    private fun confirmArduconFuseWrite(
+        manifest: ArduconReleaseInfo,
+        port: String?,
+    ): Boolean {
+        val setup = manifest.workshopSetup ?: return false
+        val setupTarget = if (port != null) {
+            "It will run the package setup tool on port `$port` and explicitly allow fuse writes."
+        } else {
+            "It will run the package setup tool through the connected programmer and explicitly allow fuse writes.\n\nSerial communication will not be checked because no loaded Arducon serial port was selected."
+        }
+        val confirmed = AtomicBoolean(false)
+        SwingUtilities.invokeAndWait {
+            hideBusyDialog()
+            val choice = JOptionPane.showOptionDialog(
+                this,
+                "This will install the Arducon bootloader for ${manifest.board}.\n\n" +
+                    "$setupTarget\n\n" +
+                    arduconFuseConfirmationText(setup) +
+                    "Only continue if an appropriate programmer is connected, the board is powered, and the selected board is correct.",
+                "Confirm Fuse Write",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                arrayOf("Continue", "Cancel"),
+                "Continue",
+            )
+            confirmed.set(choice == 0)
+            if (confirmed.get() && backgroundWorkInProgress) {
+                scheduleBusyDialog("Installing Arducon bootloader...")
+            }
+        }
+        return confirmed.get()
+    }
+
+    private fun friendlyArduconBootloaderInstallFailureMessage(exception: Exception): String {
+        val details = rootMessage(exception)
+        return if (
+            details.contains("setup tools needed", ignoreCase = true) ||
+            details.contains("setup launcher", ignoreCase = true) ||
+            details.contains("first-install metadata", ignoreCase = true) ||
+            details.contains("workshop setup", ignoreCase = true)
+        ) {
+            details
+        } else {
+            "Arducon bootloader installation failed.\n\n$details"
+        }
+    }
+
     private fun playCompletionBeep() {
         if (playMacSystemSound()) {
             return
@@ -6918,9 +8301,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         setStatus(
             if (enabled) {
-                "Automatic SignalSlinger firmware updates enabled."
+                "Automatic firmware updates enabled."
             } else {
-                "Automatic SignalSlinger firmware updates disabled."
+                "Automatic firmware updates disabled."
             },
         )
     }
@@ -7540,6 +8923,47 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return File(home, ".serialslinger/arducon-updates")
     }
 
+    private fun arduconWorkshopSetupSummary(workshopSetup: ArduconWorkshopSetup): String {
+        return buildString {
+            append("Workshop setup:")
+            if (workshopSetup.bootSectionPages != null) {
+                append(" boot section ${workshopSetup.bootSectionPages} pages")
+            }
+            val fuseParts = listOfNotNull(
+                workshopSetup.fuseBootSize?.let { "BOOTSIZE=$it" },
+                workshopSetup.fuseCodeSize?.let { "CODESIZE=$it" },
+                workshopSetup.highFuseTarget?.let { "high fuse=$it" },
+                workshopSetup.highFuseTargetPreserveEeprom?.let { "high fuse with EEPROM preserve=$it" },
+                workshopSetup.extendedFuseBodLevelTarget?.let { "extended fuse BODLEVEL=$it" },
+            )
+            if (fuseParts.isNotEmpty()) {
+                if (workshopSetup.bootSectionPages != null) {
+                    append(", ")
+                } else {
+                    append(" ")
+                }
+                append(fuseParts.joinToString(", "))
+            }
+        }
+    }
+
+    private fun arduconFuseConfirmationText(setup: ArduconWorkshopSetup): String {
+        val lines = listOfNotNull(
+            setup.bootSectionPages?.let { "Boot section: $it pages" },
+            setup.fuseBootSize?.let { "BOOTSIZE=$it" },
+            setup.fuseCodeSize?.let { "CODESIZE=$it" },
+            setup.highFuseTarget?.let { "High fuse target: $it" },
+            setup.highFuseTargetPreserveEeprom?.let { "High fuse target preserving EEPROM: $it" },
+            setup.extendedFuseBodLevelTarget?.let { "Extended fuse BODLEVEL target: $it" },
+            setup.extendedFuseBodLevelDescription?.let { "Extended fuse BODLEVEL: $it" },
+        )
+        return if (lines.isEmpty()) {
+            ""
+        } else {
+            "Expected fuse settings:\n${lines.joinToString("\n")}\n\n"
+        }
+    }
+
     private fun isHardwarePackageMismatchFailure(exception: Exception): Boolean {
         val failureDetails = rootMessage(exception)
         return failureDetails.contains("does not match package board", ignoreCase = true)
@@ -7776,6 +9200,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             SettingKey.STATION_ID -> "Station ID"
             SettingKey.EVENT_TYPE -> "Event Type"
             SettingKey.FOX_ROLE -> "Fox Role"
+            SettingKey.ARDUCON_FOX_ROLE -> "Fox Role"
             SettingKey.PATTERN_TEXT -> "Pattern Text"
             SettingKey.ID_CODE_SPEED_WPM -> "ID Speed"
             SettingKey.PATTERN_CODE_SPEED_WPM -> "Pattern Speed"
@@ -7791,6 +9216,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             SettingKey.LOW_BATTERY_THRESHOLD_VOLTS -> "Low Battery Threshold"
             SettingKey.EXTERNAL_BATTERY_CONTROL_MODE -> "Battery Mode"
             SettingKey.TRANSMISSIONS_ENABLED -> "Transmissions"
+            SettingKey.DTMF_PASSWORD -> "DTMF Password"
+            SettingKey.AM_TONE_FREQUENCY -> "AM Tone"
+            SettingKey.PTT_RESET_SETTING -> "PTT Reset"
         }
     }
 
@@ -7798,6 +9226,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return when (fieldKey) {
             SettingKey.EVENT_TYPE -> (value as? EventType)?.toString().orEmpty()
             SettingKey.FOX_ROLE -> (value as? FoxRole)?.toString() ?: "Not Set"
+            SettingKey.ARDUCON_FOX_ROLE -> EventProfileSupport.arduconFoxRoleForDesignator(value as? Int)?.roleName ?: "Not Set"
             SettingKey.ID_CODE_SPEED_WPM,
             SettingKey.PATTERN_CODE_SPEED_WPM,
             -> value?.let { "$it WPM" } ?: "Not Set"
@@ -7814,6 +9243,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             SettingKey.LOW_BATTERY_THRESHOLD_VOLTS -> value?.toString() ?: "Not Set"
             SettingKey.EXTERNAL_BATTERY_CONTROL_MODE -> (value as? ExternalBatteryControlMode)?.toString() ?: "Not Set"
             SettingKey.TRANSMISSIONS_ENABLED -> if (value == true) "Enabled" else "Disabled"
+            SettingKey.AM_TONE_FREQUENCY -> value?.let { "AM $it" } ?: "Not Set"
+            SettingKey.PTT_RESET_SETTING -> formatPttResetSetting(value as? Int)
             else -> value?.toString() ?: "Not Set"
         }
     }
@@ -8025,6 +9456,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun annotateDesktopUserActionComponents() {
+        setDesktopUserActionLabel(deviceModeCombo, "Device Mode")
         setDesktopUserActionLabel(portComboBox, "Port Selector")
         setDesktopUserActionLabel(rawCommandField, "Manual Command Line")
         setDesktopUserActionLabel(stationIdField, "Station ID")
@@ -8040,8 +9472,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setDesktopUserActionLabel(finishTimeSpinner, "Finish Time")
         setDesktopUserActionLabel(finishTimeRelativeField, "Finish Time")
         setDesktopUserActionLabel(daysField, "Days To Run")
-        setDesktopUserActionLabel(lastsField, "Lasts")
-        setDesktopUserActionLabel(lastsRowLabel, "Lasts")
+        setDesktopUserActionLabel(lastsField, "Duration")
+        setDesktopUserActionLabel(lastsRowLabel, "Duration")
         setDesktopUserActionLabel(frequency1Field, "Frequency 1")
         setDesktopUserActionLabel(frequency2Field, "Frequency 2")
         setDesktopUserActionLabel(frequency3Field, "Frequency 3")
@@ -8190,6 +9622,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun setBusy(isBusy: Boolean) {
         autoDetectButton.isEnabled = !isBusy
         portComboBox.isEnabled = !isBusy
+        deviceModeCombo.isEnabled = !isBusy
         rawCommandField.isEnabled =
             !isBusy &&
             rawSerialRowPanel.isVisible &&
@@ -8215,9 +9648,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun updateWritableControlAvailability(isBusy: Boolean) {
         val connected = currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
         val stationIdEditingSupported = loadedSnapshot?.capabilities?.supportsStationIdEditing == true
+        val eventTypeEditingSupported = loadedSnapshot?.capabilities?.supportsEventTypeEditing == true
+        val foxRoleEditingSupported = loadedSnapshot?.capabilities?.supportsFoxRoleEditing == true
+        val idCodeSpeedEditingSupported = loadedSnapshot?.capabilities?.supportsIdCodeSpeedEditing == true
+        val dtmfPasswordEditingSupported = loadedSnapshot?.capabilities?.supportsDtmfPasswordEditing == true
+        val amToneEditingSupported = loadedSnapshot?.capabilities?.supportsAmToneEditing == true
+        val pttResetEditingSupported = loadedSnapshot?.capabilities?.supportsPttResetEditing == true
         val schedulingSupported = loadedSnapshot?.capabilities?.supportsScheduling == true
         val daysToRunSupported = loadedSnapshot?.capabilities?.supportsDaysToRun != false
         val patternEditingSupported = loadedSnapshot?.capabilities?.supportsPatternEditing == true
+        val arduconConnected = loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true)
         val frequencyProfilesSupported = loadedSnapshot?.capabilities?.supportsFrequencyProfiles == true
         val externalBatteryControlSupported = loadedSnapshot?.capabilities?.supportsExternalBatteryControl == true
         val writableEnabled = connected && !isBusy
@@ -8238,14 +9678,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             } == true
 
         stationIdField.isEnabled = writableEnabled && stationIdEditingSupported
-        eventTypeCombo.isEnabled = patternFieldsEditable
-        foxRoleCombo.isEnabled = patternFieldsEditable
+        eventTypeCombo.isEnabled = writableEnabled && eventTypeEditingSupported && !arduconConnected
+        foxRoleCombo.isEnabled = writableEnabled && foxRoleEditingSupported
+        dtmfPasswordField.isEnabled = writableEnabled && dtmfPasswordEditingSupported
+        amToneField.isEnabled = writableEnabled && amToneEditingSupported
+        pttResetField.isEnabled = writableEnabled && pttResetEditingSupported
         updatePatternTextEditability(
             loadedSnapshot?.settings?.eventType ?: (eventTypeCombo.selectedItem as? EventType ?: EventType.NONE),
             patternFieldsEditable,
         )
-        idSpeedField.isEnabled = patternFieldsEditable
-        devicePatternSpeedField.isEnabled = patternFieldsEditable
+        idSpeedField.isEnabled = writableEnabled && idCodeSpeedEditingSupported
+        devicePatternSpeedField.isEnabled = patternFieldsEditable && !arduconConnected
         timedPatternSpeedField.isEnabled = patternFieldsEditable
         batteryThresholdField.isEnabled = writableEnabled && externalBatteryControlSupported
         batteryModeCombo.isEnabled = writableEnabled && externalBatteryControlSupported
@@ -8274,7 +9717,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         finishTimeAbsoluteMirrorField.isEnabled = finishTimeEditable
         startTimeRowLabel.isEnabled = schedulingFieldsEditable
         finishTimeRowLabel.isEnabled = finishTimeEditable
-        updateLastsRowEditability(finishTimeEditable)
+        updateLastsRowEditability(schedulingFieldsEditable)
         setTimeButton.isEnabled =
             writableEnabled &&
             schedulingSupported &&
@@ -8437,8 +9880,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val defaultCheckBoxMenuForeground = UIManager.getColor("CheckBoxMenuItem.foreground") ?: defaultMenuForeground
         val advancedEnabled = displayPreferences.advancedModeEnabled
         val connected = currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
+        val productProfile = activeProductUiProfile()
         val volatileTemperatureResetSupported = supportsVolatileTemperatureExtremaReset()
         val maximumEverTemperatureResetSupported = supportsMaximumEverTemperatureReset()
+        if (::updateFirmwareMenuItem.isInitialized) {
+            updateFirmwareMenuItem.text = "Update ${productProfile.productLabel} Firmware..."
+            updateFirmwareMenuItem.isVisible = productProfile.supportsFirmwareUpdate
+            updateFirmwareMenuItem.isEnabled = productProfile.supportsFirmwareUpdate
+        }
+        if (::automaticFirmwareUpdatesMenuItem.isInitialized) {
+            automaticFirmwareUpdatesMenuItem.text = "Automatic ${productProfile.productLabel} Firmware Updates"
+            automaticFirmwareUpdatesMenuItem.isVisible = productProfile.supportsAutomaticFirmwareUpdates
+            automaticFirmwareUpdatesMenuItem.isEnabled = productProfile.supportsAutomaticFirmwareUpdates
+            automaticFirmwareUpdatesMenuItem.isSelected =
+                productProfile.supportsAutomaticFirmwareUpdates &&
+                    displayPreferences.automaticFirmwareUpdatesEnabled
+        }
         if (::advancedModeMenuItem.isInitialized) {
             advancedModeMenuItem.text =
                 if (advancedEnabled) "Disable Advanced Mode" else "Enable Advanced Mode..."
@@ -8455,8 +9912,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             resetVolatileTemperatureExtremaMenuItem.isEnabled = volatileTemperatureResetSupported && connected
         }
         if (::installBootloaderMenuItem.isInitialized) {
-            installBootloaderMenuItem.isVisible = advancedEnabled
-            installBootloaderMenuItem.isEnabled = advancedEnabled
+            installBootloaderMenuItem.text = "Install Bootloader on ${productProfile.productLabel}..."
+            installBootloaderMenuItem.isVisible = advancedEnabled && productProfile.supportsBootloaderInstall
+            installBootloaderMenuItem.isEnabled = advancedEnabled && productProfile.supportsBootloaderInstall
             installBootloaderMenuItem.foreground = if (advancedEnabled) advancedColor else defaultMenuForeground
             installBootloaderMenuItem.font =
                 if (advancedEnabled) {
@@ -8466,8 +9924,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
         }
         if (::installBootloaderBarePcbMenuItem.isInitialized) {
-            installBootloaderBarePcbMenuItem.isVisible = advancedEnabled
-            installBootloaderBarePcbMenuItem.isEnabled = advancedEnabled
+            installBootloaderBarePcbMenuItem.isVisible = advancedEnabled && productProfile.supportsBarePcbBootloaderInstall
+            installBootloaderBarePcbMenuItem.isEnabled = advancedEnabled && productProfile.supportsBarePcbBootloaderInstall
             installBootloaderBarePcbMenuItem.foreground = if (advancedEnabled) advancedColor else defaultMenuForeground
             installBootloaderBarePcbMenuItem.font =
                 if (advancedEnabled) {
@@ -8518,16 +9976,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun supportsVolatileTemperatureExtremaReset(): Boolean {
+        if (loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true)) {
+            return false
+        }
         return temperatureResetCommandsSupported == true
     }
 
     private fun supportsMaximumEverTemperatureReset(): Boolean {
+        if (loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true)) {
+            return loadedSnapshot?.capabilities?.supportsExtendedTemperatureReadback == true
+        }
         return temperatureResetCommandsSupported == true
     }
 
     private fun confirmAndResetVolatileTemperatureExtrema() {
         loadedSnapshot ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         if (!supportsVolatileTemperatureExtremaReset()) {
@@ -8539,7 +10003,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         val confirmation = JOptionPane.showConfirmDialog(
             this,
-            "Reset the volatile maximum and minimum temperatures on this SignalSlinger?\n\nThis does not erase the EEPROM maximum ever temperature.",
+            "Reset the volatile maximum and minimum temperatures on this ${productLabel(loadedSnapshot)}?\n\nThis does not erase the EEPROM maximum ever temperature.",
             "Reset Volatile Max/Min Temperature",
             JOptionPane.OK_CANCEL_OPTION,
             JOptionPane.WARNING_MESSAGE,
@@ -8557,7 +10021,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun confirmAndResetMaximumEverTemperature() {
         loadedSnapshot ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         if (!displayPreferences.advancedModeEnabled) {
@@ -8573,7 +10037,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         val confirmation = JOptionPane.showConfirmDialog(
             this,
-            "Reset the EEPROM maximum ever temperature on this SignalSlinger?\n\nThis cannot be undone.",
+            "Reset the EEPROM maximum ever temperature on this ${productLabel(loadedSnapshot)}?\n\nThis cannot be undone.",
             "Reset EEPROM Max Ever Temperature",
             JOptionPane.OK_CANCEL_OPTION,
             JOptionPane.WARNING_MESSAGE,
@@ -8581,8 +10045,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (confirmation != JOptionPane.OK_OPTION) {
             return
         }
+        val isArducon = loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true)
         submitTemperatureReset(
-            command = "TMP R E",
+            command = if (isArducon) "UTI X" else "TMP R E",
+            refreshCommand = if (isArducon) "UTI" else "TMP",
             logTitle = "Reset EEPROM Max Ever Temperature",
             busyTitle = "Resetting maximum ever temperature...",
             statusMessage = "EEPROM maximum ever temperature reset.",
@@ -8591,19 +10057,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun submitTemperatureReset(
         command: String,
+        refreshCommand: String = "TMP",
         logTitle: String,
         busyTitle: String,
         statusMessage: String,
     ) {
         val transport = currentTransport ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         val state = currentState ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
-        val refreshCommand = "TMP"
         runInBackground(busyTitle) {
             setBusyProgress(0, 2, commandProgressLabel(0, 2))
             val commandSentAtMs = System.currentTimeMillis()
@@ -8652,7 +10118,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun showThermalShutdownThresholdDialog() {
         val snapshot = loadedSnapshot ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         if (!snapshot.capabilities.supportsExtendedTemperatureReadback) {
@@ -9102,11 +10568,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         val transport = currentTransport ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         val state = currentState ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
 
@@ -9132,6 +10598,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 appendLog(
                     "Raw Command",
                     buildList {
+                        add(connectedDeviceLogEntry(nextState.snapshot))
                         add(DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL))
                         responseLines.forEach { line ->
                             add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL))
@@ -9140,7 +10607,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 )
                 showConnectionIndicator(
                     ConnectionIndicatorState.CONNECTED,
-                    "Connected to SignalSlinger on ${currentConnectedPortPath.orEmpty()}",
+                    connectionIndicatorText(nextState.snapshot, currentConnectedPortPath.orEmpty()),
                 )
                 setStatus("Sent raw command.")
                 showRawCommandReplyDialog(command, responseLines)
@@ -9150,14 +10617,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun submitThermalShutdownThreshold(thresholdCelsius: Int) {
         val transport = currentTransport ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         val state = currentState ?: run {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
-        val command = ThermalShutdownSupport.commandForCelsius(thresholdCelsius)
+        val command = ThermalShutdownSupport.commandForCelsius(
+            thresholdCelsius,
+            productName = state.snapshot?.info?.productName,
+        )
         runInBackground("Setting thermal shutdown threshold...") {
             setBusyProgress(0, 1, commandProgressLabel(0, 1))
             val sentAtMs = System.currentTimeMillis()
@@ -9191,19 +10661,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun setTemperatureLoggingEnabled(enabled: Boolean) {
         if (enabled && temperatureLogTimer == null) {
             if (currentTransport == null || currentState == null) {
-                JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+                JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
                 updateAdvancedMenuItems()
                 return
             }
             val snapshot = loadedSnapshot
             if (snapshot?.capabilities?.supportsTemperatureLogging != true) {
                 val version = snapshot?.info?.softwareVersion?.takeIf { it.isNotBlank() } ?: "unknown"
+                val deviceType = productLabel(snapshot)
                 JOptionPane.showMessageDialog(
                     this,
-                    "The attached SignalSlinger is running firmware $version.\n\n" +
+                    "The attached $deviceType is running firmware $version.\n\n" +
                         "This firmware can report Device Data temperature values, but it does not refresh the temperature " +
                         "for reliable periodic logging.\n\n" +
-                        "Temperature logging requires SignalSlinger firmware with live temperature logging support.",
+                        "Temperature logging is not supported by this firmware profile.",
                     "Temperature Logging Unavailable",
                     JOptionPane.WARNING_MESSAGE,
                 )
@@ -9211,8 +10682,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 updateAdvancedMenuItems()
                 return
             }
+            val deviceType = productLabel(snapshot)
             stopAdvancedDeviceDataRefreshTimer()
-            sessionLog.beginTemperatureLog()
+            val logFile = sessionLog.beginTemperatureLog(deviceType)
+            appendLog(
+                "Temperature Logging",
+                listOf(
+                    connectedDeviceLogEntry(snapshot),
+                    DesktopLogEntry("Started temperature log for $deviceType: $logFile", DesktopLogCategory.APP),
+                ),
+            )
             temperatureLogTimer = Timer(10_000) {
                 captureTemperatureLogSample()
             }.apply {
@@ -9225,7 +10704,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             temperatureLogTimer?.stop()
             temperatureLogTimer = null
             temperatureLogSampleInProgress.set(false)
-            sessionLog.endTemperatureLog()
+            val logFile = sessionLog.endTemperatureLog()
+            appendLog(
+                "Temperature Logging",
+                listOf(
+                    connectedDeviceLogEntry(loadedSnapshot),
+                    DesktopLogEntry("Stopped temperature log: $logFile", DesktopLogCategory.APP),
+                ),
+            )
             refreshDisplayedLogFromDisk()
             setStatus("Temperature logging deactivated.")
             updateAdvancedDeviceDataRefreshTimer()
@@ -9280,39 +10766,62 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (!temperatureLogSampleInProgress.compareAndSet(false, true)) {
             return
         }
-        val transport = currentTransport
-        val state = currentState
-        if (transport == null || state == null) {
+        fun abortMissingConnection() {
             if (writeTemperatureLog) {
                 setTemperatureLoggingEnabled(false)
             } else {
                 updateAdvancedDeviceDataRefreshTimer()
             }
             temperatureLogSampleInProgress.set(false)
+        }
+        val sampleTransport: DeviceTransport = currentTransport ?: run {
+            abortMissingConnection()
+            return
+        }
+        val sampleState: DeviceSessionState = currentState ?: run {
+            abortMissingConnection()
             return
         }
         Thread {
             try {
                 val sampleTime = LocalDateTime.now().withNano(0)
-                transport.sendCommands(listOf("TMP"))
-                val temperatureLines = transport.readAvailableLines()
-                val stateAfterTemperature = DeviceSessionWorkflow.ingestReportLines(state, temperatureLines)
-                transport.sendCommands(listOf("BAT"))
-                val batteryLines = transport.readAvailableLines()
-                val nextState = DeviceSessionWorkflow.ingestReportLines(stateAfterTemperature, batteryLines)
+                val sampleCommands =
+                    if (sampleState.snapshot?.info?.productName.equals("Arducon", ignoreCase = true)) {
+                        listOf("UTI")
+                    } else {
+                        listOf("TMP", "BAT")
+                    }
+                var nextState = sampleState
+                for (command in sampleCommands) {
+                    sampleTransport.sendCommands(listOf(command))
+                    val responseLines = sampleTransport.readAvailableLines()
+                    nextState = DeviceSessionWorkflow.ingestReportLines(nextState, responseLines)
+                }
+                if (currentTransport !== sampleTransport || currentState !== sampleState) {
+                    return@Thread
+                }
                 val temperatureC = nextState.snapshot?.status?.temperatureC
                 val externalBatteryVolts = nextState.snapshot?.status?.externalBatteryVolts
                 val internalBatteryVolts = nextState.snapshot?.status?.internalBatteryVolts
                 currentState = nextState
                 loadedSnapshot = nextState.snapshot
                 if (writeTemperatureLog) {
-                    sessionLog.appendTemperatureSample(sampleTime, temperatureC, externalBatteryVolts, internalBatteryVolts)
+                    sessionLog.appendTemperatureSample(
+                        productLabel(nextState.snapshot),
+                        sampleTime,
+                        temperatureC,
+                        externalBatteryVolts,
+                        internalBatteryVolts,
+                    )
                 }
                 SwingUtilities.invokeLater {
                     refreshLiveDeviceDataFields(nextState.snapshot)
                 }
             } catch (exception: Exception) {
                 SwingUtilities.invokeLater {
+                    if (currentTransport !== sampleTransport) {
+                        return@invokeLater
+                    }
                     if (writeTemperatureLog) {
                         setStatus("Temperature logging failed: ${exception.message ?: exception::class.simpleName}")
                     } else {
@@ -9364,7 +10873,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         JOptionPane.showMessageDialog(
             this,
             scrollPane,
-            "Reply From SignalSlinger",
+            "Reply From ${activeProductUiProfile().productLabel}",
             JOptionPane.PLAIN_MESSAGE,
         )
     }
@@ -9538,6 +11047,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         portPath: String,
         failure: Exception,
     ): Boolean {
+        if (selectedDeviceMode() != DeviceMode.ARDUCON) {
+            return false
+        }
         val probe = knownProbeResults[portPath]
         if (probe?.productName.equals("Arducon", ignoreCase = true) || probe?.appBaud == 57_600) {
             return false
@@ -9548,7 +11060,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun desktopLoadTransportFor(portPath: String): DesktopSerialTransport {
         val probe = knownProbeResults[portPath]
-        return if (probe?.productName.equals("Arducon", ignoreCase = true) || probe?.appBaud == 57_600) {
+        return if (
+            selectedDeviceMode() == DeviceMode.ARDUCON ||
+            probe?.productName.equals("Arducon", ignoreCase = true) ||
+            probe?.appBaud == 57_600
+        ) {
             arduconDesktopLoadTransportFor(portPath)
         } else {
             DesktopSerialTransport(portPath)
@@ -9658,7 +11174,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         base: DeviceLoadResult,
         transport: DeviceTransport,
     ): TemperatureResetCapabilityLoadResult {
-        if (base.state.snapshot?.capabilities?.supportsExtendedTemperatureReadback != true) {
+        val snapshot = base.state.snapshot
+        if (snapshot?.capabilities?.supportsExtendedTemperatureReadback != true) {
+            return TemperatureResetCapabilityLoadResult(result = base, supported = false)
+        }
+        if (snapshot.info.productName.equals("Arducon", ignoreCase = true)) {
             return TemperatureResetCapabilityLoadResult(result = base, supported = false)
         }
         val command = TemperatureResetSupport.probeCommand
@@ -9811,6 +11331,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentState = connection.result.state
         currentConnectedPortPath = connection.portPath
         loadedSnapshot = connection.result.state.snapshot
+        updateProductSectionTitles(loadedSnapshot)
         temperatureResetCommandsSupported = connection.temperatureResetCommandsSupported
         consecutiveDeviceTimeCheckNoResponseCount = 0
         setCloneSessionTemplateLocked(false)
@@ -9830,7 +11351,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         autoDetectNoDeviceFound = false
         val productName = connection.result.state.snapshot?.info?.productName ?: "SignalSlinger"
-        showConnectionIndicator(ConnectionIndicatorState.CONNECTED, "Connected to $productName on ${connection.portPath}")
+        showConnectionIndicator(ConnectionIndicatorState.CONNECTED, connectionIndicatorText(connection.result.state.snapshot, connection.portPath))
         portMemory.saveLastWorkingPortPath(connection.portPath)
         try {
             knownProbeResults[connection.portPath] = knownProbeResults[connection.portPath]?.copy(
@@ -9863,10 +11384,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             appendLoadLog(
                 title = connection.loadLogTitle,
                 result = connection.result,
-                leadEntries = connection.loadLogLeadEntries,
+                leadEntries = listOf(connectedDeviceLogEntry(connection.result.state.snapshot, connection.portPath)) +
+                    connection.loadLogLeadEntries,
             )
             refreshAvailablePorts(silent = true)
-            maybeOfferAutomaticSignalSlingerFirmwareUpdate(connection.portPath)
+            maybeOfferAutomaticFirmwareUpdate(connection.portPath)
         } catch (exception: Exception) {
             appendLog(
                 "Load Apply Error",
@@ -9882,7 +11404,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun maybeOfferAutomaticSignalSlingerFirmwareUpdate(portPath: String) {
+    private fun maybeOfferAutomaticFirmwareUpdate(portPath: String) {
         if (!displayPreferences.automaticFirmwareUpdatesEnabled ||
             automaticFirmwareUpdateCheckInProgress ||
             automaticFirmwareUpdatePromptVisible ||
@@ -9890,7 +11412,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         ) {
             if (backgroundWorkInProgress) {
                 Timer(350) {
-                    maybeOfferAutomaticSignalSlingerFirmwareUpdate(portPath)
+                    maybeOfferAutomaticFirmwareUpdate(portPath)
                 }.apply {
                     isRepeats = false
                     start()
@@ -9899,25 +11421,41 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
         val snapshot = loadedSnapshot ?: return
-        val hardwareBuild = snapshot.info.hardwareBuild.orEmpty().trim()
+        val productName = snapshot.info.productName.orEmpty().trim()
         val firmwareVersion = snapshot.info.softwareVersion.orEmpty().trim()
-        if (hardwareBuild.isBlank() || !SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(firmwareVersion)) {
-            return
-        }
+        val hardwareBuild = snapshot.info.hardwareBuild.orEmpty().trim()
 
         automaticFirmwareUpdateCheckInProgress = true
         Thread {
-            val result = runCatching {
-                SignalSlingerReleaseCache(desktopSignalSlingerReleaseCacheDirectory()).selectLatestForUpdate(
-                    hardwareBuild = hardwareBuild,
-                    currentFirmwareVersion = firmwareVersion,
-                )
-            }
+            val result =
+                when {
+                    productName.equals(DeviceMode.SIGNALSLINGER.productName, ignoreCase = true) &&
+                        hardwareBuild.isNotBlank() &&
+                        SignalSlingerFirmwareUpdate.supportsBootloaderUpdate(firmwareVersion) ->
+                        runCatching {
+                            AutomaticFirmwareUpdateSelection.SignalSlinger(
+                                SignalSlingerReleaseCache(desktopSignalSlingerReleaseCacheDirectory()).selectLatestForUpdate(
+                                    hardwareBuild = hardwareBuild,
+                                    currentFirmwareVersion = firmwareVersion,
+                                ),
+                            )
+                        }
+                    productName.equals(DeviceMode.ARDUCON.productName, ignoreCase = true) ->
+                        runCatching {
+                            AutomaticFirmwareUpdateSelection.Arducon(
+                                ArduconReleaseCache(desktopArduconReleaseCacheDirectory()).selectLatestForUpdate(
+                                    currentFirmwareVersion = firmwareVersion,
+                                ),
+                            )
+                        }
+                    else -> return@Thread
+                }
             SwingUtilities.invokeLater {
                 automaticFirmwareUpdateCheckInProgress = false
                 val selection = result.getOrNull() ?: return@invokeLater
                 if (
                     currentConnectedPortPath != portPath ||
+                    !loadedSnapshot?.info?.productName.orEmpty().trim().equals(productName, ignoreCase = true) ||
                     loadedSnapshot?.info?.hardwareBuild.orEmpty().trim() != hardwareBuild ||
                     loadedSnapshot?.info?.softwareVersion.orEmpty().trim() != firmwareVersion ||
                     backgroundWorkInProgress
@@ -9926,29 +11464,28 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
                 automaticFirmwareUpdatePromptVisible = true
                 try {
-                    val sourceText =
-                        if (selection.source == SignalSlingerReleaseSelectionSource.RESIDENT) {
-                            if (selection.downloadFailure != null) {
-                                "SerialSlinger could not download the latest release, but a resident update is available."
-                            } else {
-                                "SerialSlinger already has this update saved locally."
-                            }
-                        } else {
-                            "SerialSlinger downloaded the latest update."
-                        }
+                    val sourceText = automaticFirmwareUpdateSourceText(selection)
                     val choice = JOptionPane.showConfirmDialog(
                         this,
-                        "$sourceText\n\nCurrent firmware: $firmwareVersion\nAvailable firmware: ${selection.release.version}\nHardware: ${selection.release.board}\n\nUpdate SignalSlinger now?",
-                        "Update SignalSlinger",
+                        "$sourceText\n\nCurrent firmware: $firmwareVersion\nAvailable firmware: ${selection.version}\nHardware: ${selection.board}\n\nUpdate ${selection.productLabel} now?",
+                        "Update ${selection.productLabel}",
                         JOptionPane.YES_NO_OPTION,
                         JOptionPane.QUESTION_MESSAGE,
                     )
                     if (choice == JOptionPane.YES_OPTION) {
-                        updateSignalSlingerFromReleaseInfo(
-                            portPath = portPath,
-                            manifestFile = selection.manifestFile,
-                            recoverAlreadyWaiting = false,
-                        )
+                        when (selection) {
+                            is AutomaticFirmwareUpdateSelection.SignalSlinger ->
+                                updateSignalSlingerFromReleaseInfo(
+                                    portPath = portPath,
+                                    manifestFile = selection.selection.manifestFile,
+                                    recoverAlreadyWaiting = false,
+                                )
+                            is AutomaticFirmwareUpdateSelection.Arducon ->
+                                updateArduconFromReleaseInfo(
+                                    portPath = portPath,
+                                    manifestFile = selection.selection.manifestFile,
+                                )
+                        }
                     }
                 } finally {
                     automaticFirmwareUpdatePromptVisible = false
@@ -9958,6 +11495,53 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             name = "serialslinger-automatic-firmware-update-check"
             isDaemon = true
             start()
+        }
+    }
+
+    private sealed class AutomaticFirmwareUpdateSelection {
+        abstract val productLabel: String
+        abstract val version: String
+        abstract val board: String
+
+        data class SignalSlinger(
+            val selection: SignalSlingerReleaseSelection,
+        ) : AutomaticFirmwareUpdateSelection() {
+            override val productLabel: String = "SignalSlinger"
+            override val version: String = selection.release.version
+            override val board: String = selection.release.board
+        }
+
+        data class Arducon(
+            val selection: ArduconReleaseSelection,
+        ) : AutomaticFirmwareUpdateSelection() {
+            override val productLabel: String = "Arducon"
+            override val version: String = selection.release.version
+            override val board: String = selection.release.board
+        }
+    }
+
+    private fun automaticFirmwareUpdateSourceText(selection: AutomaticFirmwareUpdateSelection): String {
+        return when (selection) {
+            is AutomaticFirmwareUpdateSelection.SignalSlinger ->
+                if (selection.selection.source == SignalSlingerReleaseSelectionSource.RESIDENT) {
+                    if (selection.selection.downloadFailure != null) {
+                        "SerialSlinger could not download the latest release, but a resident update is available."
+                    } else {
+                        "SerialSlinger already has this update saved locally."
+                    }
+                } else {
+                    "SerialSlinger downloaded the latest update."
+                }
+            is AutomaticFirmwareUpdateSelection.Arducon ->
+                if (selection.selection.source == ArduconReleaseSelectionSource.RESIDENT) {
+                    if (selection.selection.downloadFailure != null) {
+                        "SerialSlinger could not download the latest Arducon release, but a resident update is available."
+                    } else {
+                        "SerialSlinger already has this Arducon update saved locally."
+                    }
+                } else {
+                    "SerialSlinger downloaded the latest Arducon update."
+                }
         }
     }
 
@@ -10236,7 +11820,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val state = currentState
         val snapshot = loadedSnapshot
         if (transport == null || state == null || snapshot == null) {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             onComplete(false)
             return
         }
@@ -10300,7 +11884,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val snapshot = loadedSnapshot
         val intendedTimeSetMode = displayPreferences.timeSetMode
         if (transport == null || state == null || snapshot == null) {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
         if (!snapshot.capabilities.supportsScheduling) {
@@ -10518,7 +12102,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val state = currentState
         val snapshot = loadedSnapshot
         if (transport == null || state == null || snapshot == null) {
-            JOptionPane.showMessageDialog(this, "Connect and load a SignalSlinger first.")
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
 
@@ -10713,11 +12297,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun clearFormForUnread() {
         loadedSnapshot = null
         temperatureResetCommandsSupported = null
+        updateProductSectionTitles(null)
         clearRelativeScheduleDisplayOverrides()
         deviceTimeOffset = null
         cachedManualWriteDelayMillis = null
         stationIdField.text = ""
         eventTypeCombo.selectedItem = null
+        setInformationalFieldText(arduconEventTypeField, "Not read")
         syncFoxRoleOptions(EventType.NONE, null)
         foxRoleCombo.selectedItem = null
         patternTextField.text = ""
@@ -10736,10 +12322,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         clearFrequencySpinner(frequency2Field)
         clearFrequencySpinner(frequency3Field)
         clearFrequencySpinner(frequencyBField)
+        dtmfPasswordField.text = ""
+        amToneField.selectedItem = "0"
+        pttResetField.selectedItem = formatPttResetSetting(0)
         batteryThresholdField.selectedItem = null
         batteryModeCombo.selectedItem = null
         updateUnsupportedCapabilityHints(
             stationIdEditingSupported = true,
+            eventTypeEditingSupported = true,
+            foxRoleEditingSupported = true,
+            idCodeSpeedEditingSupported = true,
+            dtmfPasswordEditingSupported = true,
+            amToneEditingSupported = true,
+            pttResetEditingSupported = true,
             patternEditingSupported = true,
             frequencyProfilesSupported = true,
             externalBatteryControlSupported = true,
@@ -10760,16 +12355,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         updateAdvancedMenuItems()
     }
 
-    private fun canEditLastsDuration(): Boolean {
+    private fun canEditDuration(): Boolean {
         return !backgroundWorkInProgress &&
             currentTransport != null &&
             currentState?.connectionState == ConnectionState.CONNECTED &&
             loadedSnapshot?.capabilities?.supportsScheduling == true &&
             loadedSnapshot?.settings?.let { settings ->
-                DesktopInputSupport.isFinishTimeEditable(
-                    startTimeCompact = settings.startTimeCompact,
-                    currentTimeCompact = settings.currentTimeCompact,
-                )
+                DesktopInputSupport.areSchedulingFieldsEditable(settings.currentTimeCompact)
             } == true
     }
 
@@ -10930,21 +12522,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentState = updatedState
         loadedSnapshot = updatedState?.snapshot
         updateAdvancedDeviceDataRefreshTimer()
+        val disconnectedProductLabel = productLabel(updatedState?.snapshot)
         knownProbeResults[portPath] = knownProbeResults[portPath]?.copy(
             state = PortProbeState.NOT_DETECTED,
-            summary = "SignalSlinger no longer detected",
+            summary = "$disconnectedProductLabel no longer detected",
             lastProbedAtMs = System.currentTimeMillis(),
         ) ?: SignalSlingerPortProbe(
             portInfo = resolvePortInfoFor(portPath),
             state = PortProbeState.NOT_DETECTED,
-            summary = "SignalSlinger no longer detected",
+            summary = "$disconnectedProductLabel no longer detected",
             lastProbedAtMs = System.currentTimeMillis(),
         )
         showConnectionIndicator(
             ConnectionIndicatorState.DISCONNECTED,
-            "SignalSlinger is not responding on ${portPath}",
+            "$disconnectedProductLabel is not responding on ${portPath}",
         )
-        setStatus("SignalSlinger stopped responding on ${portPath}.")
+        setStatus("$disconnectedProductLabel stopped responding on ${portPath}.")
         consecutiveDeviceTimeCheckNoResponseCount = 0
         clockPhaseWarningActive = false
         lastClockPhaseErrorMillis = null
@@ -11000,11 +12593,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         when {
             shouldWarn -> showConnectionIndicator(
                 ConnectionIndicatorState.SEARCHING,
-                "Connected to SignalSlinger on $portPath. Device clock appears out of sync with system time.",
+                connectionClockWarningText(loadedSnapshot, portPath),
             )
             currentState?.connectionState == ConnectionState.CONNECTED -> showConnectionIndicator(
                 ConnectionIndicatorState.CONNECTED,
-                "Connected to SignalSlinger on $portPath",
+                connectionIndicatorText(loadedSnapshot, portPath),
             )
         }
         maybeTriggerAutomaticDeviceTimeSync()
