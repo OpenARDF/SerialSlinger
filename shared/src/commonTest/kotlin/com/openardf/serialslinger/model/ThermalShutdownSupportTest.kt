@@ -8,19 +8,19 @@ class ThermalShutdownSupportTest {
     @Test
     fun validatesAllowedCelsiusRange() {
         assertEquals(30, ThermalShutdownSupport.validateCelsius(30))
-        assertEquals(55, ThermalShutdownSupport.validateCelsius(55))
+        assertEquals(60, ThermalShutdownSupport.validateCelsius(60))
         assertFailsWith<IllegalArgumentException> {
             ThermalShutdownSupport.validateCelsius(29)
         }
         assertFailsWith<IllegalArgumentException> {
-            ThermalShutdownSupport.validateCelsius(56)
+            ThermalShutdownSupport.validateCelsius(61)
         }
     }
 
     @Test
     fun convertsFahrenheitThresholdsToNearestCelsius() {
         assertEquals(30, ThermalShutdownSupport.fahrenheitToCelsius(86))
-        assertEquals(55, ThermalShutdownSupport.fahrenheitToCelsius(131))
+        assertEquals(60, ThermalShutdownSupport.fahrenheitToCelsius(140))
     }
 
     @Test

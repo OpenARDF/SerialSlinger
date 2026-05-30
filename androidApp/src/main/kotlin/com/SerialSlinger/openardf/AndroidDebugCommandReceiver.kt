@@ -170,6 +170,106 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                     pendingResult.finish()
                 }
             }
+            ACTION_SET_DTMF_PASSWORD -> {
+                val dtmfPassword = intent.getStringExtra(EXTRA_DTMF_PASSWORD)
+                if (dtmfPassword == null) {
+                    resultCode = resultCanceled
+                    resultData = "Missing required extra: dtmf_password"
+                    return
+                }
+
+                val pendingResult = goAsync()
+                AndroidSessionController.runDtmfPasswordSubmit(
+                    context = context,
+                    password = dtmfPassword,
+                    requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
+                    source = "adb",
+                ) { result ->
+                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
+                    pendingResult.resultData =
+                        if (result.isSuccess) {
+                            AndroidSessionController.debugStateSummary()
+                        } else {
+                            result.exceptionOrNull()?.message ?: "Unknown submit failure"
+                        }
+                    pendingResult.finish()
+                }
+            }
+            ACTION_SET_AM_TONE -> {
+                val amTone = intent.getStringExtra(EXTRA_AM_TONE)
+                if (amTone == null) {
+                    resultCode = resultCanceled
+                    resultData = "Missing required extra: am_tone"
+                    return
+                }
+
+                val parsedAmTone =
+                    if (amTone.equals("OFF", ignoreCase = true)) {
+                        0
+                    } else {
+                        amTone.toIntOrNull()
+                    }
+                if (parsedAmTone == null) {
+                    resultCode = resultCanceled
+                    resultData = "Unsupported am_tone: $amTone"
+                    return
+                }
+
+                val pendingResult = goAsync()
+                AndroidSessionController.runAmToneSubmit(
+                    context = context,
+                    amToneFrequency = parsedAmTone,
+                    updateCloneTemplate = true,
+                    requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
+                    source = "adb",
+                ) { result ->
+                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
+                    pendingResult.resultData =
+                        if (result.isSuccess) {
+                            AndroidSessionController.debugStateSummary()
+                        } else {
+                            result.exceptionOrNull()?.message ?: "Unknown submit failure"
+                        }
+                    pendingResult.finish()
+                }
+            }
+            ACTION_SET_PTT_RESET -> {
+                val pttReset = intent.getStringExtra(EXTRA_PTT_RESET)
+                if (pttReset == null) {
+                    resultCode = resultCanceled
+                    resultData = "Missing required extra: ptt_reset"
+                    return
+                }
+
+                val parsedPttReset =
+                    when (pttReset.trim().uppercase()) {
+                        "0", "OFF", "PTT RESETS OFF" -> 0
+                        "1", "ON", "PTT RESETS ON" -> 1
+                        else -> null
+                    }
+                if (parsedPttReset == null) {
+                    resultCode = resultCanceled
+                    resultData = "Unsupported ptt_reset: $pttReset"
+                    return
+                }
+
+                val pendingResult = goAsync()
+                AndroidSessionController.runPttResetSubmit(
+                    context = context,
+                    pttResetSetting = parsedPttReset,
+                    requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
+                    source = "adb",
+                ) { result ->
+                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
+                    pendingResult.resultData =
+                        if (result.isSuccess) {
+                            AndroidSessionController.debugStateSummary()
+                        } else {
+                            result.exceptionOrNull()?.message ?: "Unknown submit failure"
+                        }
+                    pendingResult.finish()
+                }
+            }
             ACTION_SET_PATTERN_SPEED -> {
                 val patternSpeedWpm = intent.getStringExtra(EXTRA_PATTERN_SPEED_WPM)
                 if (patternSpeedWpm == null) {
@@ -469,6 +569,9 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val ACTION_SET_FOX_ROLE = "com.SerialSlinger.openardf.DEBUG_SET_FOX_ROLE"
         const val ACTION_SET_STATION_ID = "com.SerialSlinger.openardf.DEBUG_SET_STATION_ID"
         const val ACTION_SET_ID_SPEED = "com.SerialSlinger.openardf.DEBUG_SET_ID_SPEED"
+        const val ACTION_SET_DTMF_PASSWORD = "com.SerialSlinger.openardf.DEBUG_SET_DTMF_PASSWORD"
+        const val ACTION_SET_AM_TONE = "com.SerialSlinger.openardf.DEBUG_SET_AM_TONE"
+        const val ACTION_SET_PTT_RESET = "com.SerialSlinger.openardf.DEBUG_SET_PTT_RESET"
         const val ACTION_SET_PATTERN_SPEED = "com.SerialSlinger.openardf.DEBUG_SET_PATTERN_SPEED"
         const val ACTION_SET_CURRENT_FREQUENCY = "com.SerialSlinger.openardf.DEBUG_SET_CURRENT_FREQUENCY"
         const val ACTION_SET_FREQUENCY_BANK = "com.SerialSlinger.openardf.DEBUG_SET_FREQUENCY_BANK"
@@ -486,6 +589,9 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val EXTRA_FOX_ROLE = "fox_role"
         const val EXTRA_STATION_ID = "station_id"
         const val EXTRA_ID_SPEED_WPM = "id_speed_wpm"
+        const val EXTRA_DTMF_PASSWORD = "dtmf_password"
+        const val EXTRA_AM_TONE = "am_tone"
+        const val EXTRA_PTT_RESET = "ptt_reset"
         const val EXTRA_PATTERN_SPEED_WPM = "pattern_speed_wpm"
         const val EXTRA_CURRENT_FREQUENCY = "current_frequency"
         const val EXTRA_BANK_ID = "bank_id"

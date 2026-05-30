@@ -30,6 +30,7 @@ import com.openardf.serialslinger.model.SettingsField
 import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import com.openardf.serialslinger.model.hasWallClockTimeSet
+import com.openardf.serialslinger.model.isValidDtmfPassword
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceSessionController
@@ -238,6 +239,13 @@ object AndroidSessionController {
     private const val startupReportDrainQuietPauseMs = 80L
     private const val startupReportDrainQuietReadCount = 3
     private const val usbStartupWarmupMaxWaitMs = 25_000L
+    private const val signalSlingerUsbStartupAttemptWaitMs = 2_000L
+    private const val arduconUsbStartupAttemptWaitMs = 1_800L
+    private const val arduconUsbStartupRetryPauseMs = 500L
+    private const val arduconUsbStartupAttempts = 8
+    private const val signalSlingerAppBaudRate = 9_600
+    private const val arduconAppBaudRate = 57_600
+    private const val arduconUsbOpenSettleMs = 500L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = linkedSetOf<() -> Unit>()
     private var applicationContext: Context? = null
@@ -990,12 +998,52 @@ object AndroidSessionController {
             )
 
         usbTransport.connect()
-        val sentAtMs = System.currentTimeMillis()
-        usbTransport.sendCommands(listOf("VER"))
-        val warmupLines = waitForUsbStartupReport(usbTransport)
-        val receivedAtMs = System.currentTimeMillis()
+        val warmupCommands = mutableListOf<String>()
+        val warmupLines = mutableListOf<String>()
+        val warmupTraceEntries = mutableListOf<SerialTraceEntry>()
+        if (usbTransport.baudRate == arduconAppBaudRate) {
+            Thread.sleep(arduconUsbOpenSettleMs)
+            usbTransport.readAvailableLinesBriefly(300)
+            usbTransport.clearBufferedInputFragments()
+            for (attempt in 0 until arduconUsbStartupAttempts) {
+                val command = "INF"
+                val sentAtMs = System.currentTimeMillis()
+                usbTransport.sendCommands(listOf(command))
+                warmupCommands += command
+                warmupTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+                val responseLines = waitForUsbStartupReport(usbTransport, arduconUsbStartupAttemptWaitMs)
+                val receivedAtMs = System.currentTimeMillis()
+                warmupLines += responseLines
+                warmupTraceEntries += responseLines.map { line ->
+                    SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+                }
+                if (hasSignalSlingerReportLine(warmupLines)) {
+                    break
+                }
+                usbTransport.clearBufferedInputFragments()
+                if (attempt < arduconUsbStartupAttempts - 1) {
+                    Thread.sleep(arduconUsbStartupRetryPauseMs)
+                }
+            }
+        } else {
+            for (command in listOf("VER", "INF")) {
+                val sentAtMs = System.currentTimeMillis()
+                usbTransport.sendCommands(listOf(command))
+                warmupCommands += command
+                warmupTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+                val responseLines = waitForUsbStartupReport(usbTransport, signalSlingerUsbStartupAttemptWaitMs)
+                val receivedAtMs = System.currentTimeMillis()
+                warmupLines += responseLines
+                warmupTraceEntries += responseLines.map { line ->
+                    SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+                }
+                if (hasSignalSlingerReportLine(warmupLines)) {
+                    break
+                }
+            }
+        }
         require(hasSignalSlingerReportLine(warmupLines)) {
-            "No SignalSlinger response was received."
+            "No supported device response was received."
         }
         onReportReceived?.invoke()
 
@@ -1006,15 +1054,13 @@ object AndroidSessionController {
             )
         val warmupResult = DeviceLoadResult(
             state = warmupState,
-            commandsSent = listOf("VER"),
+            commandsSent = warmupCommands,
             linesReceived = warmupLines,
-            traceEntries =
-                listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, "VER")) +
-                    warmupLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) },
+            traceEntries = warmupTraceEntries,
         )
         logAppEvent(
             title = "startup-warmup",
-            lines = listOf("Received ${warmupLines.size} startup line(s) after initial VER before full load."),
+            lines = listOf("Received ${warmupLines.size} startup line(s) after warmup command(s) ${warmupCommands.joinToString(", ")} before full load."),
         )
 
         val fullLoad = DeviceSessionController.refreshFromDevice(
@@ -1027,9 +1073,12 @@ object AndroidSessionController {
         return mergeLoadResults(warmupResult, fullLoad)
     }
 
-    private fun waitForUsbStartupReport(transport: AndroidUsbTransport): List<String> {
+    private fun waitForUsbStartupReport(
+        transport: AndroidUsbTransport,
+        maxWaitMs: Long = usbStartupWarmupMaxWaitMs,
+    ): List<String> {
         val lines = mutableListOf<String>()
-        val deadline = System.currentTimeMillis() + usbStartupWarmupMaxWaitMs
+        val deadline = System.currentTimeMillis() + maxWaitMs
         while (System.currentTimeMillis() < deadline) {
             val responseLines = transport.readAvailableLines()
             if (responseLines.isNotEmpty()) {
@@ -1147,7 +1196,7 @@ object AndroidSessionController {
             }
             return
         }
-        recordStatus("Loading SignalSlinger...", isError = false)
+        recordStatus("Loading device...", isError = false)
         synchronized(this) {
             latestProbeSummary = "Probe in progress..."
         }
@@ -1194,12 +1243,32 @@ object AndroidSessionController {
 
             val result =
                 if (requestedTargets.isNullOrEmpty()) {
-                    attemptProbe(
-                        requestedDeviceNameForAttempt = (target as? AndroidConnectionTarget.Usb)?.deviceName,
-                        requestedTargetForAttempt = target,
-                        allowUsbAutoDetect = true,
-                        missingMessage = "No permitted supported USB serial device is connected.",
-                    )
+                    val candidateTargets =
+                        when (target) {
+                            is AndroidConnectionTarget.Usb -> usbProbeCandidateTargets(target)
+                            else -> listOf(target)
+                        }
+                    val attemptSummaries = mutableListOf<String>()
+                    var successfulResult: Result<Pair<DeviceLoadResult, ClockDisplayAnchor?>>? = null
+                    for (candidateTarget in candidateTargets) {
+                        val candidateResult =
+                            attemptProbe(
+                                requestedDeviceNameForAttempt = (candidateTarget as? AndroidConnectionTarget.Usb)?.deviceName,
+                                requestedTargetForAttempt = candidateTarget,
+                                allowUsbAutoDetect = true,
+                                missingMessage = "No permitted supported USB serial device is connected.",
+                            )
+                        if (candidateResult.isSuccess) {
+                            successfulResult = candidateResult
+                            break
+                        }
+                        attemptSummaries += buildString {
+                            append(candidateTarget?.label ?: "USB auto-detect")
+                            append(": ")
+                            append(candidateResult.exceptionOrNull()?.message ?: "Unknown error")
+                        }
+                    }
+                    successfulResult ?: Result.failure(IllegalStateException(attemptSummaries.joinToString("\n")))
                 } else {
                     val attemptSummaries = mutableListOf<String>()
                     var successfulResult: Result<Pair<DeviceLoadResult, ClockDisplayAnchor?>>? = null
@@ -1278,7 +1347,8 @@ object AndroidSessionController {
                                 append("Possible new device detected due to $reason.")
                             }
                         }
-                    statusText = "SignalSlinger Data Read Successfully"
+                    val productName = displayedLoadResult.state.snapshot?.info?.productName?.ifBlank { null } ?: "Device"
+                    statusText = "$productName Data Read Successfully"
                     statusIsError = false
                 } else {
                     latestProbeSummary = buildString {
@@ -1310,6 +1380,19 @@ object AndroidSessionController {
                 }
             }
         }
+    }
+
+    private fun usbProbeCandidateTargets(target: AndroidConnectionTarget.Usb): List<AndroidConnectionTarget.Usb> {
+        val alternateBaudRate =
+            when (target.baudRate) {
+                signalSlingerAppBaudRate -> arduconAppBaudRate
+                arduconAppBaudRate -> signalSlingerAppBaudRate
+                else -> signalSlingerAppBaudRate
+            }
+        return listOf(
+            target,
+            target.copy(baudRate = alternateBaudRate),
+        ).distinct()
     }
 
     fun runStationIdSubmit(
@@ -1781,6 +1864,116 @@ object AndroidSessionController {
                 mainHandler.post { callback(result) }
             }
         }
+    }
+
+    fun runDtmfPasswordSubmit(
+        context: Context,
+        password: String,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
+    ) {
+        val normalizedPassword = password.trim()
+        if (!isValidDtmfPassword(normalizedPassword)) {
+            val error = IllegalArgumentException("DTMF Password must be 4 to 8 numeric characters.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "DTMF Password update failed."
+                statusIsError = true
+            }
+            emitCommandLog("set-dtmf-password", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        runArduconEditableSettingSubmit(
+            context = context,
+            requestedDeviceName = requestedDeviceName,
+            source = source,
+            commandName = "set-dtmf-password",
+            settingLabel = "DTMF Password",
+            capabilitySupported = { supportsDtmfPasswordEditing },
+            alreadyMatches = { settings -> settings.dtmfPassword == normalizedPassword },
+            editSettings = { settings ->
+                settings.copy(dtmfPassword = settings.dtmfPassword.copy(editedValue = normalizedPassword))
+            },
+            updateCloneTemplate = false,
+            onComplete = onComplete,
+        )
+    }
+
+    fun runAmToneSubmit(
+        context: Context,
+        amToneFrequency: Int,
+        updateCloneTemplate: Boolean = false,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
+    ) {
+        if (amToneFrequency !in 0..6) {
+            val error = IllegalArgumentException("AM Tone must be OFF or a value from 1 to 6.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "AM Tone update failed."
+                statusIsError = true
+            }
+            emitCommandLog("set-am-tone", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        runArduconEditableSettingSubmit(
+            context = context,
+            requestedDeviceName = requestedDeviceName,
+            source = source,
+            commandName = "set-am-tone",
+            settingLabel = "AM Tone",
+            capabilitySupported = { supportsAmToneEditing },
+            alreadyMatches = { settings -> settings.amToneFrequency == amToneFrequency },
+            editSettings = { settings ->
+                settings.copy(amToneFrequency = settings.amToneFrequency.copy(editedValue = amToneFrequency))
+            },
+            updateCloneTemplate = updateCloneTemplate,
+            onComplete = onComplete,
+        )
+    }
+
+    fun runPttResetSubmit(
+        context: Context,
+        pttResetSetting: Int,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
+    ) {
+        if (pttResetSetting !in 0..1) {
+            val error = IllegalArgumentException("PTT Reset must be PTT Resets OFF or PTT Resets ON.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "PTT Reset update failed."
+                statusIsError = true
+            }
+            emitCommandLog("set-ptt-reset", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        runArduconEditableSettingSubmit(
+            context = context,
+            requestedDeviceName = requestedDeviceName,
+            source = source,
+            commandName = "set-ptt-reset",
+            settingLabel = "PTT Reset",
+            capabilitySupported = { supportsPttResetEditing },
+            alreadyMatches = { settings -> settings.pttResetSetting == pttResetSetting },
+            editSettings = { settings ->
+                settings.copy(pttResetSetting = settings.pttResetSetting.copy(editedValue = pttResetSetting))
+            },
+            updateCloneTemplate = false,
+            onComplete = onComplete,
+        )
     }
 
     fun runThermalShutdownThresholdSubmit(
@@ -4212,6 +4405,9 @@ object AndroidSessionController {
             appendLine("storedPatternText=${snapshot.settings.patternText ?: "<unknown>"}")
             appendLine("idCodeSpeedWpm=${snapshot.settings.idCodeSpeedWpm}")
             appendLine("patternCodeSpeedWpm=${snapshot.settings.patternCodeSpeedWpm}")
+            appendLine("dtmfPassword=${snapshot.settings.dtmfPassword ?: "<unknown>"}")
+            appendLine("amToneFrequency=${snapshot.settings.amToneFrequency ?: "<unknown>"}")
+            appendLine("pttResetSetting=${snapshot.settings.pttResetSetting ?: "<unknown>"}")
             appendLine("currentTime=${snapshot.settings.currentTimeCompact ?: "<unknown>"}")
             appendLine("startTime=${snapshot.settings.startTimeCompact ?: "<unknown>"}")
             appendLine("finishTime=${snapshot.settings.finishTimeCompact ?: "<unknown>"}")
@@ -4566,8 +4762,8 @@ object AndroidSessionController {
                 val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
                 val usbDevice = resolveUsbDevice(usbManager, desiredTarget.deviceName) ?: return null
                 ResolvedTransport(
-                    target = AndroidConnectionTarget.Usb(usbDevice.deviceName),
-                    transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice),
+                    target = AndroidConnectionTarget.Usb(usbDevice.deviceName, desiredTarget.baudRate),
+                    transport = androidUsbTransport(usbManager, usbDevice, desiredTarget.baudRate),
                 )
             }
             null -> {
@@ -4578,9 +4774,31 @@ object AndroidSessionController {
                 val usbDevice = resolveUsbDevice(usbManager, requestedDeviceName = null) ?: return null
                 ResolvedTransport(
                     target = AndroidConnectionTarget.Usb(usbDevice.deviceName),
-                    transport = AndroidUsbTransport(usbManager = usbManager, usbDevice = usbDevice),
+                    transport = androidUsbTransport(usbManager, usbDevice, signalSlingerAppBaudRate),
                 )
             }
+        }
+    }
+
+    private fun androidUsbTransport(
+        usbManager: UsbManager,
+        usbDevice: UsbDevice,
+        baudRate: Int,
+    ): AndroidUsbTransport {
+        return if (baudRate == arduconAppBaudRate) {
+            AndroidUsbTransport(
+                usbManager = usbManager,
+                usbDevice = usbDevice,
+                baudRate = baudRate,
+                lineTerminator = "\r",
+                wakePreamble = "",
+            )
+        } else {
+            AndroidUsbTransport(
+                usbManager = usbManager,
+                usbDevice = usbDevice,
+                baudRate = baudRate,
+            )
         }
     }
 
@@ -5055,11 +5273,12 @@ object AndroidSessionController {
         additionalLines: List<String> = emptyList(),
     ): String {
         if (result.wasNoOp()) {
+            val productName = result.state.snapshot?.info?.productName?.ifBlank { null } ?: "device"
             return buildString {
                 appendLine("No setting changes were required.")
                 appendLine("Commands sent: 0")
                 appendLine("Readback commands sent: 0")
-                append("The requested value already matched the loaded SignalSlinger snapshot.")
+                append("The requested value already matched the loaded $productName snapshot.")
             }.trim()
         }
 
@@ -5284,6 +5503,7 @@ object AndroidSessionController {
                     mediumFrequencyHz = sourceSettings.mediumFrequencyHz,
                     highFrequencyHz = sourceSettings.highFrequencyHz,
                     beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
+                    amToneFrequency = sourceSettings.amToneFrequency,
                 )
             }
     }
@@ -5308,6 +5528,7 @@ object AndroidSessionController {
                 mediumFrequencyHz = sourceSettings.mediumFrequencyHz,
                 highFrequencyHz = sourceSettings.highFrequencyHz,
                 beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
+                amToneFrequency = sourceSettings.amToneFrequency,
             )
         cloneTemplateDaysRemaining = sourceSnapshot.status.daysRemaining
     }
@@ -5371,6 +5592,124 @@ object AndroidSessionController {
             submitTraceEntries = emptyList(),
             readbackTraceEntries = emptyList(),
         )
+    }
+
+    private fun runArduconEditableSettingSubmit(
+        context: Context,
+        requestedDeviceName: String?,
+        source: String,
+        commandName: String,
+        settingLabel: String,
+        capabilitySupported: DeviceCapabilities.() -> Boolean,
+        alreadyMatches: (DeviceSettings) -> Boolean,
+        editSettings: (EditableDeviceSettings) -> EditableDeviceSettings,
+        updateCloneTemplate: Boolean,
+        onComplete: ((Result<DeviceSubmitResult>) -> Unit)?,
+    ) {
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+        val snapshot = sessionState?.snapshot
+        val editableSettings = sessionState?.editableSettings
+        if (sessionState == null || snapshot == null || editableSettings == null) {
+            val error = IllegalStateException("Load an Arducon snapshot before submitting changes.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "$settingLabel update failed."
+                statusIsError = true
+            }
+            emitCommandLog(commandName, source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        if (!snapshot.capabilities.capabilitySupported()) {
+            val error = IllegalStateException("$settingLabel is not supported by the loaded snapshot.")
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "$settingLabel update failed."
+                statusIsError = true
+            }
+            emitCommandLog(commandName, source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        synchronized(this) {
+            latestSubmitSummary = "Submitting $settingLabel update..."
+            statusText = "Submitting $settingLabel update..."
+            statusIsError = false
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-${commandName}-submit") {
+            var resolvedTarget: AndroidConnectionTarget? = null
+            val result =
+                if (alreadyMatches(snapshot.settings)) {
+                    Result.success(noOpSubmitResult(sessionState))
+                } else {
+                    runWithResolvedTransport(
+                        context = context,
+                        requestedDeviceName = requestedDeviceName,
+                        requestedTarget = null,
+                        allowUsbAutoDetect = false,
+                        missingMessage = "Device is no longer connected.",
+                    ) { target, transport ->
+                        resolvedTarget = target
+                        DeviceSessionController.submitEdits(
+                            sessionState,
+                            editSettings(editableSettings),
+                            transport,
+                        )
+                    }
+                }
+
+            synchronized(this) {
+                if (result.isSuccess) {
+                    val submitResult = result.getOrThrow()
+                    val wasNoOp = submitResult.wasNoOp()
+                    latestSessionViewState = AndroidSessionViewState(
+                        state = submitResult.state,
+                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
+                    )
+                    resolvedTarget?.let(::rememberLoadedTargetLocked)
+                    applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
+                    if (updateCloneTemplate) {
+                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
+                    }
+                    latestSubmitSummary = renderSubmitSummary(submitResult)
+                    latestProbeSummary =
+                        if (wasNoOp) {
+                            "Latest load remains available above. $settingLabel already matched the requested value."
+                        } else {
+                            "Latest load remains available above. $settingLabel submission completed."
+                        }
+                    statusText =
+                        if (wasNoOp) {
+                            "$settingLabel already matched the requested value."
+                        } else {
+                            "$settingLabel updated and verified."
+                        }
+                    statusIsError = false
+                } else {
+                    latestSubmitSummary = buildString {
+                        appendLine("Submit failed.")
+                        append(result.exceptionOrNull()?.message ?: "Unknown error")
+                    }.trim()
+                    statusText = "$settingLabel update failed."
+                    statusIsError = true
+                }
+            }
+
+            emitCommandLog(
+                command = commandName,
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+            )
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(result) } }
+        }
     }
 
     private fun runRelativeScheduleSubmit(
@@ -5804,6 +6143,8 @@ object AndroidSessionController {
                                 reloadResult = reloadSignalSlingerAfterFirmwareUpdate(
                                     context = context,
                                     deviceName = start.deviceName,
+                                    productLabel = "SignalSlinger",
+                                    appBaudRate = signalSlingerAppBaudRate,
                                 ).onFailure { reloadFailure ->
                                     updateLog += AndroidLogEntry(
                                         "SignalSlinger update completed, but the visible device information could not be refreshed: ${reloadFailure.message ?: reloadFailure::class.simpleName}",
@@ -5833,6 +6174,8 @@ object AndroidSessionController {
                     val reloadResult = reloadSignalSlingerAfterFirmwareUpdate(
                         context = context,
                         deviceName = start.deviceName,
+                        productLabel = "SignalSlinger",
+                        appBaudRate = signalSlingerAppBaudRate,
                     ).onFailure { failure ->
                         updateLog += AndroidLogEntry(
                             "SignalSlinger update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}",
@@ -6041,6 +6384,8 @@ object AndroidSessionController {
                     val reloadResult = reloadSignalSlingerAfterFirmwareUpdate(
                         context = context,
                         deviceName = start.deviceName,
+                        productLabel = "Arducon",
+                        appBaudRate = arduconAppBaudRate,
                     ).onFailure { failure ->
                         updateLog += AndroidLogEntry(
                             "Arducon update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}",
@@ -6148,19 +6493,21 @@ object AndroidSessionController {
     private fun reloadSignalSlingerAfterFirmwareUpdate(
         context: Context,
         deviceName: String,
+        productLabel: String,
+        appBaudRate: Int,
     ): Result<Pair<DeviceLoadResult, ClockDisplayAnchor?>> {
         synchronized(this) {
-            statusText = "Reloading SignalSlinger..."
+            statusText = "Reloading $productLabel..."
             statusIsError = false
-            latestProbeSummary = "Reloading SignalSlinger after update..."
+            latestProbeSummary = "Reloading $productLabel after update..."
         }
         notifyListeners()
         return runWithResolvedTransport(
             context = context,
             requestedDeviceName = deviceName,
-            requestedTarget = AndroidConnectionTarget.Usb(deviceName),
+            requestedTarget = AndroidConnectionTarget.Usb(deviceName, appBaudRate),
             allowUsbAutoDetect = true,
-            missingMessage = "SignalSlinger is no longer connected.",
+            missingMessage = "$productLabel is no longer connected.",
         ) { _, transport ->
             val initialLoad = connectAndLoadAfterUsbStartupWarmup(
                 transport = transport,
@@ -6174,7 +6521,7 @@ object AndroidSessionController {
                 },
             )
             require(hasSignalSlingerReportLine(initialLoad.linesReceived)) {
-                "No SignalSlinger response was received."
+                "No $productLabel response was received."
             }
             val postLoadClockSample = postLoadClockSample(transport, initialLoad)
             mergeLoadResults(initialLoad, postLoadClockSample?.first) to postLoadClockSample?.second
@@ -6231,6 +6578,14 @@ object AndroidSessionController {
 
             override fun disconnect() {
                 delegate.disconnect()
+            }
+
+            override fun pulseTargetReset(): Boolean {
+                val pulsed = delegate.pulseTargetReset()
+                if (pulsed) {
+                    log("Pulsed target reset.")
+                }
+                return pulsed
             }
 
             override fun writeAscii(text: String) {
@@ -6478,6 +6833,13 @@ object AndroidSessionController {
     }
 
     private fun recordTimelyReplyWarningIfNeeded(traceEntries: List<SerialTraceEntry>) {
+        val productName =
+            synchronized(this) {
+                latestSessionViewState?.state?.snapshot?.info?.productName
+            }
+        if (!productName.equals("SignalSlinger", ignoreCase = true)) {
+            return
+        }
         val missedCommands = commandsWithoutTimelyReplies(traceEntries)
         if (missedCommands.isEmpty()) {
             return

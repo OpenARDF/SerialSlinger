@@ -21,6 +21,9 @@ Usage:
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-fox-role <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-station-id <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-id-speed <wpm>
+  ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-dtmf-password <value>
+  ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-am-tone <OFF|0-6>
+  ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-ptt-reset <OFF|ON|0|1>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-pattern-speed <wpm>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-current-frequency <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-frequency-bank <1|2|3|B> <value>
@@ -178,6 +181,30 @@ set-id-speed)
 	fi
 	ACTION="com.SerialSlinger.openardf.DEBUG_SET_ID_SPEED"
 	EXTRA_ARGS+=(--es id_speed_wpm "$ARG1")
+	;;
+set-dtmf-password)
+	if [ -z "$ARG1" ]; then
+		echo "set-dtmf-password requires a value." >&2
+		exit 1
+	fi
+	ACTION="com.SerialSlinger.openardf.DEBUG_SET_DTMF_PASSWORD"
+	EXTRA_ARGS+=(--es dtmf_password "$ARG1")
+	;;
+set-am-tone)
+	if [ -z "$ARG1" ]; then
+		echo "set-am-tone requires a value." >&2
+		exit 1
+	fi
+	ACTION="com.SerialSlinger.openardf.DEBUG_SET_AM_TONE"
+	EXTRA_ARGS+=(--es am_tone "$ARG1")
+	;;
+set-ptt-reset)
+	if [ -z "$ARG1" ]; then
+		echo "set-ptt-reset requires a value." >&2
+		exit 1
+	fi
+	ACTION="com.SerialSlinger.openardf.DEBUG_SET_PTT_RESET"
+	EXTRA_ARGS+=(--es ptt_reset "$ARG1")
 	;;
 set-pattern-speed)
 	if [ -z "$ARG1" ]; then

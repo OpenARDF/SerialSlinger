@@ -24,9 +24,10 @@ sealed interface AndroidConnectionTarget {
 
     data class Usb(
         val deviceName: String,
+        val baudRate: Int = 9_600,
     ) : AndroidConnectionTarget {
         override val label: String
-            get() = deviceName
+            get() = if (baudRate == 9_600) deviceName else "$deviceName at $baudRate baud"
     }
 
     data class DirectSerial(

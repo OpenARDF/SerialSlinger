@@ -31,7 +31,7 @@ data class AndroidUsbDeviceDescriptor(
 class AndroidUsbTransport(
     private val usbManager: UsbManager,
     private val usbDevice: UsbDevice,
-    private val baudRate: Int = 9_600,
+    val baudRate: Int = 9_600,
     private val lineTerminator: String = "\n",
     private val wakePreamble: String = "**\r",
     private val wakeSettleMs: Long = 80,
@@ -74,6 +74,8 @@ class AndroidUsbTransport(
                 UsbSerialPort.STOPBITS_1,
                 UsbSerialPort.PARITY_NONE,
             )
+            runCatching { port.setDTR(false) }
+            runCatching { port.setRTS(false) }
             configureFtdiLatencyTimer(port)
             serialPort = port
             connection = usbConnection
@@ -104,7 +106,7 @@ class AndroidUsbTransport(
             Thread.sleep(wakeSettleMs)
         }
 
-        commands.map(::ensureLineTerminated).forEach { payload ->
+        commands.map { command -> ensureLineTerminated(command, lineTerminator) }.forEach { payload ->
             writePayload(port, payload)
         }
         lastWriteAtMs = System.currentTimeMillis()

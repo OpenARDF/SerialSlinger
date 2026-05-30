@@ -50,6 +50,8 @@ class AndroidFirmwareUpdateTransport(
                 UsbSerialPort.PARITY_NONE,
             )
             configureFtdiLatencyTimer(port)
+            runCatching { port.setDTR(false) }
+            runCatching { port.setRTS(false) }
             connection = usbConnection
             serialPort = port
             connectedBaudRate = baudRate
@@ -88,6 +90,20 @@ class AndroidFirmwareUpdateTransport(
         } catch (_: Throwable) {
             false
         }
+    }
+
+    override fun pulseTargetReset(): Boolean {
+        val port = serialPort ?: return false
+        return runCatching {
+            port.setDTR(true)
+            runCatching { port.setRTS(true) }
+            Thread.sleep(ResetPulseMs)
+            port.setDTR(false)
+            runCatching { port.setRTS(false) }
+            Thread.sleep(ResetSettleMs)
+            lineBuffer.clear()
+            lastWriteAtMs = null
+        }.isSuccess
     }
 
     override fun writeAscii(text: String) {
@@ -214,5 +230,7 @@ class AndroidFirmwareUpdateTransport(
     private companion object {
         private const val SmallCommandRetryMaxBytes = 8
         private const val UsbReconnectSettleMs = 250L
+        private const val ResetPulseMs = 120L
+        private const val ResetSettleMs = 500L
     }
 }

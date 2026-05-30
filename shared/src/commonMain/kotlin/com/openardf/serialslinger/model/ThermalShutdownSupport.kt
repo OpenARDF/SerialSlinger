@@ -5,7 +5,7 @@ import kotlin.math.roundToInt
 object ThermalShutdownSupport {
     const val passcode: String = "7373"
     const val minimumCelsius: Int = 30
-    const val maximumCelsius: Int = 55
+    const val maximumCelsius: Int = 60
 
     fun validateCelsius(value: Int, productName: String? = null): Int {
         require(value in minimumCelsius..maximumCelsius) {

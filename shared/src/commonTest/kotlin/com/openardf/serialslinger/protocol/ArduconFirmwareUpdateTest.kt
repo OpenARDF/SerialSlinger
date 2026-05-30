@@ -69,6 +69,7 @@ class ArduconFirmwareUpdateTest {
 
         assertEquals(listOf(57_600, 57_600), transport.connectedBauds)
         assertEquals(listOf(115_200), transport.reconfiguredBauds)
+        assertEquals(1, transport.resetPulseCount)
         assertEquals(listOf("INF\r", "UPD\r", "INF\r"), transport.asciiWrites)
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x30 })
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x50 })
@@ -180,6 +181,8 @@ class ArduconFirmwareUpdateTest {
         val reconfiguredBauds = mutableListOf<Int>()
         val asciiWrites = mutableListOf<String>()
         val binaryWrites = mutableListOf<ByteArray>()
+        var resetPulseCount = 0
+            private set
         private var connectedBaud: Int? = null
         private val programmedPages = mutableMapOf<Int, ByteArray>()
         private var loadedAddress = 0
@@ -201,6 +204,11 @@ class ArduconFirmwareUpdateTest {
         override fun reconfigureBaudRate(baudRate: Int): Boolean {
             connectedBaud = baudRate
             reconfiguredBauds += baudRate
+            return true
+        }
+
+        override fun pulseTargetReset(): Boolean {
+            resetPulseCount++
             return true
         }
 

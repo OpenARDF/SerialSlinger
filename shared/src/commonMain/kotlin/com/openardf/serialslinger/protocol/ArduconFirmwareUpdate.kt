@@ -291,6 +291,9 @@ object ArduconFirmwareUpdate {
 
         progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", pages.size, pages.size))
         stkCommand(transport, byteArrayOf(0x51), 0, "leave programming mode")
+        if (transport.pulseTargetReset()) {
+            progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", pages.size, pages.size, "Pulsed Arducon reset after update."))
+        }
         confirmUpdatedApp(transport, release, progress)
     }
 

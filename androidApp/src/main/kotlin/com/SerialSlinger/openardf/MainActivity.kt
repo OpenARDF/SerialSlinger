@@ -91,6 +91,9 @@ import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
 import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
+import com.openardf.serialslinger.model.isValidDtmfPassword
+import com.openardf.serialslinger.protocol.ArduconReleaseCache
+import com.openardf.serialslinger.protocol.ArduconReleaseSelectionSource
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseCache
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
@@ -222,10 +225,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var previewUnlockStep: Int = 0
     private var previewUnlockStartedAtMillis: Long = 0L
     private var lastAutomaticDeviceTimeSyncAtMillis: Long = 0L
+    private var lastConnectedProductName: String? = null
     private val loggedWindows = WeakHashMap<Window, Boolean>()
 
     private val refreshListener: () -> Unit = {
         runOnUiThread {
+            rememberLoadedProductPreference(AndroidSessionController.snapshotUiState())
             renderContent()
             dismissStaleStartupDeviceStatusDialog()
             showPendingEventPauseNotice()
@@ -273,15 +278,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 }
                                 AndroidSessionController.clearLoadedSessionIfMatches(
                                     deviceName = deviceName,
-                                    reasonText = "SignalSlinger permission denied.",
+                                    reasonText = "USB permission denied.",
                                 )
                             }
                         }
                         AndroidSessionController.recordStatus(
                             text = if (granted) {
-                                "Loading SignalSlinger..."
+                                "Loading device..."
                             } else {
-                                "SignalSlinger disconnected."
+                                "Device disconnected."
                             },
                             isError = !granted,
                         )
@@ -305,7 +310,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             AndroidSessionController.recordStatus("USB reconnected. Continuing SignalSlinger update...", isError = false)
                             return
                         }
-                        AndroidSessionController.recordStatus("Loading SignalSlinger...", isError = false)
+                        AndroidSessionController.recordStatus("Loading device...", isError = false)
                         scheduleAutoDetect(delayMs = AUTO_DETECT_ATTACH_DELAY_MS)
                     }
                     UsbManager.ACTION_USB_DEVICE_DETACHED -> {
@@ -337,11 +342,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             autoPermissionDeniedDeviceNames -= deviceName
                             AndroidSessionController.clearLoadedSessionIfMatches(
                                 deviceName = deviceName,
-                                reasonText = "SignalSlinger disconnected.",
+                                reasonText = "Device disconnected.",
                             )
                         }
                         if (device == null) {
-                            AndroidSessionController.recordStatus("SignalSlinger disconnected.", isError = false)
+                            AndroidSessionController.recordStatus("Device disconnected.", isError = false)
                         }
                         scheduleAutoDetect(delayMs = AUTO_DETECT_ATTACH_DELAY_MS)
                     }
@@ -361,6 +366,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         deviceDataVisible = uiPreferences.getBoolean(PREF_DEVICE_DATA_VISIBLE, true)
         automaticFirmwareUpdatesEnabled = uiPreferences.getBoolean(PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED, true)
         advancedModeEnabled = uiPreferences.getBoolean(PREF_ADVANCED_MODE_ENABLED, false)
+        lastConnectedProductName = normalizeProductPreference(uiPreferences.getString(PREF_LAST_CONNECTED_PRODUCT, null))
         frequencyDisplayUnit =
             AndroidFrequencyDisplayUnit.valueOf(
                 uiPreferences.getString(PREF_FREQUENCY_DISPLAY_UNIT, AndroidFrequencyDisplayUnit.MHZ.name)
@@ -520,7 +526,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val loadedDeviceName = uiState.latestLoadedDeviceName
 
         if (loadedDeviceName != null && usbDevices.none { it.deviceName == loadedDeviceName }) {
-            AndroidSessionController.clearLoadedSession("SignalSlinger disconnected.")
+            AndroidSessionController.clearLoadedSession("Device disconnected.")
         }
 
         if (permittedSupportedDevices.isNotEmpty()) {
@@ -552,13 +558,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
                 AndroidSessionController.runProbe(
                     context = applicationContext,
-                    requestedDeviceName = targetDevice.deviceName,
+                    requestedTarget = preferredProbeTarget(targetDevice),
                     source = "auto",
                     failureStatusText =
                         if (attempt < AUTO_DETECT_MAX_RETRIES) {
-                            "Still connecting to SignalSlinger..."
+                            "Still connecting to device..."
                         } else {
-                            "Could not connect to SignalSlinger. Check that it is powered and firmly connected."
+                            "Could not connect to device. Check that it is powered and firmly connected."
                         },
                     failureStatusIsError = attempt >= AUTO_DETECT_MAX_RETRIES,
                 ) { result ->
@@ -574,7 +580,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         autoDetectSearchingForHeader = false
                         if (AndroidSessionController.snapshotUiState().sessionViewState == null) {
                             AndroidSessionController.recordStatus(
-                                "Could not connect to SignalSlinger. Check that it is powered and firmly connected.",
+                                "Could not connect to device. Check that it is powered and firmly connected.",
                                 isError = true,
                             )
                         }
@@ -589,7 +595,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         ),
                     )
                     if (result.isSuccess) {
-                        maybeOfferAutomaticSignalSlingerFirmwareUpdate()
+                        rememberLoadedProductPreference(AndroidSessionController.snapshotUiState())
+                        maybeOfferAutomaticFirmwareUpdate()
                     }
                     if (result.isFailure && attempt < AUTO_DETECT_MAX_RETRIES) {
                         scheduleAutoDetect(
@@ -630,7 +637,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     action = ACTION_USB_PERMISSION,
                 )
                 AndroidSessionController.recordStatus(
-                    "Loading SignalSlinger...",
+                    "Loading device...",
                     isError = false,
                 )
                 return
@@ -639,7 +646,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
         if (usbDevices.isEmpty() && attempt < AUTO_DETECT_MAX_RETRIES) {
             if (uiState.sessionViewState != null && uiState.latestLoadedDeviceName != null) {
-                AndroidSessionController.clearLoadedSession("No SignalSlinger is attached.")
+                AndroidSessionController.clearLoadedSession("No supported device is attached.")
             }
             scheduleAutoDetect(
                 delayMs = AUTO_DETECT_RETRY_DELAY_MS,
@@ -649,7 +656,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         } else if (autoDetectSearchingForHeader) {
             autoDetectSearchingForHeader = false
             if (AndroidSessionController.snapshotUiState().sessionViewState == null) {
-                AndroidSessionController.recordStatus("No SignalSlinger found.", isError = true)
+                AndroidSessionController.recordStatus("No supported device found.", isError = true)
             } else {
                 renderContent()
             }
@@ -663,7 +670,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
         clearCloneSessionTemplateLock()
         autoDetectSearchingForHeader = true
-        AndroidSessionController.recordStatus("Searching for SignalSlinger...", isError = true)
+        AndroidSessionController.recordStatus("Searching for device...", isError = true)
         scheduleAutoDetect(
             delayMs = 0L,
             forceReload = true,
@@ -678,6 +685,42 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         return candidates.firstOrNull { it.deviceName == newlyDiscoveredDeviceName }
             ?: candidates.firstOrNull { it.deviceName == latestLoadedDeviceName }
             ?: candidates.firstOrNull()
+    }
+
+    private fun preferredProbeTarget(device: AndroidUsbDeviceDescriptor): AndroidConnectionTarget.Usb {
+        val initialBaudRate = initialProbeBaudRateForLastProduct()
+        return AndroidConnectionTarget.Usb(device.deviceName, baudRate = initialBaudRate)
+    }
+
+    private fun initialProbeBaudRateForLastProduct(): Int {
+        return when (lastConnectedProductName) {
+            PRODUCT_ARDUCON -> 57_600
+            PRODUCT_SIGNALSLINGER -> 9_600
+            else -> 9_600
+        }
+    }
+
+    private fun rememberLoadedProductPreference(uiState: AndroidUiState) {
+        val productName =
+            normalizeProductPreference(uiState.sessionViewState?.state?.snapshot?.info?.productName)
+                ?: return
+        if (productName == lastConnectedProductName) {
+            return
+        }
+        lastConnectedProductName = productName
+        uiPreferences.edit().putString(PREF_LAST_CONNECTED_PRODUCT, productName).apply()
+        AndroidSessionController.logAppEvent(
+            title = "device-preference",
+            lines = listOf("Saved last connected product: $productName."),
+        )
+    }
+
+    private fun normalizeProductPreference(productName: String?): String? {
+        return when {
+            productName.equals("Arducon", ignoreCase = true) -> PRODUCT_ARDUCON
+            productName.equals("SignalSlinger", ignoreCase = true) -> PRODUCT_SIGNALSLINGER
+            else -> null
+        }
     }
 
     private fun preferredPermissionCandidate(
@@ -749,6 +792,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val foxRoleEditingSupported = snapshot?.capabilities?.supportsFoxRoleEditing != false
         val idCodeSpeedEditingSupported = snapshot?.capabilities?.supportsIdCodeSpeedEditing != false
         val isArducon = loadedInfo?.productName.equals("Arducon", ignoreCase = true)
+        val connectedProductLabel = loadedInfo?.productName?.takeIf { it.isNotBlank() } ?: "Device"
         displayedTimedEventSettings = if (timedEventUnavailable) null else timedEventSettings
         displayedTimedEventDaysRemaining = timedEventDaysRemaining
         displayedTimedEventUsesCloneTemplate = cloneTemplateSettings != null
@@ -910,11 +954,26 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val normalLabelColor = Color.parseColor("#1F1F1F")
         val daysRemainingSummary = displayedDaysToRunRemainingSummaryForUi()
 
-        deviceSettingsCard.addView(sectionTitle("Device Settings"))
+        deviceSettingsCard.addView(sectionTitle("$connectedProductLabel Settings"))
         deviceSettingsCard.addView(compactLabeledRow("Fox Role", foxRoleChooserButton))
+        if (isArducon) {
+            deviceSettingsCard.addView(
+                compactLabeledRow(
+                    "Event Type",
+                    readOnlyField(formatEventTypeLabel(loadedSettings.eventType)),
+                ),
+            )
+        }
 
         val patternTextEditable = EventProfileSupport.patternTextIsEditable(loadedSettings.eventType)
-        if (patternTextEditable) {
+        if (isArducon) {
+            deviceSettingsCard.addView(
+                compactLabeledRow(
+                    "Pattern Text",
+                    readOnlyField(loadedArduconFoxRole?.morsePatternSent ?: loadedSettings.patternText.orUnknown()),
+                ),
+            )
+        } else if (patternTextEditable) {
             val patternTextEditor =
                 EditText(this).apply {
                     hint = "Pattern Text"
@@ -963,6 +1022,43 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     runPatternSpeedSubmitOrPreview(selectedValue, guardCloneTemplate = false)
                 }
             }
+        }
+        if (isArducon) {
+            if (disconnectedLocked || snapshot?.capabilities?.supportsDtmfPasswordEditing != true) {
+                deviceSettingsCard.addView(compactLabeledRow("DTMF Password", readOnlyField("")))
+            } else {
+                val dtmfPasswordEditor =
+                    EditText(this).apply {
+                        hint = "DTMF Password"
+                        inputType = InputType.TYPE_CLASS_NUMBER
+                        setSingleLine()
+                        setText(loadedSettings.dtmfPassword.orEmpty())
+                        layoutParams =
+                            LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                                val bottomMargin = (12 * resources.displayMetrics.density).toInt()
+                                this.bottomMargin = bottomMargin
+                            }
+                    }
+                configureCommitTextEditor(dtmfPasswordEditor) {
+                    runDtmfPasswordSubmitOrPreview(dtmfPasswordEditor.text.toString())
+                }
+                deviceSettingsCard.addView(compactLabeledRow("DTMF Password", dtmfPasswordEditor))
+            }
+            val pttResetField =
+                if (disconnectedLocked || snapshot?.capabilities?.supportsPttResetEditing != true) {
+                    readOnlyField("")
+                } else {
+                    val selectedPttReset = formatPttResetSetting(loadedSettings.pttResetSetting)
+                    enumSpinner(
+                        options = pttResetOptions(),
+                        selectedValue = selectedPttReset,
+                    ).also { pttResetSpinner ->
+                        wireImmediateSelectionSpinner(pttResetSpinner, selectedPttReset) { selectedValue ->
+                            runPttResetSubmitOrPreview(parsePttResetSetting(selectedValue))
+                        }
+                    }
+                }
+            deviceSettingsCard.addView(compactLabeledRow("PTT Reset", pttResetField))
         }
 
         lateinit var currentTimeField: EditText
@@ -1039,85 +1135,89 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 ),
             )
         }
-        val currentFrequencyField = readOnlyField(if (disconnectedLocked) "" else formatFrequencyForUnit(frequencyPresentation.currentFrequencyHz))
-        var currentFrequencyLabelView: TextView? = null
-        val currentFrequencyRow =
-            compactLabeledRow(
-                "Frequency",
-                currentFrequencyField,
-                captureLabelView = { currentFrequencyLabelView = it },
-            )
-        deviceSettingsCard.addView(currentFrequencyRow)
-        installFrequencyDisplayUnitToggle(currentFrequencyField, currentFrequencyLabelView, currentFrequencyRow)
-        deviceSettingsCard.addView(
-            compactLabeledRow(
-                "Memory Bank",
-                readOnlyField(if (disconnectedLocked) "" else frequencyPresentation.currentBankId?.label ?: "<not inferred>"),
-            ),
-        )
-        val externalBatteryControlField =
-            if (disconnectedLocked) {
-                readOnlyField("")
-            } else if (snapshot?.capabilities?.supportsExternalBatteryControl == true) {
-                enumSpinner(
-                    options = ExternalBatteryControlMode.entries.toList(),
-                    selectedValue = loadedSettings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF,
-                ).also { batteryModeSpinner ->
-                    wireImmediateSelectionSpinner(
-                        spinner = batteryModeSpinner,
-                        selectedValue = loadedSettings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF,
-                    ) { selectedMode ->
-                        runExternalBatteryControlSubmitOrPreview(selectedMode)
-                    }
-                }
-            } else {
-                readOnlyField(loadedSettings.externalBatteryControlMode?.uiLabel.orUnknown())
-            }
-        deviceSettingsCard.addView(
-            if (deviceDataVisible) {
-                stackedLabeledRow(
-                    "Ext. Bat. Ctrl",
-                    externalBatteryControlField,
-                )
-            } else {
+        if (!isArducon) {
+            val currentFrequencyField = readOnlyField(if (disconnectedLocked) "" else formatFrequencyForUnit(frequencyPresentation.currentFrequencyHz))
+            var currentFrequencyLabelView: TextView? = null
+            val currentFrequencyRow =
                 compactLabeledRow(
-                    "Ext. Bat. Ctrl",
-                    externalBatteryControlField,
+                    "Frequency",
+                    currentFrequencyField,
+                    captureLabelView = { currentFrequencyLabelView = it },
                 )
-            },
-        )
-        if (loadedSettings.externalBatteryControlMode == ExternalBatteryControlMode.CHARGE_ONLY) {
-            deviceSettingsCard.addView(compactAlertRow("Transmitter Disabled"))
-        }
-        deviceSettingsCard.addView(
-            compactLabeledRow(
-                "Low Bat. Thresh.",
+            deviceSettingsCard.addView(currentFrequencyRow)
+            installFrequencyDisplayUnitToggle(currentFrequencyField, currentFrequencyLabelView, currentFrequencyRow)
+            deviceSettingsCard.addView(
+                compactLabeledRow(
+                    "Memory Bank",
+                    readOnlyField(if (disconnectedLocked) "" else frequencyPresentation.currentBankId?.label ?: "<not inferred>"),
+                ),
+            )
+            val externalBatteryControlField =
                 if (disconnectedLocked) {
                     readOnlyField("")
                 } else if (snapshot?.capabilities?.supportsExternalBatteryControl == true) {
                     enumSpinner(
-                        options = batteryThresholdOptions(),
-                        selectedValue = loadedSettings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) } ?: batteryThresholdOptions().first(),
-                    ).also { batteryThresholdSpinner ->
+                        options = ExternalBatteryControlMode.entries.toList(),
+                        selectedValue = loadedSettings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF,
+                    ).also { batteryModeSpinner ->
                         wireImmediateSelectionSpinner(
-                            spinner = batteryThresholdSpinner,
-                            selectedValue = loadedSettings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) } ?: batteryThresholdOptions().first(),
-                        ) { selectedThreshold ->
-                            runLowBatteryThresholdSubmitOrPreview(selectedThreshold)
+                            spinner = batteryModeSpinner,
+                            selectedValue = loadedSettings.externalBatteryControlMode ?: ExternalBatteryControlMode.OFF,
+                        ) { selectedMode ->
+                            runExternalBatteryControlSubmitOrPreview(selectedMode)
                         }
                     }
                 } else {
-                    readOnlyField(loadedSettings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) }.orUnknown())
+                    readOnlyField(loadedSettings.externalBatteryControlMode?.uiLabel.orUnknown())
+                }
+            deviceSettingsCard.addView(
+                if (deviceDataVisible) {
+                    stackedLabeledRow(
+                        "Ext. Bat. Ctrl",
+                        externalBatteryControlField,
+                    )
+                } else {
+                    compactLabeledRow(
+                        "Ext. Bat. Ctrl",
+                        externalBatteryControlField,
+                    )
                 },
-                labelWidthDp = 132,
-            ),
-        )
+            )
+            if (loadedSettings.externalBatteryControlMode == ExternalBatteryControlMode.CHARGE_ONLY) {
+                deviceSettingsCard.addView(compactAlertRow("Transmitter Disabled"))
+            }
+            deviceSettingsCard.addView(
+                compactLabeledRow(
+                    "Low Bat. Thresh.",
+                    if (disconnectedLocked) {
+                        readOnlyField("")
+                    } else if (snapshot?.capabilities?.supportsExternalBatteryControl == true) {
+                        enumSpinner(
+                            options = batteryThresholdOptions(),
+                            selectedValue = loadedSettings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) } ?: batteryThresholdOptions().first(),
+                        ).also { batteryThresholdSpinner ->
+                            wireImmediateSelectionSpinner(
+                                spinner = batteryThresholdSpinner,
+                                selectedValue = loadedSettings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) } ?: batteryThresholdOptions().first(),
+                            ) { selectedThreshold ->
+                                runLowBatteryThresholdSubmitOrPreview(selectedThreshold)
+                            }
+                        }
+                    } else {
+                        readOnlyField(loadedSettings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) }.orUnknown())
+                    },
+                    labelWidthDp = 132,
+                ),
+            )
+        }
 
         timedEventCard.addView(sectionTitle("Timed Event Settings", textColor = CLONE_THEME_BLUE))
         uiState.timeWorkflowNotice?.let { notice ->
             timedEventCard.addView(calloutView(notice))
         }
-        timedEventCard.addView(compactLabeledRow("Event Type", eventTypeChooserButton))
+        if (!isArducon) {
+            timedEventCard.addView(compactLabeledRow("Event Type", eventTypeChooserButton))
+        }
         val stationIdEditor =
             EditText(this).apply {
                 hint = "Station ID"
@@ -1148,6 +1248,24 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             wireImmediateIntSpinner(idSpeedSpinner, selectedValue = timedEventSettings.idCodeSpeedWpm) { selectedValue ->
                 runIdSpeedSubmitOrPreview(selectedValue)
             }
+        }
+        if (isArducon) {
+            val amToneField =
+                if (timedEventUnavailable || snapshot?.capabilities?.supportsAmToneEditing != true) {
+                    readOnlyField("")
+                } else {
+                    val selectedAmTone = formatAmToneSetting(timedEventSettings.amToneFrequency)
+                    enumSpinner(
+                        options = amToneOptions(),
+                        selectedValue = selectedAmTone,
+                    ).also { amToneSpinner ->
+                        installTimedEventSettingsPickerOpenGuard(amToneSpinner)
+                        wireImmediateSelectionSpinner(amToneSpinner, selectedAmTone) { selectedValue ->
+                            runAmToneSubmitOrPreview(parseAmToneSetting(selectedValue))
+                        }
+                    }
+                }
+            timedEventCard.addView(compactLabeledRow("AM Tone", amToneField))
         }
         if (!isArducon && timedPatternSpeedInTimedEvent) {
             if (timedEventUnavailable) {
@@ -1635,13 +1753,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 daysRemainingSummaryView = daysRemainingView
                 addView(daysRemainingView)
             }
-        timedEventCard.addView(
-            compactLabeledRow(
-                "Days To Run",
-                daysRowField,
-                captureLabelView = { daysToRunLabelView = it },
-            ),
-        )
+        if (!isArducon) {
+            timedEventCard.addView(
+                compactLabeledRow(
+                    "Days To Run",
+                    daysRowField,
+                    captureLabelView = { daysToRunLabelView = it },
+                ),
+            )
+        }
         daysToRunLabelView?.alpha = if (schedulingFieldsEditable) 1f else 0.55f
         wireImmediateIntSpinner(daysToRunSpinner, selectedValue = timedEventSettings.daysToRun) { selectedValue ->
             val currentDuration = JvmTimeSupport.validEventDuration(
@@ -1684,64 +1804,66 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         }
 
-        if (timedEventUnavailable) {
-            timedEventCard.addView(compactLabeledRow("Frequency 1", readOnlyField("")))
-        } else {
-            addFrequencyControl(
-                card = timedEventCard,
-                label = "Frequency 1",
-                selectedFrequencyHz = timedEventSettings.lowFrequencyHz,
-                guardCloneTemplate = true,
-            ) { selectedFrequencyHz ->
-                runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.ONE, frequencyHz = selectedFrequencyHz)
-            }
-        }
-        if (frequencyVisibility.showFrequency2) {
+        if (!isArducon) {
             if (timedEventUnavailable) {
-                timedEventCard.addView(compactLabeledRow("Frequency 2", readOnlyField("")))
+                timedEventCard.addView(compactLabeledRow("Frequency 1", readOnlyField("")))
             } else {
                 addFrequencyControl(
                     card = timedEventCard,
-                    label = "Frequency 2",
-                    selectedFrequencyHz = timedEventSettings.mediumFrequencyHz,
+                    label = "Frequency 1",
+                    selectedFrequencyHz = timedEventSettings.lowFrequencyHz,
                     guardCloneTemplate = true,
                 ) { selectedFrequencyHz ->
-                    runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.TWO, frequencyHz = selectedFrequencyHz)
+                    runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.ONE, frequencyHz = selectedFrequencyHz)
                 }
             }
-        }
-        if (frequencyVisibility.showFrequency3) {
-            if (timedEventUnavailable) {
-                timedEventCard.addView(compactLabeledRow("Frequency 3", readOnlyField("")))
-            } else {
-                addFrequencyControl(
-                    card = timedEventCard,
-                    label = "Frequency 3",
-                    selectedFrequencyHz = timedEventSettings.highFrequencyHz,
-                    guardCloneTemplate = true,
-                ) { selectedFrequencyHz ->
-                    runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.THREE, frequencyHz = selectedFrequencyHz)
+            if (frequencyVisibility.showFrequency2) {
+                if (timedEventUnavailable) {
+                    timedEventCard.addView(compactLabeledRow("Frequency 2", readOnlyField("")))
+                } else {
+                    addFrequencyControl(
+                        card = timedEventCard,
+                        label = "Frequency 2",
+                        selectedFrequencyHz = timedEventSettings.mediumFrequencyHz,
+                        guardCloneTemplate = true,
+                    ) { selectedFrequencyHz ->
+                        runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.TWO, frequencyHz = selectedFrequencyHz)
+                    }
                 }
             }
-        }
-        if (frequencyVisibility.showFrequencyB) {
-            if (timedEventUnavailable) {
-                timedEventCard.addView(compactLabeledRow("Frequency B", readOnlyField("")))
-            } else {
-                addFrequencyControl(
-                    card = timedEventCard,
-                    label = "Frequency B",
-                    selectedFrequencyHz = timedEventSettings.beaconFrequencyHz,
-                    guardCloneTemplate = true,
-                ) { selectedFrequencyHz ->
-                    runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.BEACON, frequencyHz = selectedFrequencyHz)
+            if (frequencyVisibility.showFrequency3) {
+                if (timedEventUnavailable) {
+                    timedEventCard.addView(compactLabeledRow("Frequency 3", readOnlyField("")))
+                } else {
+                    addFrequencyControl(
+                        card = timedEventCard,
+                        label = "Frequency 3",
+                        selectedFrequencyHz = timedEventSettings.highFrequencyHz,
+                        guardCloneTemplate = true,
+                    ) { selectedFrequencyHz ->
+                        runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.THREE, frequencyHz = selectedFrequencyHz)
+                    }
+                }
+            }
+            if (frequencyVisibility.showFrequencyB) {
+                if (timedEventUnavailable) {
+                    timedEventCard.addView(compactLabeledRow("Frequency B", readOnlyField("")))
+                } else {
+                    addFrequencyControl(
+                        card = timedEventCard,
+                        label = "Frequency B",
+                        selectedFrequencyHz = timedEventSettings.beaconFrequencyHz,
+                        guardCloneTemplate = true,
+                    ) { selectedFrequencyHz ->
+                        runFrequencyBankSubmitOrPreview(bankId = FrequencyBankId.BEACON, frequencyHz = selectedFrequencyHz)
+                    }
                 }
             }
         }
 
         val temperatureReadbackSupported = snapshot?.capabilities?.supportsTemperatureReadback == true
         val extendedTemperatureReadbackSupported = snapshot?.capabilities?.supportsExtendedTemperatureReadback == true
-        deviceDataCard.addView(sectionTitle("Device Data"))
+        deviceDataCard.addView(sectionTitle("$connectedProductLabel Data"))
         if (!isArducon) {
             deviceDataCard.addView(
                 compactLabeledRow(
@@ -2199,13 +2321,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             when {
                 uiState.signalSlingerReadInFlight && !startupReadDialogShown -> {
                     startupReadDialogShown = true
-                    "Reading SignalSlinger Data" to
-                        "SerialSlinger is reading data from the attached SignalSlinger. This may take a few seconds."
+                    "Reading Device Data" to
+                        "SerialSlinger is reading data from the attached device. This may take a few seconds."
                 }
                 autoDetectSearchingForHeader && uiState.sessionViewState == null && !startupSearchDialogShown -> {
                     startupSearchDialogShown = true
-                    "Looking for SignalSlinger" to
-                        "SerialSlinger is looking for an attached SignalSlinger. Connect SignalSlinger to the USB port if it is not already connected."
+                    "Looking for Device" to
+                        "SerialSlinger is looking for an attached device. Connect a supported device to the USB port if it is not already connected."
                 }
                 else -> return
             }
@@ -2532,6 +2654,54 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.runExternalBatteryControlSubmit(
             context = applicationContext,
             mode = selectedMode,
+        )
+    }
+
+    private fun runDtmfPasswordSubmitOrPreview(password: String) {
+        val normalizedPassword = password.trim()
+        if (!isValidDtmfPassword(normalizedPassword)) {
+            AndroidSessionController.recordStatus(
+                "DTMF Password must be 4 to 8 numeric characters.",
+                isError = true,
+            )
+            return
+        }
+        if (isPreviewModeActive()) {
+            updatePreviewSettings { settings -> settings.copy(dtmfPassword = normalizedPassword) }
+            return
+        }
+        AndroidSessionController.runDtmfPasswordSubmit(
+            context = applicationContext,
+            password = normalizedPassword,
+        )
+    }
+
+    private fun runPttResetSubmitOrPreview(pttResetSetting: Int) {
+        if (isPreviewModeActive()) {
+            updatePreviewSettings { settings -> settings.copy(pttResetSetting = pttResetSetting) }
+            return
+        }
+        AndroidSessionController.runPttResetSubmit(
+            context = applicationContext,
+            pttResetSetting = pttResetSetting,
+        )
+    }
+
+    private fun runAmToneSubmitOrPreview(amToneFrequency: Int) {
+        runTimedEventSettingsChangeWithCloneTemplateGuard {
+            runAmToneSubmitOrPreviewAllowed(amToneFrequency)
+        }
+    }
+
+    private fun runAmToneSubmitOrPreviewAllowed(amToneFrequency: Int) {
+        if (isPreviewModeActive()) {
+            updatePreviewSettings { settings -> settings.copy(amToneFrequency = amToneFrequency) }
+            return
+        }
+        AndroidSessionController.runAmToneSubmit(
+            context = applicationContext,
+            amToneFrequency = amToneFrequency,
+            updateCloneTemplate = true,
         )
     }
 
@@ -2881,7 +3051,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 device?.deviceName?.let { "deviceName=$it" } ?: "deviceName=<unknown>",
             ),
         )
-        AndroidSessionController.recordStatus("Loading SignalSlinger...", isError = false)
+        AndroidSessionController.recordStatus("Loading device...", isError = false)
         scheduleAutoDetect(delayMs = AUTO_DETECT_ATTACH_DELAY_MS)
         return true
     }
@@ -2899,11 +3069,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val headline =
             when {
                 uiState.sessionViewState != null && connectedDevice != null ->
-                    "SignalSlinger connected on ${connectedDevice.productName ?: connectedDevice.deviceName}."
+                    "${uiState.sessionViewState.state.snapshot?.info?.productName?.ifBlank { null } ?: "Device"} connected on ${connectedDevice.productName ?: connectedDevice.deviceName}."
                 uiState.sessionViewState != null && directTarget != null ->
-                    "SignalSlinger connected on ${directTarget.label}."
+                    "${uiState.sessionViewState.state.snapshot?.info?.productName?.ifBlank { null } ?: "Device"} connected on ${directTarget.label}."
                 autoProbeInFlightDeviceName != null ->
-                    "SignalSlinger detected. Auto-loading snapshot now."
+                    "USB serial device detected. Auto-loading snapshot now."
                 pendingAutoPermissionDeviceName != null ->
                     "USB serial device detected. Waiting for Android USB permission."
                 deniedSupportedDevices.isNotEmpty() ->
@@ -2913,9 +3083,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 supportedDevices.isNotEmpty() ->
                     "Supported USB serial hardware is attached, but permission is not available yet."
                 usbDevices.isNotEmpty() ->
-                    "A USB device is attached, but it does not currently look like a supported SignalSlinger serial device."
+                    "A USB device is attached, but it does not currently look like a supported SerialSlinger serial device."
                 else ->
-                    "No SignalSlinger is attached. SerialSlinger is waiting for a USB device."
+                    "No supported device is attached. SerialSlinger is waiting for a USB device."
             }
 
         val detailLines =
@@ -2979,9 +3149,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 addView(
                     sectionBody(
                         if (latestLoadedDeviceName == device.deviceName) {
-                            "This SignalSlinger is connected. Snapshot refresh happens automatically."
+                            "This device is connected. Snapshot refresh happens automatically."
                         } else {
-                            "This SignalSlinger is ready. SerialSlinger will probe it automatically."
+                            "This device is ready. SerialSlinger will probe it automatically."
                         },
                     ),
                 )
@@ -3109,9 +3279,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val connectionText =
             thermalHeaderWarningText ?: when {
                 readingData -> "Reading data..."
-                connectingToDetectedDevice -> "Connecting to SignalSlinger..."
-                autoDetectSearchingForHeader -> "Searching for SignalSlinger..."
-                else -> "Reload SignalSlinger Data"
+                connectingToDetectedDevice -> "Connecting to device..."
+                autoDetectSearchingForHeader -> "Searching for device..."
+                else -> "Reload Device Data"
             }
         val connectionColor =
             when {
@@ -3130,13 +3300,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val headerMessage =
             thermalHeaderWarningDetail ?: when {
                 uiState.sessionViewState == null && previewModeEnabled ->
-                    "Preview Mode. Connect SignalSlinger to the USB port for live operation."
+                    "Preview Mode. Connect a supported device to the USB port for live operation."
                 uiState.sessionViewState == null && !autoDetectSearchingForHeader && !readingData ->
-                    "Connect SignalSlinger to the USB port"
+                    "Connect a supported device to the USB port"
                 else ->
                     uiState.statusText
                         .takeIf { it.isNotBlank() && it != connectionText }
-                        ?.takeUnless { it in setOf("SignalSlinger loaded.", "Loading SignalSlinger...") }
+                        ?.takeUnless { it in setOf("SignalSlinger loaded.", "Loading SignalSlinger...", "Loading device...") }
             }
         val headerIsError = thermalWarningActive || uiState.statusIsError
         maybeShowStatusPopup(headerMessage, headerIsError)
@@ -3337,13 +3507,13 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 }
             firmwareUpdateDialog =
                 AlertDialog.Builder(this)
-                    .setTitle("Updating SignalSlinger")
+                    .setTitle(firmwareUpdateDialogTitle(progress.stage))
                     .setView(container)
                     .create()
                     .apply {
                         setCanceledOnTouchOutside(false)
                         setCancelable(false)
-                        showLogged("Updating SignalSlinger")
+                        showLogged(firmwareUpdateDialogTitle(progress.stage))
                     }
         }
 
@@ -3366,7 +3536,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             "Sending update" -> "Sending update"
             "Verifying update" -> "Verifying update"
             "Restarting SignalSlinger" -> "Restarting SignalSlinger"
+            "Restarting Arducon" -> "Restarting Arducon"
             else -> "Updating SignalSlinger"
+        }
+
+    private fun firmwareUpdateDialogTitle(stage: String): String =
+        if (stage.contains("Arducon", ignoreCase = true)) {
+            "Updating Arducon"
+        } else {
+            "Updating SignalSlinger"
         }
 
     private fun firmwareUpdateStageBaseline(stage: String): Int =
@@ -3376,6 +3554,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             "Sending update" -> 250
             "Verifying update" -> 700
             "Restarting SignalSlinger" -> 950
+            "Restarting Arducon" -> 950
             else -> 50
         }
 
@@ -4469,6 +4648,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             val advancedModeItem: Boolean = false,
             val action: () -> Unit,
         )
+        val loadedProductName = uiState.sessionViewState?.state?.snapshot?.info?.productName.orEmpty()
+        val isLoadedArducon = loadedProductName.equals("Arducon", ignoreCase = true)
+        val isLoadedSignalSlinger = loadedProductName.equals("SignalSlinger", ignoreCase = true) || loadedProductName.isBlank()
 
         val options =
             buildList<ToolOption> {
@@ -4491,33 +4673,37 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     )
                 }
                 add(
-                    ToolOption("Send Command To SignalSlinger") {
+                    ToolOption("Send Command To ${loadedProductName.takeIf { it.isNotBlank() } ?: "Device"}") {
                         showSendCommandDialog(uiState)
                     },
                 )
-                add(
-                    ToolOption("Update SignalSlinger Firmware") {
-                        showSignalSlingerUpdateConfirmation(uiState)
-                    },
-                )
-                add(
-                    ToolOption("Update Arducon Firmware") {
-                        showArduconUpdateConfirmation(uiState)
-                    },
-                )
+                if (isLoadedSignalSlinger) {
+                    add(
+                        ToolOption("Update SignalSlinger Firmware") {
+                            showSignalSlingerUpdateConfirmation(uiState)
+                        },
+                    )
+                }
+                if (isLoadedArducon) {
+                    add(
+                        ToolOption("Update Arducon Firmware") {
+                            showArduconUpdateConfirmation(uiState)
+                        },
+                    )
+                }
                 add(
                     ToolOption(
                         if (automaticFirmwareUpdatesEnabled) {
-                            "Disable Automatic SignalSlinger Firmware Updates"
+                            "Disable Automatic Firmware Updates"
                         } else {
-                            "Enable Automatic SignalSlinger Firmware Updates"
+                            "Enable Automatic Firmware Updates"
                         },
                     ) {
                         setAutomaticFirmwareUpdatesEnabled(!automaticFirmwareUpdatesEnabled)
                     },
                 )
                 add(
-                    ToolOption("Android Session Logs") {
+                    ToolOption("Session Logs") {
                         showAndroidSessionLogsDialog()
                     },
                 )
@@ -4767,33 +4953,48 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun chooseSignalSlingerUpdateSource(onSelected: (String?) -> Unit) {
-        val options = arrayOf("Latest Version", "Specific Version")
-        AlertDialog.Builder(this)
-            .setTitle("Update SignalSlinger")
-            .setItems(options) { _, which ->
-                if (which == 0) {
-                    onSelected(null)
-                } else {
-                    askSignalSlingerUpdateVersion(onSelected)
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .showLogged("Update SignalSlinger")
+        chooseFirmwareUpdateSource(
+            productName = "SignalSlinger",
+            onLatestSelected = { onSelected(null) },
+            onSpecificSelected = { askSignalSlingerUpdateVersion(onSelected) },
+        )
     }
 
     private fun chooseArduconUpdateSource(onSelected: (String?) -> Unit) {
-        val options = arrayOf("Latest Version", "Specific Version")
+        chooseFirmwareUpdateSource(
+            productName = "Arducon",
+            onLatestSelected = { onSelected(null) },
+            onSpecificSelected = { askArduconUpdateVersion(onSelected) },
+        )
+    }
+
+    private fun chooseFirmwareUpdateSource(
+        productName: String,
+        onLatestSelected: () -> Unit,
+        onSpecificSelected: () -> Unit,
+    ) {
+        val options = arrayOf(
+            "Latest Version",
+            "Specific Version",
+        )
+        var selectedIndex = 0
         AlertDialog.Builder(this)
-            .setTitle("Update Arducon")
-            .setItems(options) { _, which ->
-                if (which == 0) {
-                    onSelected(null)
+            .setTitle("Choose $productName Firmware")
+            .setMessage(
+                "Select which firmware release SerialSlinger should use for this update.",
+            )
+            .setSingleChoiceItems(options, selectedIndex) { _, which ->
+                selectedIndex = which
+            }
+            .setPositiveButton("Continue") { _, _ ->
+                if (selectedIndex == 0) {
+                    onLatestSelected()
                 } else {
-                    askArduconUpdateVersion(onSelected)
+                    onSpecificSelected()
                 }
             }
             .setNegativeButton("Cancel", null)
-            .showLogged("Update Arducon")
+            .showLogged("Choose $productName Firmware")
     }
 
     private fun askSignalSlingerUpdateVersion(onSelected: (String?) -> Unit) {
@@ -5014,13 +5215,22 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         uiPreferences.edit().putBoolean(PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED, enabled).apply()
         AndroidSessionController.recordStatus(
             if (enabled) {
-                "Automatic SignalSlinger firmware updates enabled."
+                "Automatic firmware updates enabled."
             } else {
-                "Automatic SignalSlinger firmware updates disabled."
+                "Automatic firmware updates disabled."
             },
             isError = false,
         )
         renderContent()
+    }
+
+    private fun maybeOfferAutomaticFirmwareUpdate() {
+        val snapshot = AndroidSessionController.snapshotUiState().sessionViewState?.state?.snapshot ?: return
+        if (snapshot.info.productName.equals("Arducon", ignoreCase = true)) {
+            maybeOfferAutomaticArduconFirmwareUpdate()
+        } else {
+            maybeOfferAutomaticSignalSlingerFirmwareUpdate()
+        }
     }
 
     private fun maybeOfferAutomaticSignalSlingerFirmwareUpdate() {
@@ -5104,6 +5314,90 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         ) { result ->
             result.exceptionOrNull()?.let { error ->
                 showLargeTextDialog("Update SignalSlinger", error.message ?: error.toString())
+            }
+            if (result.isSuccess && AndroidSessionController.snapshotUiState().sessionViewState == null) {
+                scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
+            }
+        }
+    }
+
+    private fun maybeOfferAutomaticArduconFirmwareUpdate() {
+        if (!automaticFirmwareUpdatesEnabled ||
+            automaticFirmwareUpdateCheckInProgress ||
+            automaticFirmwareUpdatePromptVisible ||
+            firmwareUpdateActive()
+        ) {
+            return
+        }
+        val uiState = AndroidSessionController.snapshotUiState()
+        val snapshot = uiState.sessionViewState?.state?.snapshot ?: return
+        val firmwareVersion = snapshot.info.softwareVersion.orEmpty().trim()
+        if (firmwareVersion.isBlank()) {
+            return
+        }
+
+        automaticFirmwareUpdateCheckInProgress = true
+        thread(name = "serialslinger-android-automatic-arducon-update-check", isDaemon = true) {
+            val result = runCatching {
+                ArduconReleaseCache(applicationContext.filesDir.resolve("arducon-updates")).selectLatestForUpdate(
+                    currentFirmwareVersion = firmwareVersion,
+                )
+            }
+            runOnUiThread {
+                automaticFirmwareUpdateCheckInProgress = false
+                val selection = result.getOrNull() ?: return@runOnUiThread
+                val latestState = AndroidSessionController.snapshotUiState()
+                val latestSnapshot = latestState.sessionViewState?.state?.snapshot ?: return@runOnUiThread
+                if (
+                    !latestSnapshot.info.productName.equals("Arducon", ignoreCase = true) ||
+                    latestSnapshot.info.softwareVersion.orEmpty().trim() != firmwareVersion ||
+                    firmwareUpdateActive()
+                ) {
+                    return@runOnUiThread
+                }
+                automaticFirmwareUpdatePromptVisible = true
+                val sourceText =
+                    if (selection.source == ArduconReleaseSelectionSource.RESIDENT) {
+                        if (selection.downloadFailure != null) {
+                            "SerialSlinger could not download the latest release, but a resident update is available."
+                        } else {
+                            "SerialSlinger already has this update saved locally."
+                        }
+                    } else {
+                        "SerialSlinger downloaded the latest update."
+                    }
+                AlertDialog.Builder(this)
+                    .setTitle("Update Arducon")
+                    .setMessage(
+                        "$sourceText\n\n" +
+                            "Current firmware: $firmwareVersion\n" +
+                            "Available firmware: ${selection.release.version}\n" +
+                            "Hardware: ${selection.release.board}\n\n" +
+                            "Update Arducon now?",
+                    )
+                    .setPositiveButton("Update") { _, _ ->
+                        automaticFirmwareUpdatePromptVisible = false
+                        startAndroidArduconAutomaticUpdate()
+                    }
+                    .setNegativeButton("Not Now") { _, _ ->
+                        automaticFirmwareUpdatePromptVisible = false
+                    }
+                    .setOnCancelListener {
+                        automaticFirmwareUpdatePromptVisible = false
+                    }
+                    .showLogged("Update Arducon")
+            }
+        }
+    }
+
+    private fun startAndroidArduconAutomaticUpdate() {
+        AndroidSessionController.runArduconFirmwareUpdate(
+            context = applicationContext,
+            requestedVersion = null,
+            confirmResidentFallback = { _, _, _ -> true },
+        ) { result ->
+            result.exceptionOrNull()?.let { error ->
+                showLargeTextDialog("Update Arducon", error.message ?: error.toString())
             }
             if (result.isSuccess && AndroidSessionController.snapshotUiState().sessionViewState == null) {
                 scheduleAutoDetect(delayMs = AUTO_DETECT_RETRY_DELAY_MS, forceReload = true)
@@ -7184,6 +7478,30 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun formatArduconFoxRoleLabel(role: ArduconFoxRole): String =
         "${role.roleName} - ${role.morsePatternSent}"
 
+    private fun formatPttResetSetting(value: Int?): String =
+        when (value) {
+            0 -> "PTT Resets OFF"
+            1 -> "PTT Resets ON"
+            else -> "Unknown"
+        }
+
+    private fun pttResetOptions(): List<String> = listOf("PTT Resets OFF", "PTT Resets ON")
+
+    private fun parsePttResetSetting(value: String): Int =
+        if (value == "PTT Resets ON") 1 else 0
+
+    private fun amToneOptions(): List<String> = listOf("OFF", "1", "2", "3", "4", "5", "6")
+
+    private fun formatAmToneSetting(value: Int?): String =
+        when (value) {
+            0 -> "OFF"
+            in 1..6 -> value.toString()
+            else -> "OFF"
+        }
+
+    private fun parseAmToneSetting(value: String): Int =
+        if (value == "OFF") 0 else value.toIntOrNull()?.coerceIn(0, 6) ?: 0
+
     private fun rowButton(text: String, onClick: () -> Unit): Button =
         Button(this).apply {
             this.text = text
@@ -7599,6 +7917,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val PREF_DEVICE_DATA_VISIBLE = "device_data_visible"
         private const val PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED = "automatic_firmware_updates_enabled"
         private const val PREF_ADVANCED_MODE_ENABLED = "advanced_mode_enabled"
+        private const val PREF_LAST_CONNECTED_PRODUCT = "last_connected_product"
         private const val PREF_SCHEDULE_TIME_INPUT_MODE = "schedule_time_input_mode"
         private const val PREF_DEFAULT_EVENT_LENGTH_MINUTES = "default_event_length_minutes"
         private const val PREF_TIMED_EVENT_DEFAULT_FREQUENCY_1_HZ = "timed_event_default_frequency_1_hz"
@@ -7616,5 +7935,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val AUTO_DETECT_RETRY_DELAY_MS = 350L
         private const val AUTO_DETECT_MAX_RETRIES = 4
         private const val AUTOMATIC_DEVICE_TIME_SYNC_RETRY_INTERVAL_MS = 30_000L
+        private const val PRODUCT_ARDUCON = "Arducon"
+        private const val PRODUCT_SIGNALSLINGER = "SignalSlinger"
     }
 }

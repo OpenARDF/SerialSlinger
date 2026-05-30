@@ -597,6 +597,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var busyDialogProgressBar: JProgressBar? = null
     private var busyDialogProgressPanel: JPanel? = null
     private var busyDialogShowTimer: Timer? = null
+    private var busyProgressActivityTimer: Timer? = null
     private var pendingImmediateEdit: PendingImmediateEdit? = null
     @Volatile private var busyProgressState: BusyProgressState? = null
     @Volatile private var busyDialogTitleText: String = "Please Wait"
@@ -622,6 +623,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun codeSpeedOptions(): List<String> = (5..20).map { DesktopInputSupport.formatCodeSpeedWpm(it) }
 
     private fun batteryThresholdOptions(): List<String> = (35..41).map { "%.1f V".format(it / 10.0) }
+
+    private fun amToneOptions(): List<String> = listOf("OFF", "1", "2", "3", "4", "5", "6")
 
     private fun pttResetOptions(): List<String> = listOf("PTT Resets OFF", "PTT Resets ON")
 
@@ -679,7 +682,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val dtmfPasswordRowLabel = JLabel("DTMF Password")
     private val dtmfPasswordField = JTextField()
     private val amToneRowLabel = JLabel("AM Tone")
-    private val amToneField = JComboBox(DefaultComboBoxModel((0..6).map { it.toString() }.toTypedArray()))
+    private val amToneField = JComboBox(DefaultComboBoxModel(amToneOptions().toTypedArray()))
     private val pttResetRowLabel = JLabel("PTT Reset")
     private val pttResetField = JComboBox(DefaultComboBoxModel(pttResetOptions().toTypedArray()))
     private val transmissionsField = JTextField()
@@ -707,6 +710,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val maximumEverTemperatureRowLabel = JLabel("Maximum Ever Temperature")
     private val thermalShutdownThresholdRowLabel = JLabel("Thermal Shutdown Threshold")
     private val externalBatteryControlRowLabel = JLabel("Ext. Bat. Ctrl")
+    private val lowBatteryThresholdRowLabel = JLabel("Low Battery Threshold")
     private val transmissionsRowLabel = JLabel("External device being controlled")
     private val defaultRowLabelForeground = currentTimeRowLabel.foreground
     private val currentTimeRowPanel by lazy { buildCurrentTimeRow() }
@@ -1675,7 +1679,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 row = addRow(section, row, pttResetRowLabel, pttResetField)
                 row = addRow(section, row, externalBatteryControlRowLabel, batteryModeCombo)
                 row = addRow(section, row, transmissionsRowLabel, transmissionsField)
-                addRow(section, row, "Low Battery Threshold", batteryThresholdField)
+                addRow(section, row, lowBatteryThresholdRowLabel, batteryThresholdField)
             })
             add(Box.createVerticalStrut(12))
             add(
@@ -1788,6 +1792,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setRowVisible(amToneRowLabel, amToneField, showArduconOnlyRows)
         setRowVisible(pttResetRowLabel, pttResetField, showArduconOnlyRows)
         setRowVisible(externalBatteryControlRowLabel, batteryModeCombo, !showArduconOnlyRows)
+        setRowVisible(lowBatteryThresholdRowLabel, batteryThresholdField, !showArduconOnlyRows)
         setRowVisible(daysToRunRowLabel, daysField.parent ?: daysField, showDaysToRunRow)
         setRowVisible(currentFrequencyRowLabel, currentFrequencyField, showFrequencyProfileRows)
         setRowVisible(currentBankRowLabel, currentBankField, showFrequencyProfileRows)
@@ -2887,7 +2892,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     )
                 }
             }
+            val currentConnectionStillOpen = connectedPortPath != null &&
+                currentTransport != null &&
+                currentState?.connectionState == ConnectionState.CONNECTED
             val connectedPortVerification = connectedPortPath
+                ?.takeUnless { currentConnectionStillOpen }
                 ?.takeIf { path -> finalPorts.any { it.systemPortPath == path } }
                 ?.let { path ->
                     val preferredPath = DesktopSmartPollingPolicy.preferredPortPath(finalPorts, path) ?: path
@@ -2949,7 +2958,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     return@invokeLater
                 }
 
-                val connectedPortStillAvailable = connectedPortVerification?.state == PortProbeState.DETECTED
+                val connectedPortStillAvailable = currentConnectionStillOpen ||
+                    connectedPortVerification?.state == PortProbeState.DETECTED
                 val fallbackPath = DesktopAutoDetectPolicy.defaultSelectionPath(
                     availablePorts = finalPorts,
                     currentSelectionPath = connectedPortPath,
@@ -4276,7 +4286,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "amToneFrequency",
                     "AM Tone",
                     base.amToneFrequency,
-                    (amToneField.selectedItem as? String)?.toIntOrNull(),
+                    selectedAmToneValue(),
                 ),
             )
         }
@@ -4300,6 +4310,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "PTT Resets OFF" -> 0
             "PTT Resets ON" -> 1
             else -> null
+        }
+    }
+
+    private fun selectedAmToneValue(): Int? {
+        return when (val selected = amToneField.selectedItem as? String) {
+            "OFF" -> 0
+            else -> selected?.toIntOrNull()?.takeIf { it in 1..6 }
+        }
+    }
+
+    private fun formatAmToneSetting(value: Int?): String {
+        return when (value) {
+            0 -> "OFF"
+            in 1..6 -> value.toString()
+            else -> "OFF"
         }
     }
 
@@ -5888,7 +5913,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             updateTimedEventFrequencyVisibility(timedSettings.eventType)
             updatePatternSpeedVisibility(settings.eventType)
             dtmfPasswordField.text = settings.dtmfPassword.orEmpty()
-            amToneField.selectedItem = settings.amToneFrequency?.coerceIn(0, 6)?.toString() ?: "0"
+            amToneField.selectedItem = formatAmToneSetting(settings.amToneFrequency)
             pttResetField.selectedItem = formatPttResetSetting(settings.pttResetSetting)
             if (externalBatteryControlSupported) {
                 batteryThresholdField.selectedItem = settings.lowBatteryThresholdVolts?.let { "%.1f V".format(it) }
@@ -6691,7 +6716,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             status = "Installing SignalSlinger bootloader...",
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
-            busyDialogPrimaryMessage = "This may take several minutes.",
+            busyDialogPrimaryMessage = "Preparing bootloader installation...",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -6761,7 +6786,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             status = "Installing SignalSlinger bootloader...",
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
-            busyDialogPrimaryMessage = "This may take several minutes.",
+            busyDialogPrimaryMessage = "Preparing bootloader installation...",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -6795,7 +6820,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             status = "Installing SignalSlinger bootloader...",
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
-            busyDialogPrimaryMessage = "This may take several minutes.",
+            busyDialogPrimaryMessage = "Preparing bootloader installation...",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -6824,7 +6849,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             status = "Installing SignalSlinger bootloader...",
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
-            busyDialogPrimaryMessage = "This may take several minutes.",
+            busyDialogPrimaryMessage = "Preparing bootloader installation...",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -6846,7 +6871,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             status = "Installing Arducon bootloader...",
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
-            busyDialogPrimaryMessage = "This may take several minutes.",
+            busyDialogPrimaryMessage = "Preparing Arducon bootloader installation...",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -6876,7 +6901,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             status = "Installing Arducon bootloader...",
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
-            busyDialogPrimaryMessage = "This may take several minutes.",
+            busyDialogPrimaryMessage = "Preparing Arducon bootloader installation...",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -6900,7 +6925,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             status = "Installing Arducon bootloader...",
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
-            busyDialogPrimaryMessage = "This may take several minutes.",
+            busyDialogPrimaryMessage = "Preparing Arducon bootloader installation...",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -6924,7 +6949,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             status = "Installing Arducon bootloader...",
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
-            busyDialogPrimaryMessage = "This may take several minutes.",
+            busyDialogPrimaryMessage = "Preparing Arducon bootloader installation...",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -7008,7 +7033,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             workingDirectory = packageDir,
             logEntries = logEntries,
             stepName = "Checking tools",
-            productLabel = "Arducon",
+            productLabel = "SignalSlinger",
         )
 
         setBusyProgress(32, 100, "Searching for attached programmer...")
@@ -7036,14 +7061,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             stepName = "Checking programmer",
             retryProgressCompleted = 32,
             retryProgressLabel = "Searching for attached programmer...",
-            productLabel = "Arducon",
+            productLabel = "SignalSlinger",
         )
 
         require(confirmSignalSlingerFuseWrite(manifest, port)) {
             "Workshop setup cancelled before fuse write."
         }
 
-        setBusyProgress(45, 100, "Programming. This may take several minutes.")
+        setBusyProgressActivity(
+            startPercent = 45,
+            endPercent = 90,
+            label = "Installing bootloader. Programming and verification may take several minutes.",
+        )
         runRecoverableWorkshopSetupProcess(
             command = buildList {
                 addAll(
@@ -7072,7 +7101,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             stepName = "Programming",
             retryProgressCompleted = 45,
             retryProgressLabel = "Programming. This may take several minutes.",
-            productLabel = "Arducon",
+            productLabel = "SignalSlinger",
         )
 
         val verification = if (serialVerification) {
@@ -7221,7 +7250,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "Arducon bootloader installation cancelled before fuse write."
         }
 
-        setBusyProgress(45, 100, "Programming. This may take several minutes.")
+        setBusyProgressActivity(
+            startPercent = 45,
+            endPercent = 90,
+            label = "Installing Arducon bootloader. Programming and verification may take several minutes.",
+        )
         runRecoverableWorkshopSetupProcess(
             command = buildList {
                 addAll(listOf(powershell, "-ExecutionPolicy", "Bypass", "-File", launcher.absolutePath))
@@ -7763,7 +7796,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         workshopSetupFailureReason(line, productLabel),
                     )
                     userFacingWorkshopSetupProgress(line, stepName)?.let { progress ->
-                        setBusyProgress(progress.completed, 100, progress.label)
+                        if (progress.activity) {
+                            setBusyProgressActivity(
+                                startPercent = progress.completed,
+                                endPercent = progress.activityEnd,
+                                label = progress.label,
+                            )
+                        } else {
+                            setBusyProgress(progress.completed, 100, progress.label)
+                        }
                     }
                 }
             }
@@ -7966,6 +8007,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private data class WorkshopSetupProgress(
         val completed: Int,
         val label: String,
+        val activity: Boolean = false,
+        val activityEnd: Int = completed,
     )
 
     private fun stripTerminalFormatting(text: String): String {
@@ -8138,13 +8181,33 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun userFacingWorkshopSetupProgress(line: String, stepName: String): WorkshopSetupProgress? {
         val trimmed = line.trim()
+        val isProgramming = stepName == "Programming"
+        if (isProgramming) {
+            avrdudeProgressPercent(trimmed)?.let { percent ->
+                return when {
+                    trimmed.startsWith("Writing", ignoreCase = true) ->
+                        WorkshopSetupProgress(60 + (percent * 18 / 100), "Writing flash")
+                    trimmed.startsWith("Reading", ignoreCase = true) ->
+                        WorkshopSetupProgress(78 + (percent * 8 / 100), "Verifying flash")
+                    else -> null
+                }
+            }
+            if (trimmed.startsWith("Reading", ignoreCase = true)) {
+                return WorkshopSetupProgress(
+                    completed = 82,
+                    label = "Verifying flash. This may take several minutes.",
+                    activity = true,
+                    activityEnd = 92,
+                )
+            }
+        }
         return when {
             trimmed.startsWith("Connecting to", ignoreCase = true) ->
-                WorkshopSetupProgress(if (stepName == "Programming") 48 else 22, "Connecting to programmer")
+                WorkshopSetupProgress(if (isProgramming) 48 else 22, "Connecting to programmer")
             trimmed.startsWith("Pinging device", ignoreCase = true) ->
-                WorkshopSetupProgress(if (stepName == "Programming") 52 else 24, "Checking device")
+                WorkshopSetupProgress(if (isProgramming) 52 else 24, "Checking device")
             trimmed.startsWith("Reading", ignoreCase = true) ->
-                WorkshopSetupProgress(if (stepName == "Programming") 55 else 25, "Reading device settings")
+                WorkshopSetupProgress(if (isProgramming) 55 else 25, "Reading device settings")
             trimmed.startsWith("Erasing device", ignoreCase = true) ->
                 WorkshopSetupProgress(60, "Erasing device")
             trimmed.startsWith("Writing from hex file", ignoreCase = true) || trimmed.startsWith("Writing flash", ignoreCase = true) ->
@@ -8159,6 +8222,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 WorkshopSetupProgress(100, "Done")
             else -> null
         }
+    }
+
+    private fun avrdudeProgressPercent(line: String): Int? {
+        if (!line.contains("|")) {
+            return null
+        }
+        return Regex("""\b(\d{1,3})%\b""")
+            .find(line)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+            ?.coerceIn(0, 100)
     }
 
     private fun confirmSignalSlingerFuseWrite(
@@ -9070,6 +9145,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 delegate.disconnect()
             }
 
+            override fun pulseTargetReset(): Boolean {
+                val pulsed = delegate.pulseTargetReset()
+                if (pulsed) {
+                    log("Pulsed target reset.")
+                }
+                return pulsed
+            }
+
             override fun writeAscii(text: String) {
                 log("TX ${text.toLogFragment()}")
                 delegate.writeAscii(text)
@@ -9243,7 +9326,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             SettingKey.LOW_BATTERY_THRESHOLD_VOLTS -> value?.toString() ?: "Not Set"
             SettingKey.EXTERNAL_BATTERY_CONTROL_MODE -> (value as? ExternalBatteryControlMode)?.toString() ?: "Not Set"
             SettingKey.TRANSMISSIONS_ENABLED -> if (value == true) "Enabled" else "Disabled"
-            SettingKey.AM_TONE_FREQUENCY -> value?.let { "AM $it" } ?: "Not Set"
+            SettingKey.AM_TONE_FREQUENCY -> (value as? Int)?.let { "AM ${formatAmToneSetting(it)}" } ?: "Not Set"
             SettingKey.PTT_RESET_SETTING -> formatPttResetSetting(value as? Int)
             else -> value?.toString() ?: "Not Set"
         }
@@ -10476,6 +10559,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun hideBusyDialog() {
         busyDialogShowTimer?.stop()
         busyDialogShowTimer = null
+        stopBusyProgressActivityTimer()
         busyDialogStatusLabel = null
         busyDialogProgressBar = null
         busyDialogProgressPanel = null
@@ -10499,14 +10583,48 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun setBusyProgress(completed: Int, total: Int, label: String? = null) {
         val safeTotal = total.coerceAtLeast(1)
-        busyProgressState = BusyProgressState(
+        val state = BusyProgressState(
             completed = completed.coerceIn(0, safeTotal),
             total = safeTotal,
             label = label,
         )
         SwingUtilities.invokeLater {
+            stopBusyProgressActivityTimer()
+            busyProgressState = state
             label?.let { busyDialogStatusLabel?.text = formatBusyDialogStatus(it) }
             updateBusyDialogProgressUi()
+        }
+    }
+
+    private fun setBusyProgressActivity(startPercent: Int, endPercent: Int, label: String) {
+        val boundedStart = startPercent.coerceIn(0, 100)
+        val boundedEnd = endPercent.coerceIn(boundedStart, 100)
+        val startedAt = System.currentTimeMillis()
+        SwingUtilities.invokeLater {
+            stopBusyProgressActivityTimer()
+            var current = boundedStart
+            fun applyActivityProgress() {
+                val elapsed = Duration.ofMillis((System.currentTimeMillis() - startedAt).coerceAtLeast(0L))
+                val activityLabel = "$label Elapsed: ${DesktopInputSupport.formatDurationCompact(elapsed)}."
+                busyProgressState = BusyProgressState(
+                    completed = current,
+                    total = 100,
+                    label = activityLabel,
+                )
+                busyDialogStatusLabel?.text = formatBusyDialogStatus(activityLabel)
+                updateBusyDialogProgressUi()
+            }
+            applyActivityProgress()
+            busyProgressActivityTimer = Timer(5_000) {
+                if (current < boundedEnd) {
+                    current += 1
+                }
+                applyActivityProgress()
+            }.apply {
+                initialDelay = 1_000
+                isRepeats = true
+                start()
+            }
         }
     }
 
@@ -10526,14 +10644,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun clearBusyProgress() {
-        busyProgressState = null
-        SwingUtilities.invokeLater { updateBusyDialogProgressUi() }
+        SwingUtilities.invokeLater {
+            stopBusyProgressActivityTimer()
+            busyProgressState = null
+            updateBusyDialogProgressUi()
+        }
+    }
+
+    private fun stopBusyProgressActivityTimer() {
+        busyProgressActivityTimer?.stop()
+        busyProgressActivityTimer = null
     }
 
     private fun updateBusyDialogProgressUi() {
         val progressBar = busyDialogProgressBar ?: return
         val progressPanel = busyDialogProgressPanel ?: return
         val state = busyProgressState
+        progressBar.isIndeterminate = false
         progressBar.string = null
         progressBar.isStringPainted = false
         if (state == null) {
@@ -12323,7 +12450,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         clearFrequencySpinner(frequency3Field)
         clearFrequencySpinner(frequencyBField)
         dtmfPasswordField.text = ""
-        amToneField.selectedItem = "0"
+        amToneField.selectedItem = formatAmToneSetting(0)
         pttResetField.selectedItem = formatPttResetSetting(0)
         batteryThresholdField.selectedItem = null
         batteryModeCombo.selectedItem = null

@@ -258,6 +258,8 @@ interface SignalSlingerFirmwareUpdateTransport {
 
     fun disconnect()
 
+    fun pulseTargetReset(): Boolean = false
+
     fun writeAscii(text: String)
 
     fun writeBytes(bytes: ByteArray)
