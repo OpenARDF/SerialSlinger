@@ -18,6 +18,10 @@ From the repository root:
 - `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
 - `npm run release:checklist -- --file <checklist.json> --phase final`
 
+On macOS, local desktop scripts resolve JDK 17 through `/usr/libexec/java_home`.
+Install a registered full JDK 17, such as Eclipse Temurin 17, and verify it with
+`/usr/libexec/java_home -V` before running the jDeploy or desktop UI commands.
+
 These tasks prepare and use the executable desktop jar layout that jDeploy expects under:
 
 - `shared/build/jdeploy`

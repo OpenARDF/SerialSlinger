@@ -63,14 +63,13 @@ So the first slice should share **domain and protocol logic**, not UI.
 
 ## Local Tooling Reality
 
-As of April 9, 2026, this machine currently has:
+As of May 31, 2026, local macOS development uses a registered full JDK 17
+resolved through `/usr/libexec/java_home`. This machine currently uses Eclipse
+Temurin 17 for Gradle, desktop packaging, and jDeploy preparation.
 
-- Xcode and Swift
-- no JDK installed in the shell
-- no Gradle installed in the shell
-- no Node or npm installed in the shell
-
-That means the chosen stack is still the right strategic fit, but the immediate local blocker is a missing Java toolchain.
+The stack decision remains the same: Kotlin Multiplatform is still the right
+strategic fit, and the immediate local blocker noted in the original spike has
+been removed.
 
 ## First TDD Scope
 
