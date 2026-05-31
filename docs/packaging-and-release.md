@@ -15,6 +15,8 @@ From the repository root:
 - `npm run jdeploy:local`
 - `npm run jdeploy:pack-preview`
 - `npm run jdeploy:release-preflight`
+- `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
+- `npm run release:checklist -- --file <checklist.json> --phase final`
 
 These tasks prepare and use the executable desktop jar layout that jDeploy expects under:
 
@@ -35,6 +37,7 @@ Notes:
 - `npm run jdeploy:verify-install` runs jDeploy's installation verification against the current local `package.json`.
 - `npm run jdeploy:pack-preview` shows the exact npm and jDeploy package payload without publishing anything.
 - `npm run jdeploy:release-preflight` checks that the Gradle version, npm version, jDeploy workflow, and intended `v*` release tag are aligned before a public release tag is pushed.
+- `npm run release:checklist` verifies that every required release checklist item for a phase is either completed with evidence or explicitly skipped with a skip reason and requester.
 
 ## Versioning Rules
 
@@ -81,10 +84,13 @@ The intended release flow is:
 5. run the automated Android tablet regression: `./scripts/android-regression.sh --serial <adb-serial>`
 6. run the desktop app regression series on macOS with a real attached SignalSlinger
 7. generate terse Android release notes in plain language and provide them in a copyable text block for Play Console use
-8. merge the desired release state to `main`
-9. create and push a tag like `v1.0.93`
-10. let the GitHub Actions workflow publish the release artifacts
-11. before declaring the deployment complete, re-check this release-flow checklist against the work just performed and explicitly address any missed item
+8. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
+9. merge the desired release state to `main`
+10. create and push a tag like `v1.0.93`
+11. let the GitHub Actions workflow publish the release artifacts
+12. before declaring the deployment complete, update the checklist for the final tag, workflow, release-verification, and final-audit items, then run `npm run release:checklist -- --file <checklist.json> --phase final`
+
+The release checklist gate is mandatory unless the user specifically asks to skip an item. A skipped item must be recorded in the checklist with both a concrete reason and the requester.
 
 Keep desktop and Android releases in sync by default. Do not run a separate Android-only release flow with different versioning, tests, or parity checks unless that difference is explicitly requested for the release.
 
