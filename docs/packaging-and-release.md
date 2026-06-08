@@ -34,13 +34,14 @@ Notes:
 
 - `npm install` pulls in the project-local `jdeploy` CLI used by the smoke-test workflow.
 - `npm run jdeploy:prepare` explicitly rebuilds and verifies the generated desktop jDeploy bundle.
+- The npm-facing jDeploy commands run through Node wrappers so the same package, install, verify, and local-run commands work from the default Windows npm shell as well as macOS/Linux shells.
 - `npm run jdeploy:package`, `npm run jdeploy:install-local`, and `npm run jdeploy:local` automatically prepare the bundle first.
 - `npm run jdeploy:package` creates a local `jdeploy-bundle/` directory for install and publish preparation. It is generated output and ignored by git.
 - `npm run jdeploy:install-local` also creates a local `jdeploy/` working directory while preparing installer metadata. It is also generated output and ignored by git.
 - For local prerelease testing before the first real jDeploy publish, prefer `npm run jdeploy:local`.
 - `npm run jdeploy:verify-install` runs jDeploy's installation verification against the current local `package.json`.
 - `npm run jdeploy:pack-preview` shows the exact npm and jDeploy package payload without publishing anything.
-- `npm run jdeploy:release-preflight` checks that the Gradle version, npm version, jDeploy workflow, and intended `v*` release tag are aligned before a public release tag is pushed.
+- `npm run jdeploy:release-preflight` checks that the Gradle version, npm version, jDeploy workflow, intended `v*` release tag, and generated desktop jDeploy bundle are aligned before a public release tag is pushed.
 - `npm run release:checklist` verifies that every required release checklist item for a phase is either completed with evidence or explicitly skipped with a skip reason and requester.
 
 ## Versioning Rules
@@ -87,12 +88,13 @@ The intended release flow is:
    - either carry the needed changes across or explicitly record why no cross-platform change is needed
 5. run the automated Android tablet regression: `./scripts/android-regression.sh --serial <adb-serial>`
 6. run the desktop app regression series on macOS with a real attached SignalSlinger
-7. generate terse Android release notes in plain language and provide them in a copyable text block for Play Console use
-8. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
-9. merge the desired release state to `main`
-10. create and push a tag like `v1.0.93`
-11. let the GitHub Actions workflow publish the release artifacts
-12. before declaring the deployment complete, update the checklist for the final tag, workflow, release-verification, and final-audit items, then run `npm run release:checklist -- --file <checklist.json> --phase final`
+7. run packaged desktop smoke checks on Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64, recording concrete evidence for each architecture or an explicit skip reason and requester
+8. generate terse Android release notes in plain language and provide them in a copyable text block for Play Console use
+9. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
+10. merge the desired release state to `main`
+11. create and push a tag like `v1.0.93`
+12. let the GitHub Actions workflow publish the release artifacts
+13. before declaring the deployment complete, update the checklist for the final tag, workflow, release-verification, and final-audit items, then run `npm run release:checklist -- --file <checklist.json> --phase final`
 
 The release checklist gate is mandatory unless the user specifically asks to skip an item. A skipped item must be recorded in the checklist with both a concrete reason and the requester.
 
@@ -102,6 +104,8 @@ Do not push a normal public release tag until both real-device regression passes
 
 - automated Android tablet regression on a real attached SignalSlinger test device. The regression is destructive to the attached device settings and starts from normal Android UI mode before exercising normal-mode load, setting submit, schedule, raw command, log, and clone paths.
 - desktop app regression on macOS with the SerialSlinger desktop UI launched against a real attached SignalSlinger. The pass should exercise the actual app window, not only the desktop smoke CLI: connect/load, normal-mode setting edits and submit, relative start-time scheduling, disable event, sync/set time, raw command/log behavior, clone where appropriate, and post-test CLI readback to confirm the device is left in a known acceptable state. Before GUI automation, close any installed SerialSlinger app, launch the checkout with Gradle, and confirm the tested window/log session shows the intended version, process ID, and launch directory so installed-app sessions do not contaminate the regression log.
+
+Do not treat cross-platform desktop support as covered by the macOS regression alone. The release checklist must include packaged-app smoke evidence for Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64. If one of those architectures cannot be tested for a specific release, record it as a skipped checklist item with the concrete reason and the requester who accepted the risk.
 
 The chosen public package identity is `serialslinger`, and the shared public and app version line is `1.0.93`.
 
@@ -143,6 +147,11 @@ Notes:
 - `desktopExe` is the simplest Windows installer target to start with.
 - `desktopMsi` may require Windows packaging tooling such as WiX depending on the local JDK and `jpackage` setup.
 - Windows installers use the same shared version line as macOS packaging, the in-app SerialSlinger version, and the jDeploy/npm package.
+- Release validation must explicitly cover Windows Intel x64 and Windows ARM64 packaged-app smoke, or record an approved checklist skip for the missing architecture.
+
+## Linux Packaging
+
+Use the jDeploy package as the default Linux desktop distribution path. For release validation, install and launch the packaged app on Linux Intel x64 and Linux ARM64, or record an approved checklist skip for the missing architecture.
 
 ## Android Signed Bundles
 

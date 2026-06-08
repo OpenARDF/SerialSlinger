@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { execFileSync } from "node:child_process";
+import { platform } from "node:os";
 
 const repoRoot = process.cwd();
 const packageJsonPath = path.join(repoRoot, "package.json");
@@ -43,6 +44,41 @@ function ensure(condition, message) {
   }
 }
 
+function pathSeparator() {
+  return platform() === "win32" ? ";" : ":";
+}
+
+function gradleCommand() {
+  return platform() === "win32" ? path.join(repoRoot, "gradlew.bat") : path.join(repoRoot, "gradlew");
+}
+
+function runGradle(args) {
+  let javaHome = process.env.JAVA_HOME;
+  if (!javaHome && platform() === "darwin" && fs.existsSync("/usr/libexec/java_home")) {
+    javaHome = execFileSync("/usr/libexec/java_home", ["-v", "17"], { encoding: "utf8" }).trim();
+  }
+  ensure(Boolean(javaHome), "Set JAVA_HOME to a full JDK 17 installation.");
+
+  const gradle = gradleCommand();
+  ensure(fs.existsSync(gradle), `Gradle wrapper was not found at ${gradle}.`);
+
+  const options = {
+    cwd: repoRoot,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      JAVA_HOME: javaHome,
+      PATH: `${path.join(javaHome, "bin")}${pathSeparator()}${process.env.PATH || ""}`,
+    },
+  };
+
+  if (platform() === "win32") {
+    execFileSync("cmd.exe", ["/d", "/c", "call", gradle, ...args], options);
+    return;
+  }
+  execFileSync(gradle, args, options);
+}
+
 const packageJson = JSON.parse(readFile(packageJsonPath, "package.json is missing."));
 const packageLock = JSON.parse(readFile(packageLockPath, "package-lock.json is missing."));
 const buildGradleText = readFile(buildGradlePath, "build.gradle.kts is missing.");
@@ -71,6 +107,8 @@ const existingTag = execFileSync("git", ["ls-remote", "--tags", "origin", `refs/
 
 ensure(existingTag.length === 0, `Git tag '${expectedTag}' already exists on origin.`);
 
+runGradle(["prepareDesktopJdeployBundle", "verifyDesktopJdeployBundle"]);
+
 console.log(
   [
     "jDeploy release preflight passed.",
@@ -80,5 +118,6 @@ console.log(
     `Gradle package version: ${gradleVersions.packageVersion}`,
     `Target tag: ${expectedTag}`,
     "Workflow target: GitHub releases",
+    "Desktop jDeploy bundle: prepared and verified",
   ].join("\n"),
 );

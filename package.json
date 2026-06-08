@@ -1,6 +1,6 @@
 {
   "name": "serialslinger",
-  "version": "2.0.8",
+  "version": "2.0.9",
   "description": "Desktop configuration tool for SignalSlinger devices.",
   "author": "OpenARDF",
   "homepage": "https://github.com/OpenARDF/SerialSlinger",
@@ -17,14 +17,14 @@
     "serialslinger": "jdeploy-bundle/jdeploy.js"
   },
   "scripts": {
-    "jdeploy:prepare": "./scripts/jdeploy-prepare.sh",
+    "jdeploy:prepare": "node ./scripts/jdeploy-prepare.mjs",
     "prejdeploy:package": "npm run jdeploy:prepare",
     "prejdeploy:install-local": "npm run jdeploy:prepare",
     "prejdeploy:local": "npm run jdeploy:prepare",
-    "jdeploy:package": "npx --no-install jdeploy package",
-    "jdeploy:install-local": "npx --no-install jdeploy install -y",
-    "jdeploy:verify-install": "npx --no-install jdeploy verify-installation --package-json=package.json --verbose",
-    "jdeploy:local": "npx --no-install jdeploy run --install",
+    "jdeploy:package": "node ./scripts/jdeploy-run.mjs package",
+    "jdeploy:install-local": "node ./scripts/jdeploy-run.mjs install -y",
+    "jdeploy:verify-install": "node ./scripts/jdeploy-run.mjs verify-installation --package-json=package.json --verbose",
+    "jdeploy:local": "node ./scripts/jdeploy-run.mjs run --install",
     "jdeploy:pack-preview": "npm run jdeploy:package && npm pack --dry-run --ignore-scripts",
     "jdeploy:release-preflight": "node ./scripts/check-jdeploy-release-ready.mjs",
     "release:checklist": "node ./scripts/check-release-checklist.mjs",

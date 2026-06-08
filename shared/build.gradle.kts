@@ -201,6 +201,25 @@ fun ensureCompatiblePackagingOs(vararg names: String) {
     }
 }
 
+fun cleanGeneratedDesktopPackageOutputs(
+    outputDir: File,
+    vararg extensions: String,
+) {
+    outputDir
+        .listFiles()
+        ?.filter { file ->
+            file.name == "$desktopAppName.app" ||
+                extensions.any { extension -> file.name.startsWith(desktopAppName) && file.name.endsWith(extension) }
+        }
+        ?.forEach { file ->
+            if (file.isDirectory) {
+                file.deleteRecursively()
+            } else {
+                file.delete()
+            }
+        }
+}
+
 fun desktopPackagingBaseArgs(
     inputDir: File,
     outputDir: File,
@@ -374,6 +393,7 @@ tasks.register<Exec>("desktopAppImage") {
     doFirst {
         ensureCompatiblePackagingOs("mac")
         outputDir.mkdirs()
+        cleanGeneratedDesktopPackageOutputs(outputDir)
     }
 
     commandLine(
@@ -396,6 +416,7 @@ tasks.register<Exec>("desktopDmg") {
     doFirst {
         ensureCompatiblePackagingOs("mac")
         outputDir.mkdirs()
+        cleanGeneratedDesktopPackageOutputs(outputDir, ".dmg")
     }
 
     commandLine(
@@ -418,6 +439,7 @@ tasks.register<Exec>("desktopExe") {
     doFirst {
         ensureCompatiblePackagingOs("windows")
         outputDir.mkdirs()
+        cleanGeneratedDesktopPackageOutputs(outputDir, ".exe")
     }
 
     commandLine(
@@ -443,6 +465,7 @@ tasks.register<Exec>("desktopMsi") {
     doFirst {
         ensureCompatiblePackagingOs("windows")
         outputDir.mkdirs()
+        cleanGeneratedDesktopPackageOutputs(outputDir, ".msi")
     }
 
     commandLine(

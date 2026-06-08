@@ -44,6 +44,34 @@
       "skipRequestedBy": ""
     },
     {
+      "id": "windows-intel-x64-smoke",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
       "id": "android-release-notes",
       "status": "pending",
       "evidence": "",
