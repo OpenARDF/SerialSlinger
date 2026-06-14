@@ -8941,7 +8941,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         else -> 10
                     }
                     progress.detail?.let { detail -> log(detail) }
-                    setBusyProgress(percent, 100, userFacingFirmwareUpdateStage(progress.stage))
+                    val progressLabel =
+                        if (progress.stage == "Restarting Arducon" && !progress.detail.isNullOrBlank()) {
+                            progress.detail
+                        } else {
+                            userFacingFirmwareUpdateStage(progress.stage)
+                        }
+                    setBusyProgress(percent, 100, progressLabel)
                 },
             )
         } finally {
@@ -9852,11 +9858,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             scheduleBusyDialog(status)
         }
         Thread {
+            var failure: Exception? = null
             try {
                 waitForDeviceDataSampleToFinish()
                 task()
             } catch (exception: Exception) {
+                failure = exception
+            } finally {
                 SwingUtilities.invokeLater {
+                    backgroundWorkInProgress = false
+                    hideBusyDialog()
+                    clearBusyProgress()
+                    busyDialogTitleText = "Please Wait"
+                    busyDialogPrimaryText = null
+                    setBusy(false)
+                    updateAdvancedDeviceDataRefreshTimer()
+                    val exception = failure ?: return@invokeLater
                     if (isTransportCommunicationFailure(exception)) {
                         handleTransportCommunicationFailure(
                             message = exception.message ?: exception.toString(),
@@ -9881,16 +9898,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         )
                         setStatus("Error: ${exception.message ?: exception::class.simpleName}")
                     }
-                }
-            } finally {
-                SwingUtilities.invokeLater {
-                    backgroundWorkInProgress = false
-                    hideBusyDialog()
-                    clearBusyProgress()
-                    busyDialogTitleText = "Please Wait"
-                    busyDialogPrimaryText = null
-                    setBusy(false)
-                    updateAdvancedDeviceDataRefreshTimer()
                 }
             }
         }.start()

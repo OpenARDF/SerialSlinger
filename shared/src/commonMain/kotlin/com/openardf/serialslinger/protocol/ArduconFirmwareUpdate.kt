@@ -360,9 +360,16 @@ object ArduconFirmwareUpdate {
         release: ArduconReleaseInfo,
         progress: (SignalSlingerFirmwareUpdateProgress) -> Unit,
     ) {
-        progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", 0, 0, "Checking Arducon after restart"))
         var lastFailure: Throwable? = null
-        repeat(8) {
+        repeat(8) { attempt ->
+            progress(
+                SignalSlingerFirmwareUpdateProgress(
+                    "Restarting Arducon",
+                    attempt,
+                    8,
+                    "Checking Arducon after restart (${attempt + 1}/8)",
+                ),
+            )
             try {
                 transport.disconnect()
             } catch (_: Throwable) {
@@ -378,11 +385,14 @@ object ArduconFirmwareUpdate {
                 lastFailure = failure
             }
         }
+        progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", 8, 8, "Checking whether Arducon is still in bootloader mode."))
         if (bootloaderStillRespondsAfterLeaveProgramming(transport, release)) {
             error(
                 "Arducon update was sent and verified, but the bootloader is still responding at " +
                     "${release.firmwareUpdate.updateBaud} baud after the leave-programming command. " +
-                    "The bootloader did not hand off to the application at ${release.firmwareUpdate.appStartAddress.toHex32()}.",
+                    "SerialSlinger sent STK500 LEAVE_PROGMODE, but this Optiboot image did not hand off to the " +
+                    "application at ${release.firmwareUpdate.appStartAddress.toHex32()}. Power-cycle or reconnect " +
+                    "Arducon to leave bootloader mode; if this repeats, the Arducon bootloader needs an exit-to-app fix.",
             )
         }
         throw lastFailure ?: IllegalStateException(ArduconRestartConfirmationFailureMessage)
