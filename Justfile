@@ -19,8 +19,12 @@ test:
 # Run the normal local validation gate.
 check: compile test
 
+# Increment the local test-build suffix and align package metadata.
+local-version-bump:
+    node ./scripts/bump-local-version-suffix.mjs
+
 # Launch the desktop UI from this checkout.
-desktop-run:
+desktop-run: local-version-bump
     ./run-desktop-ui.sh
 
 # Run the desktop smoke CLI. Example: just desktop-smoke "list"
@@ -28,7 +32,7 @@ desktop-smoke args="list":
     {{gradle}} desktopSmokeRun --args="{{args}}"
 
 # Build the Android debug APK.
-android-debug:
+android-debug: local-version-bump
     {{gradle}} :androidApp:assembleDebug
 
 # Install the Android debug APK. Optionally pass an adb serial.
@@ -44,15 +48,15 @@ android-regression *args:
     ./scripts/android-regression.sh {{args}}
 
 # Prepare the desktop jDeploy bundle.
-jdeploy-prepare:
+jdeploy-prepare: local-version-bump
     npm run jdeploy:prepare
 
 # Build the local jDeploy package payload.
-jdeploy-package:
+jdeploy-package: local-version-bump
     npm run jdeploy:package
 
 # Install the local jDeploy package.
-jdeploy-install-local:
+jdeploy-install-local: local-version-bump
     npm run jdeploy:install-local
 
 # Verify the local jDeploy installation.
@@ -60,11 +64,11 @@ jdeploy-verify-install:
     npm run jdeploy:verify-install
 
 # Run the app through the local jDeploy flow.
-jdeploy-local:
+jdeploy-local: local-version-bump
     npm run jdeploy:local
 
 # Preview the npm and jDeploy package payload.
-jdeploy-pack-preview:
+jdeploy-pack-preview: local-version-bump
     npm run jdeploy:pack-preview
 
 # Run the jDeploy release preflight gate.
@@ -76,9 +80,9 @@ release-checklist file phase="pre-tag":
     npm run release:checklist -- --file "{{file}}" --phase "{{phase}}"
 
 # Build the macOS app image.
-macos-app-image:
+macos-app-image: local-version-bump
     {{gradle}} verifyDesktopPackagingEnvironment desktopAppImage
 
 # Build the macOS DMG.
-macos-dmg:
+macos-dmg: local-version-bump
     {{gradle}} verifyDesktopPackagingEnvironment desktopDmg

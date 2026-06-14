@@ -60,9 +60,11 @@ For local testable in-progress Android and desktop builds, keep the release vers
 Current workflow:
 
 1. leave `serialSlingerVersion` in [build.gradle.kts](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/build.gradle.kts) at the intended release version
-2. increment `serialSlingerVersionSuffix` for each new test build: `a`, `b`, `c`, ... then `aa`, `ab`, ...
+2. run `just local-version-bump` to increment `serialSlingerVersionSuffix` for each new test build: `a`, `b`, `c`, ... then `aa`, `ab`, ...
 3. keep `package.json` and `package-lock.json` aligned to the npm-safe form with a hyphen before the suffix
 4. clear the suffix before any deployment so Android and jDeploy publish as plain `x.y.z`
+
+The Justfile local app/package recipes (`desktop-run`, `android-debug`, `jdeploy-prepare`, `jdeploy-package`, `jdeploy-install-local`, `jdeploy-local`, `jdeploy-pack-preview`, `macos-app-image`, and `macos-dmg`) run `just local-version-bump` first. Compile/test and release-preflight recipes do not auto-bump.
 
 This keeps local Android and desktop builds visibly distinct during testing without accidentally publishing a suffixed version.
 

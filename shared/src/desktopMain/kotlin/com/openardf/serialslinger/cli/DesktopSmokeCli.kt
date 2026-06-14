@@ -398,6 +398,7 @@ private fun runArduconUpdate(
     val transport = DesktopFirmwareUpdateTransport(
         portDescriptor = port,
         stopBitsForBaudRate = arduconStopBitsForBaudRate(release.firmwareUpdate.appBaud),
+        pulseTargetResetWithControlLines = false,
     )
     try {
         ArduconFirmwareUpdate.performUpdate(

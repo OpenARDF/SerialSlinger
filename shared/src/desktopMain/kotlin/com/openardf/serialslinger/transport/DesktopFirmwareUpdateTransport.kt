@@ -8,6 +8,7 @@ class DesktopFirmwareUpdateTransport(
     private val readQuietPeriodMs: Long = 120,
     private val pollIntervalMs: Long = 20,
     private val stopBitsForBaudRate: (Int) -> DesktopSerialStopBits = { DesktopSerialStopBits.ONE },
+    private val pulseTargetResetWithControlLines: Boolean = true,
 ) : SignalSlingerFirmwareUpdateTransport {
     private var serialPort: SerialPort? = null
     private val lineBuffer = DesktopSerialLineBuffer()
@@ -39,6 +40,9 @@ class DesktopFirmwareUpdateTransport(
     }
 
     override fun pulseTargetReset(): Boolean {
+        if (!pulseTargetResetWithControlLines) {
+            return false
+        }
         val port = serialPort ?: return false
         return runCatching {
             port.setDTR()

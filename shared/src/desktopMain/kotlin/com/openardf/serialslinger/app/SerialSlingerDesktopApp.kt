@@ -2870,6 +2870,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
         knownProbeResults[result.portInfo.systemPortPath] = result
+        if (
+            result.state != PortProbeState.DETECTED &&
+            result.portInfo.systemPortPath == currentConnectedPortPath &&
+            currentState?.connectionState == ConnectionState.CONNECTED
+        ) {
+            markConnectedPortAsUnresponsive(
+                reason = "Connected device probe failed: ${result.summary}.",
+                probeSummary = result.summary,
+            )
+            return
+        }
+
         if (backgroundWorkInProgress) {
             return
         }
@@ -2929,17 +2941,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     )
                 }
 
-                if (
-                    result.portInfo.systemPortPath == currentConnectedPortPath &&
-                    currentState?.connectionState == ConnectionState.CONNECTED &&
-                    result.state != PortProbeState.DETECTED
-                ) {
-                    showConnectionIndicator(
-                        ConnectionIndicatorState.DISCONNECTED,
-                        "Device is not responding on ${result.portInfo.systemPortPath}",
-                    )
-                    setStatus("Device stopped responding on ${result.portInfo.systemPortPath}.")
-                }
             }
             PortProbeState.UNCHECKED -> refreshAvailablePorts(silent = true)
         }
@@ -8916,10 +8917,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         currentTransport = null
         currentConnectedPortPath = null
+        markCurrentStateDisconnected("Arducon update is using the serial port.")
 
         val delegate = DesktopFirmwareUpdateTransport(
             portDescriptor = portPath,
             stopBitsForBaudRate = arduconStopBitsForBaudRate(manifest.firmwareUpdate.appBaud),
+            pulseTargetResetWithControlLines = false,
         )
         val updateTransport = loggingFirmwareUpdateTransport(delegate, logEntries)
         try {
@@ -9014,6 +9017,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         currentTransport = null
         currentConnectedPortPath = null
+        markCurrentStateDisconnected("SignalSlinger update is using the serial port.")
 
         val delegate = DesktopFirmwareUpdateTransport(portPath)
         val updateTransport = loggingFirmwareUpdateTransport(delegate, logEntries)
@@ -12835,7 +12839,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun markConnectedPortAsUnresponsive(reason: String) {
+    private fun markConnectedPortAsUnresponsive(
+        reason: String,
+        probeSummary: String? = null,
+    ) {
         val portPath = currentConnectedPortPath ?: return
         try {
             currentTransport?.disconnect()
@@ -12843,6 +12850,35 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         currentTransport = null
         currentConnectedPortPath = null
+        val updatedState = markCurrentStateDisconnected(reason)
+        loadedSnapshot = updatedState?.snapshot
+        updateAdvancedDeviceDataRefreshTimer()
+        val disconnectedProductLabel = productLabel(updatedState?.snapshot)
+        val probeStatusSummary = probeSummary?.takeIf { it.isNotBlank() }
+            ?: "$disconnectedProductLabel no longer detected"
+        knownProbeResults[portPath] = knownProbeResults[portPath]?.copy(
+            state = PortProbeState.NOT_DETECTED,
+            summary = probeStatusSummary,
+            lastProbedAtMs = System.currentTimeMillis(),
+        ) ?: SignalSlingerPortProbe(
+            portInfo = resolvePortInfoFor(portPath),
+            state = PortProbeState.NOT_DETECTED,
+            summary = probeStatusSummary,
+            lastProbedAtMs = System.currentTimeMillis(),
+        )
+        showConnectionIndicator(
+            ConnectionIndicatorState.DISCONNECTED,
+            "$disconnectedProductLabel is not responding on ${portPath}",
+        )
+        setStatus("$disconnectedProductLabel stopped responding on ${portPath}.")
+        consecutiveDeviceTimeCheckNoResponseCount = 0
+        clockPhaseWarningActive = false
+        lastClockPhaseErrorMillis = null
+        refreshAvailablePorts(silent = true)
+        updateDisplayedClockFields()
+    }
+
+    private fun markCurrentStateDisconnected(reason: String): DeviceSessionState? {
         val updatedState = currentState?.let { state ->
             state.copy(
                 connectionState = ConnectionState.DISCONNECTED,
@@ -12857,28 +12893,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         currentState = updatedState
         loadedSnapshot = updatedState?.snapshot
-        updateAdvancedDeviceDataRefreshTimer()
-        val disconnectedProductLabel = productLabel(updatedState?.snapshot)
-        knownProbeResults[portPath] = knownProbeResults[portPath]?.copy(
-            state = PortProbeState.NOT_DETECTED,
-            summary = "$disconnectedProductLabel no longer detected",
-            lastProbedAtMs = System.currentTimeMillis(),
-        ) ?: SignalSlingerPortProbe(
-            portInfo = resolvePortInfoFor(portPath),
-            state = PortProbeState.NOT_DETECTED,
-            summary = "$disconnectedProductLabel no longer detected",
-            lastProbedAtMs = System.currentTimeMillis(),
-        )
-        showConnectionIndicator(
-            ConnectionIndicatorState.DISCONNECTED,
-            "$disconnectedProductLabel is not responding on ${portPath}",
-        )
-        setStatus("$disconnectedProductLabel stopped responding on ${portPath}.")
-        consecutiveDeviceTimeCheckNoResponseCount = 0
-        clockPhaseWarningActive = false
-        lastClockPhaseErrorMillis = null
-        refreshAvailablePorts(silent = true)
-        updateDisplayedClockFields()
+        return updatedState
     }
 
     private fun isTransportCommunicationFailure(exception: Exception): Boolean {
