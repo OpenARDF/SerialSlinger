@@ -109,8 +109,8 @@ class ArduconFirmwareUpdateTest {
             )
         }
 
-        assertTrue(error.message.orEmpty().contains("bootloader is still responding"))
-        assertTrue(error.message.orEmpty().contains("did not hand off to the application"))
+        assertTrue(error.message.orEmpty().contains("Arducon update was sent and verified"))
+        assertTrue(error.message.orEmpty().contains("Manually restart the Arducon by cycling power"))
     }
 
     private fun sampleManifest(

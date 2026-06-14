@@ -404,11 +404,7 @@ object ArduconFirmwareUpdate {
             if (bootloaderStillRespondsAfterLeaveProgramming(transport, release)) {
                 throw ArduconRestartHandoffException(
                     "Arducon update was sent and verified, but Arducon did not restart into normal operation. " +
-                        "The bootloader is still responding at ${release.firmwareUpdate.updateBaud} baud after " +
-                        "SerialSlinger sent STK500 LEAVE_PROGMODE. This means the flash and verification step " +
-                        "succeeded, but this Optiboot image did not hand off to the application at " +
-                        "${release.firmwareUpdate.appStartAddress.toHex32()}. Power-cycle or reconnect Arducon " +
-                        "to leave bootloader mode; if this repeats, the Arducon bootloader needs an exit-to-app fix.",
+                        "Manually restart the Arducon by cycling power.",
                 )
             }
         }

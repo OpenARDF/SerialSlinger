@@ -1534,13 +1534,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         title: String = this.title,
         messageType: Int = JOptionPane.INFORMATION_MESSAGE,
     ) {
+        val displayMessage = plainTextDialogMessage(message)
         if (!messageContainsSelectableCommandSuggestions(message)) {
             val component =
-                if (messageNeedsWrappedDialog(message)) {
+                if (messageNeedsWrappedDialog(displayMessage)) {
                     JScrollPane(
                         wrappedDialogTextArea(
-                            message = message,
-                            rows = wrappedDialogRows(message),
+                            message = displayMessage,
+                            rows = wrappedDialogRows(displayMessage),
                             columns = 58,
                             monospaced = false,
                         ),
@@ -1549,14 +1550,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         border = BorderFactory.createEmptyBorder()
                     }
                 } else {
-                    message
+                    displayMessage
                 }
             JOptionPane.showMessageDialog(this, component, title, messageType)
             return
         }
 
         val textArea = wrappedDialogTextArea(
-            message = message,
+            message = displayMessage,
             rows = 14,
             columns = 76,
             monospaced = true,
@@ -1566,6 +1567,26 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 preferredSize = Dimension(760, 320)
             }
         JOptionPane.showMessageDialog(this, scrollPane, title, messageType)
+    }
+
+    private fun plainTextDialogMessage(message: String): String {
+        if (!message.trimStart().startsWith("<html", ignoreCase = true)) {
+            return message
+        }
+        return message
+            .replace(Regex("(?i)<\\s*br\\s*/?\\s*>"), "\n")
+            .replace(Regex("(?i)</\\s*(div|p|li|tr|h[1-6])\\s*>"), "\n")
+            .replace(Regex("<[^>]+>"), "")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString("\n")
     }
 
     private fun messageNeedsWrappedDialog(message: String): Boolean =
@@ -9331,8 +9352,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             exception.isArduconAlreadyCurrentUpdate() -> failureDetails
             exception.isArduconRestartHandoffFailure() ->
                 "Arducon update was verified, but Arducon did not restart.\n\n" +
-                    "SerialSlinger finished sending and verifying the update, but Arducon stayed in bootloader mode instead of starting the updated firmware.\n\n" +
-                    failureDetails
+                    "Manually restart the Arducon by cycling power."
             failureDetails.contains("hash mismatch", ignoreCase = true) ||
                 failureDetails.contains("size mismatch", ignoreCase = true) ->
                 "The Arducon update file could not be verified.\n\n$failureDetails"
@@ -10977,11 +10997,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun formatBusyDialogStatus(status: String): String {
-        val escapedStatus = status
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        return "<html><div style='width: 260px;'>$escapedStatus</div></html>"
+        return status
     }
 
     private fun sendRawSerialCommand() {
