@@ -13,6 +13,7 @@ plugins {
 
 val desktopPackageVersion = rootProject.extra["serialSlingerPackageVersion"].toString()
 val desktopDisplayVersion = rootProject.extra["serialSlingerDisplayVersion"].toString()
+val desktopJpackageAppVersion = rootProject.extra["serialSlingerVersion"].toString()
 val desktopPackageVendor = rootProject.extra["serialSlingerVendor"].toString()
 val desktopPackageDescription = rootProject.extra["serialSlingerDescription"].toString()
 val desktopProjectUrl = rootProject.extra["serialSlingerProjectUrl"].toString()
@@ -231,7 +232,7 @@ fun desktopPackagingBaseArgs(
                 "--name",
                 desktopAppName,
                 "--app-version",
-                desktopPackageVersion,
+                desktopJpackageAppVersion,
                 "--vendor",
                 desktopPackageVendor,
                 "--description",
@@ -281,6 +282,7 @@ tasks.register("verifyDesktopPackagingEnvironment") {
 
         logger.lifecycle("Using jpackage at ${jpackageFile.absolutePath}")
         logger.lifecycle("Packaging SerialSlinger version $desktopPackageVersion")
+        logger.lifecycle("Using jpackage app-version $desktopJpackageAppVersion")
     }
 }
 
