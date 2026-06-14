@@ -3,7 +3,6 @@ package com.openardf.serialslinger.app
 import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.ArduconFoxRole
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
-import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.EditableDeviceSettings
@@ -1538,15 +1537,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (!messageContainsSelectableCommandSuggestions(message)) {
             val component =
                 if (messageNeedsWrappedDialog(displayMessage)) {
+                    val rows = wrappedDialogRows(displayMessage)
                     JScrollPane(
                         wrappedDialogTextArea(
                             message = displayMessage,
-                            rows = wrappedDialogRows(displayMessage),
-                            columns = 58,
+                            rows = rows,
+                            columns = 54,
                             monospaced = false,
                         ),
                     ).apply {
-                        preferredSize = Dimension(560, 220)
+                        preferredSize = wrappedDialogPreferredSize(rows)
                         border = BorderFactory.createEmptyBorder()
                     }
                 } else {
@@ -1594,8 +1594,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun wrappedDialogRows(message: String): Int =
         message.lineSequence()
-            .sumOf { line -> ((line.length + 57) / 58).coerceAtLeast(1) }
-            .coerceIn(4, 10)
+            .sumOf { line -> ((line.length + 53) / 54).coerceAtLeast(1) }
+            .coerceIn(3, 10)
+
+    private fun wrappedDialogPreferredSize(rows: Int): Dimension =
+        Dimension(520, (72 + rows.coerceIn(3, 10) * 18).coerceIn(126, 252))
 
     private fun wrappedDialogTextArea(
         message: String,
@@ -3791,7 +3794,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 },
             )
             val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
-            val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings, targetSnapshot.capabilities)
+            val editable = DesktopCloneSupport.buildEditableSettings(targetSnapshot.settings, templateSettings, targetSnapshot.capabilities)
             val validated = editable.toValidatedDeviceSettings()
             val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
 
@@ -3869,7 +3872,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         ),
                         preRefreshResult = targetRefresh,
                         refreshResult = finalRefresh,
-                        comparedFieldKeys = cloneComparedFieldKeys(targetSnapshot.capabilities),
+                        comparedFieldKeys = DesktopCloneSupport.comparedFieldKeys(targetSnapshot.capabilities, templateSettings),
                     )
                     updateClockPhaseWarning(syncResult?.finalAttempt?.phaseErrorMillis ?: clockSample?.second?.phaseErrorMillis)
                     updateCloneTemplateLabel(
@@ -3966,7 +3969,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         targetRefreshResult = targetRefresh,
                         firmwareTraceEntries = firmwareCloneResult.traceEntries,
                         refreshResult = refreshedWithClock,
-                        comparedFieldKeys = cloneComparedFieldKeys(targetSnapshot.capabilities),
+                        comparedFieldKeys = DesktopCloneSupport.comparedFieldKeys(targetSnapshot.capabilities, templateSettings),
                         checksum = firmwareCloneResult.plan?.checksum,
                         syncResult = syncResult,
                     )
@@ -4090,99 +4093,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     Color(0x0B, 0x3D, 0x91),
                 )
                 setStatus("Clone template reloaded from attached device.")
-            }
-        }
-    }
-
-    private fun buildCloneEditableSettings(
-        targetBaseSettings: DeviceSettings,
-        templateSettings: DeviceSettings,
-        capabilities: DeviceCapabilities,
-    ): EditableDeviceSettings {
-        return EditableDeviceSettings.fromDeviceSettings(targetBaseSettings).copy(
-            stationId = cloneField("stationId", "Station ID", targetBaseSettings.stationId, templateSettings.stationId, capabilities.supportsStationIdEditing),
-            eventType = cloneField("eventType", "Event Type", targetBaseSettings.eventType, templateSettings.eventType, capabilities.supportsEventTypeEditing),
-            foxRole = cloneField("foxRole", "Fox Role (FOX)", targetBaseSettings.foxRole, templateSettings.foxRole, capabilities.supportsFoxRoleEditing),
-            arduconFoxRoleCode = cloneField("arduconFoxRoleCode", "Arducon Fox Role", targetBaseSettings.arduconFoxRoleCode, templateSettings.arduconFoxRoleCode, capabilities.supportsFoxRoleEditing),
-            idCodeSpeedWpm = cloneField("idCodeSpeedWpm", "ID Speed", targetBaseSettings.idCodeSpeedWpm, templateSettings.idCodeSpeedWpm, capabilities.supportsIdCodeSpeedEditing),
-            dtmfPassword = cloneField("dtmfPassword", "DTMF Password", targetBaseSettings.dtmfPassword, templateSettings.dtmfPassword, capabilities.supportsDtmfPasswordEditing),
-            amToneFrequency = cloneField("amToneFrequency", "AM Tone", targetBaseSettings.amToneFrequency, templateSettings.amToneFrequency, capabilities.supportsAmToneEditing),
-            pttResetSetting = cloneField("pttResetSetting", "PTT Reset", targetBaseSettings.pttResetSetting, templateSettings.pttResetSetting, capabilities.supportsPttResetEditing),
-            startTimeCompact = cloneField("startTimeCompact", "Start Time", targetBaseSettings.startTimeCompact, templateSettings.startTimeCompact, capabilities.supportsScheduling),
-            finishTimeCompact = cloneField("finishTimeCompact", "Finish Time", targetBaseSettings.finishTimeCompact, templateSettings.finishTimeCompact, capabilities.supportsScheduling),
-            daysToRun = cloneField("daysToRun", "Days To Run", targetBaseSettings.daysToRun, templateSettings.daysToRun, capabilities.supportsScheduling && capabilities.supportsDaysToRun),
-            patternCodeSpeedWpm = targetBaseSettings.patternCodeSpeedWpm.let { targetPatternSpeed ->
-                SettingsField(
-                    "patternCodeSpeedWpm",
-                    "Pattern Speed",
-                    targetPatternSpeed,
-                    if (capabilities.supportsPatternEditing) {
-                        cloneTemplatePatternSpeedFor(templateSettings) ?: targetPatternSpeed
-                    } else {
-                        targetPatternSpeed
-                    },
-                )
-            },
-            lowFrequencyHz = cloneField("lowFrequencyHz", "Frequency 1 (FRE 1)", targetBaseSettings.lowFrequencyHz, templateSettings.lowFrequencyHz, capabilities.supportsFrequencyProfiles),
-            mediumFrequencyHz = cloneField("mediumFrequencyHz", "Frequency 2 (FRE 2)", targetBaseSettings.mediumFrequencyHz, templateSettings.mediumFrequencyHz, capabilities.supportsFrequencyProfiles),
-            highFrequencyHz = cloneField("highFrequencyHz", "Frequency 3 (FRE 3)", targetBaseSettings.highFrequencyHz, templateSettings.highFrequencyHz, capabilities.supportsFrequencyProfiles),
-            beaconFrequencyHz = cloneField("beaconFrequencyHz", "Frequency B (FRE B)", targetBaseSettings.beaconFrequencyHz, templateSettings.beaconFrequencyHz, capabilities.supportsFrequencyProfiles),
-        )
-    }
-
-    private fun <T> cloneField(
-        key: String,
-        label: String,
-        currentValue: T,
-        templateValue: T,
-        supported: Boolean,
-    ): SettingsField<T> = SettingsField(key, label, currentValue, if (supported) templateValue else currentValue)
-
-    private fun cloneComparedFieldKeys(capabilities: DeviceCapabilities): List<SettingKey> {
-        return buildList {
-            if (capabilities.supportsStationIdEditing) {
-                add(SettingKey.STATION_ID)
-            }
-            if (capabilities.supportsEventTypeEditing) {
-                add(SettingKey.EVENT_TYPE)
-            }
-            if (capabilities.supportsFoxRoleEditing) {
-                if (loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true)) {
-                    add(SettingKey.ARDUCON_FOX_ROLE)
-                } else {
-                    add(SettingKey.FOX_ROLE)
-                }
-            }
-            if (capabilities.supportsIdCodeSpeedEditing) {
-                add(SettingKey.ID_CODE_SPEED_WPM)
-            }
-            if (capabilities.supportsDtmfPasswordEditing) {
-                add(SettingKey.DTMF_PASSWORD)
-            }
-            if (capabilities.supportsAmToneEditing) {
-                add(SettingKey.AM_TONE_FREQUENCY)
-            }
-            if (capabilities.supportsPttResetEditing) {
-                add(SettingKey.PTT_RESET_SETTING)
-            }
-            if (
-                capabilities.supportsPatternEditing &&
-                cloneTemplateSettings?.let { DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(it.eventType) } == true
-            ) {
-                add(SettingKey.PATTERN_CODE_SPEED_WPM)
-            }
-            if (capabilities.supportsScheduling) {
-                add(SettingKey.START_TIME)
-                add(SettingKey.FINISH_TIME)
-            }
-            if (capabilities.supportsDaysToRun) {
-                add(SettingKey.DAYS_TO_RUN)
-            }
-            if (capabilities.supportsFrequencyProfiles) {
-                add(SettingKey.LOW_FREQUENCY_HZ)
-                add(SettingKey.MEDIUM_FREQUENCY_HZ)
-                add(SettingKey.HIGH_FREQUENCY_HZ)
-                add(SettingKey.BEACON_FREQUENCY_HZ)
             }
         }
     }
