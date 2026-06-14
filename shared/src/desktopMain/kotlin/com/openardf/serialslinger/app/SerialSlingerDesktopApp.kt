@@ -38,6 +38,7 @@ import com.openardf.serialslinger.protocol.ArduconReleaseInfo
 import com.openardf.serialslinger.protocol.ArduconReleaseCache
 import com.openardf.serialslinger.protocol.ArduconReleaseSelection
 import com.openardf.serialslinger.protocol.ArduconReleaseSelectionSource
+import com.openardf.serialslinger.protocol.ArduconRestartHandoffException
 import com.openardf.serialslinger.protocol.ArduconWorkshopSetup
 import com.openardf.serialslinger.protocol.SignalSlingerAppInfo
 import com.openardf.serialslinger.protocol.SignalSlingerBootloaderIdentity
@@ -668,7 +669,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var connectionIndicatorMessage: String = "Not Connected"
     private var thermalHeadlineWarningMessage: String? = null
     private var busyDialog: JDialog? = null
-    private var busyDialogStatusLabel: JLabel? = null
+    private var busyDialogStatusLabel: JTextArea? = null
     private var busyDialogProgressBar: JProgressBar? = null
     private var busyDialogProgressPanel: JPanel? = null
     private var busyDialogShowTimer: Timer? = null
@@ -1534,27 +1535,65 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         messageType: Int = JOptionPane.INFORMATION_MESSAGE,
     ) {
         if (!messageContainsSelectableCommandSuggestions(message)) {
-            JOptionPane.showMessageDialog(this, message, title, messageType)
+            val component =
+                if (messageNeedsWrappedDialog(message)) {
+                    JScrollPane(
+                        wrappedDialogTextArea(
+                            message = message,
+                            rows = wrappedDialogRows(message),
+                            columns = 58,
+                            monospaced = false,
+                        ),
+                    ).apply {
+                        preferredSize = Dimension(560, 220)
+                        border = BorderFactory.createEmptyBorder()
+                    }
+                } else {
+                    message
+                }
+            JOptionPane.showMessageDialog(this, component, title, messageType)
             return
         }
 
-        val textArea =
-            JTextArea(message).apply {
-                isEditable = false
-                lineWrap = true
-                wrapStyleWord = true
-                rows = 14
-                columns = 76
-                caretPosition = 0
-                font = java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, font.size)
-                border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
-            }
+        val textArea = wrappedDialogTextArea(
+            message = message,
+            rows = 14,
+            columns = 76,
+            monospaced = true,
+        )
         val scrollPane =
             JScrollPane(textArea).apply {
                 preferredSize = Dimension(760, 320)
             }
         JOptionPane.showMessageDialog(this, scrollPane, title, messageType)
     }
+
+    private fun messageNeedsWrappedDialog(message: String): Boolean =
+        message.contains('\n') || message.lineSequence().any { it.length > 76 }
+
+    private fun wrappedDialogRows(message: String): Int =
+        message.lineSequence()
+            .sumOf { line -> ((line.length + 57) / 58).coerceAtLeast(1) }
+            .coerceIn(4, 10)
+
+    private fun wrappedDialogTextArea(
+        message: String,
+        rows: Int,
+        columns: Int,
+        monospaced: Boolean,
+    ): JTextArea =
+        JTextArea(message).apply {
+            isEditable = false
+            lineWrap = true
+            wrapStyleWord = true
+            this.rows = rows
+            this.columns = columns
+            caretPosition = 0
+            if (monospaced) {
+                font = java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, font.size)
+            }
+            border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
+        }
 
     private fun messageContainsSelectableCommandSuggestions(message: String): Boolean {
         val commandPattern = Regex("^(python(?:3)?|pipx|pip|brew|adb|pwsh|powershell)(\\s|$)", RegexOption.IGNORE_CASE)
@@ -9290,6 +9329,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val failureDetails = rootMessage(exception)
         return when {
             exception.isArduconAlreadyCurrentUpdate() -> failureDetails
+            exception.isArduconRestartHandoffFailure() ->
+                "Arducon update was verified, but Arducon did not restart.\n\n" +
+                    "SerialSlinger finished sending and verifying the update, but Arducon stayed in bootloader mode instead of starting the updated firmware.\n\n" +
+                    failureDetails
             failureDetails.contains("hash mismatch", ignoreCase = true) ||
                 failureDetails.contains("size mismatch", ignoreCase = true) ->
                 "The Arducon update file could not be verified.\n\n$failureDetails"
@@ -9321,6 +9364,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         var current: Throwable? = this
         while (current != null) {
             if (current is ArduconAlreadyCurrentException) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    private fun Throwable.isArduconRestartHandoffFailure(): Boolean {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is ArduconRestartHandoffException) {
                 return true
             }
             current = current.cause
@@ -9867,6 +9921,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             } finally {
                 SwingUtilities.invokeLater {
                     backgroundWorkInProgress = false
+                    val errorDialogTitle = busyDialogTitleText
                     hideBusyDialog()
                     clearBusyProgress()
                     busyDialogTitleText = "Please Wait"
@@ -9883,7 +9938,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         if (showErrorDialog) {
                             showAppMessageDialog(
                                 exception.message ?: exception.toString(),
-                                title = busyDialogTitleText,
+                                title = errorDialogTitle,
                                 messageType = JOptionPane.WARNING_MESSAGE,
                             )
                         }
@@ -10647,7 +10702,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun setStatus(status: String) {
         statusLabel.text = status
-        busyDialogStatusLabel?.text = formatBusyDialogStatus(status)
+        updateBusyDialogStatusText(formatBusyDialogStatus(status))
     }
 
     private fun updateTemperatureRow(
@@ -10725,8 +10780,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
-        val detailLabel = JLabel(formatBusyDialogStatus(status)).apply {
-            alignmentX = Component.LEFT_ALIGNMENT
+        val detailLabel = wrappedBusyDialogTextArea(formatBusyDialogStatus(status)).apply {
             border = BorderFactory.createEmptyBorder(4, 0, 0, 0)
         }
         val progressBar = JProgressBar().apply {
@@ -10746,18 +10800,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             if (primaryMessage == "This may take several minutes.") {
                 add(detailLabel)
                 add(
-                    JLabel(primaryMessage).apply {
-                        alignmentX = Component.LEFT_ALIGNMENT
+                    wrappedBusyDialogTextArea(primaryMessage).apply {
                         border = BorderFactory.createEmptyBorder(4, 0, 0, 0)
                     },
                 )
             } else {
                 if (primaryMessage.isNotBlank()) {
-                    add(
-                        JLabel(primaryMessage).apply {
-                            alignmentX = Component.LEFT_ALIGNMENT
-                        },
-                    )
+                    add(wrappedBusyDialogTextArea(primaryMessage))
                 }
                 add(detailLabel)
             }
@@ -10778,6 +10827,29 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         busyDialogProgressPanel = progressPanel
         updateBusyDialogProgressUi()
         dialog.isVisible = true
+    }
+
+    private fun wrappedBusyDialogTextArea(message: String): JTextArea =
+        JTextArea(message).apply {
+            isEditable = false
+            isOpaque = false
+            lineWrap = true
+            wrapStyleWord = true
+            rows = 1
+            columns = 42
+            alignmentX = Component.LEFT_ALIGNMENT
+            maximumSize = Dimension(440, preferredSize.height * 4)
+            border = BorderFactory.createEmptyBorder()
+        }
+
+    private fun updateBusyDialogStatusText(message: String) {
+        busyDialogStatusLabel?.text = message
+        busyDialog?.let { dialog ->
+            if (dialog.isDisplayable) {
+                dialog.pack()
+                dialog.setLocationRelativeTo(this@SerialSlingerDesktopFrame)
+            }
+        }
     }
 
     private fun hideBusyDialog() {
@@ -10815,7 +10887,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         SwingUtilities.invokeLater {
             stopBusyProgressActivityTimer()
             busyProgressState = state
-            label?.let { busyDialogStatusLabel?.text = formatBusyDialogStatus(it) }
+            label?.let { updateBusyDialogStatusText(formatBusyDialogStatus(it)) }
             updateBusyDialogProgressUi()
         }
     }
@@ -10835,7 +10907,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     total = 100,
                     label = activityLabel,
                 )
-                busyDialogStatusLabel?.text = formatBusyDialogStatus(activityLabel)
+                updateBusyDialogStatusText(formatBusyDialogStatus(activityLabel))
                 updateBusyDialogProgressUi()
             }
             applyActivityProgress()

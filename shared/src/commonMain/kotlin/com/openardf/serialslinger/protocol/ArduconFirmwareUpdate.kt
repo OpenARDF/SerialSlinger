@@ -12,6 +12,9 @@ private const val StkCrcEop = 0x20
 private const val OptibootWatchdogExitSettleMs = 1_500L
 private const val ArduconRestartConfirmationFailureMessage =
     "Arducon update was sent, but the updated Arducon firmware could not be confirmed after restart."
+private const val ArduconRestartConfirmationAttempts = 3
+
+class ArduconRestartHandoffException(message: String) : IllegalStateException(message)
 
 data class ArduconReleaseInfo(
     val format: String,
@@ -361,13 +364,13 @@ object ArduconFirmwareUpdate {
         progress: (SignalSlingerFirmwareUpdateProgress) -> Unit,
     ) {
         var lastFailure: Throwable? = null
-        repeat(8) { attempt ->
+        repeat(ArduconRestartConfirmationAttempts) { attempt ->
             progress(
                 SignalSlingerFirmwareUpdateProgress(
                     "Restarting Arducon",
                     attempt,
-                    8,
-                    "Checking Arducon after restart (${attempt + 1}/8)",
+                    ArduconRestartConfirmationAttempts,
+                    "Checking Arducon app after restart (${attempt + 1}/$ArduconRestartConfirmationAttempts)",
                 ),
             )
             try {
@@ -377,23 +380,37 @@ object ArduconFirmwareUpdate {
             platformSleep(300)
             try {
                 transport.connect(release.firmwareUpdate.appBaud)
-                val appInfo = readAppInfo(transport, release)
+                val appInfo = readAppInfo(
+                    transport = transport,
+                    release = release,
+                    attempts = 1,
+                    drainTimeoutMs = 100,
+                    responseTimeoutMs = 500,
+                )
                     ?: error(ArduconRestartConfirmationFailureMessage)
                 validateAppInfoForRelease(appInfo, release, requireVersion = true)
                 return
             } catch (failure: Throwable) {
                 lastFailure = failure
             }
-        }
-        progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", 8, 8, "Checking whether Arducon is still in bootloader mode."))
-        if (bootloaderStillRespondsAfterLeaveProgramming(transport, release)) {
-            error(
-                "Arducon update was sent and verified, but the bootloader is still responding at " +
-                    "${release.firmwareUpdate.updateBaud} baud after the leave-programming command. " +
-                    "SerialSlinger sent STK500 LEAVE_PROGMODE, but this Optiboot image did not hand off to the " +
-                    "application at ${release.firmwareUpdate.appStartAddress.toHex32()}. Power-cycle or reconnect " +
-                    "Arducon to leave bootloader mode; if this repeats, the Arducon bootloader needs an exit-to-app fix.",
+            progress(
+                SignalSlingerFirmwareUpdateProgress(
+                    "Restarting Arducon",
+                    attempt + 1,
+                    ArduconRestartConfirmationAttempts,
+                    "Checking whether Arducon is still in bootloader mode.",
+                ),
             )
+            if (bootloaderStillRespondsAfterLeaveProgramming(transport, release)) {
+                throw ArduconRestartHandoffException(
+                    "Arducon update was sent and verified, but Arducon did not restart into normal operation. " +
+                        "The bootloader is still responding at ${release.firmwareUpdate.updateBaud} baud after " +
+                        "SerialSlinger sent STK500 LEAVE_PROGMODE. This means the flash and verification step " +
+                        "succeeded, but this Optiboot image did not hand off to the application at " +
+                        "${release.firmwareUpdate.appStartAddress.toHex32()}. Power-cycle or reconnect Arducon " +
+                        "to leave bootloader mode; if this repeats, the Arducon bootloader needs an exit-to-app fix.",
+                )
+            }
         }
         throw lastFailure ?: IllegalStateException(ArduconRestartConfirmationFailureMessage)
     }
@@ -413,12 +430,15 @@ object ArduconFirmwareUpdate {
     private fun readAppInfo(
         transport: SignalSlingerFirmwareUpdateTransport,
         release: ArduconReleaseInfo,
+        attempts: Int = 3,
+        drainTimeoutMs: Long = 300,
+        responseTimeoutMs: Long = 1_200,
     ): SignalSlingerAppInfo? {
         val allLines = mutableListOf<String>()
-        repeat(3) {
-            transport.readLines(300)
+        repeat(attempts.coerceAtLeast(1)) {
+            transport.readLines(drainTimeoutMs)
             transport.writeAscii("${release.firmwareUpdate.appInfoCommand}\r")
-            allLines += transport.readLines(1_200)
+            allLines += transport.readLines(responseTimeoutMs)
             SignalSlingerFirmwareUpdate.parseAppInfo(allLines)?.let { return it }
         }
         return null
