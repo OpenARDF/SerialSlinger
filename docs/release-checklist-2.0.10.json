@@ -1,0 +1,117 @@
+{
+  "version": "2.0.10",
+  "items": [
+    {
+      "id": "version-aligned",
+      "status": "done",
+      "evidence": "build.gradle.kts, package.json, package-lock.json, and Android versionName source aligned to 2.0.10 with serialSlingerVersionSuffix cleared.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts versionCode incremented from 17 to 18 for release 2.0.10.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "status": "done",
+      "evidence": "npm run jdeploy:release-preflight passed for serialslinger@2.0.10 and target tag v2.0.10; ./gradlew check, desktop jDeploy verification, :androidApp:bundleRelease, npm run jdeploy:pack-preview, local install, verify-install, local launch, gitleaks detect, and git diff --check passed.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "status": "done",
+      "evidence": "Release includes shared connection, update, clone, and desktop UI behavior; Android and desktop labels remain unified at 2.0.10.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "status": "done",
+      "evidence": "User confirmed hardware tests already passed before deployment request on 2026-06-14.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "desktop-regression",
+      "status": "done",
+      "evidence": "User confirmed hardware tests already passed before deployment request on 2026-06-14.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows Intel x64 packaged-app smoke host is available in this Mac Codex session; release requested after external hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows ARM64 packaged-app smoke host is available in this Mac Codex session; release requested after external hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux Intel x64 packaged-app smoke host is available in this Mac Codex session; release requested after external hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux ARM64 packaged-app smoke host is available in this Mac Codex session; release requested after external hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "android-release-notes",
+      "status": "done",
+      "evidence": "Release notes prepared: Improves SignalSlinger/Arducon connection handling, update recovery feedback, clone safety, and desktop text rendering.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "status": "done",
+      "evidence": "Release state prepared directly on main from origin/main; Development_Android will be fast-forwarded to the release commit after publication.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}
