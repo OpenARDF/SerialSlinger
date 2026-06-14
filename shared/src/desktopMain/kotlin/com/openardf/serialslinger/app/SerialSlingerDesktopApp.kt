@@ -694,7 +694,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val maximumTemperatureField = JTextField()
     private val maximumEverTemperatureField = JTextField()
     private val thermalShutdownThresholdField = JTextField()
-    private val syncTimeButton = JButton("Sync")
+    private val syncTimeButton = JButton("Sync").apply {
+        val buttonWidth = maxOf(
+            preferredSize.width,
+            JButton("Auto").preferredSize.width,
+        )
+        val stableSize = Dimension(buttonWidth, preferredSize.height)
+        preferredSize = stableSize
+        minimumSize = stableSize
+        maximumSize = stableSize
+    }
     private val setTimeButton = JButton("Set Time")
     private val currentTimeRowLabel = JLabel("Device Time")
     private val systemTimeRowLabel = JLabel("System Time")
@@ -715,7 +724,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val defaultRowLabelForeground = currentTimeRowLabel.foreground
     private val currentTimeRowPanel by lazy { buildCurrentTimeRow() }
     private val manualTimeRowPanel by lazy { buildManualTimeRow() }
-    private val currentTimeRowSpacer = Box.createHorizontalStrut(8)
     private val startTimeAbsoluteEditorRow by lazy { buildDateTimeEditorRow(startTimeSpinner, startTimeStatusLabel) }
     private val finishTimeAbsoluteEditorRow by lazy { buildDateTimeEditorRow(finishTimeSpinner, finishTimeStatusLabel) }
     private val startTimeRelativeEditorPanel by lazy {
@@ -2043,12 +2051,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun buildCurrentTimeRow(): JPanel {
-        return JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.X_AXIS)
+        return JPanel(BorderLayout(8, 0)).apply {
             isOpaque = false
-            add(currentTimeField)
-            add(currentTimeRowSpacer)
-            add(syncTimeButton)
+            add(currentTimeField, BorderLayout.CENTER)
+            add(syncTimeButton, BorderLayout.EAST)
         }
     }
 
@@ -10356,7 +10362,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         systemTimeField.isVisible = !manualMode
         manualTimeRowLabel.isVisible = manualMode
         manualTimeRowPanel.isVisible = manualMode
-        currentTimeRowSpacer.isVisible = !manualMode
         syncTimeButton.isVisible = !manualMode
         syncTimeButton.text = if (mode == TimeSetMode.AUTOMATIC) "Auto" else "Sync"
         if (::timeSetAutomaticMenuItem.isInitialized) {
