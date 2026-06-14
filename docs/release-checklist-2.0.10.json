@@ -87,29 +87,29 @@
     },
     {
       "id": "tag-pushed",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Pushed annotated tag v2.0.10 for release commit 25ab593d895786f38b1ba624f0fb17ffd73b3c53 to origin.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "workflow-published",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions jDeploy Release run 27513625429 completed successfully on 2026-06-14 for tag v2.0.10.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "release-verified",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub release v2.0.10 is published, non-draft, targets 25ab593d895786f38b1ba624f0fb17ffd73b3c53, and includes SerialSlinger 2.0.10 installer/package assets for macOS, Windows, Linux, jDeploy, and serialslinger-2.0.10.tgz.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "final-checklist-audit",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Final checklist updated after workflow and release verification; npm run release:checklist -- --file docs/release-checklist-2.0.10.json --phase final will be rerun before branch synchronization.",
       "skipReason": "",
       "skipRequestedBy": ""
     }
