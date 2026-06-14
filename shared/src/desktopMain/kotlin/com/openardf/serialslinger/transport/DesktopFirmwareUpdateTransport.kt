@@ -37,6 +37,19 @@ class DesktopFirmwareUpdateTransport(
         lineBuffer.clear()
     }
 
+    override fun pulseTargetReset(): Boolean {
+        val port = serialPort ?: return false
+        return runCatching {
+            port.setDTR()
+            runCatching { port.setRTS() }
+            Thread.sleep(ResetPulseMs)
+            port.clearDTR()
+            runCatching { port.clearRTS() }
+            Thread.sleep(ResetSettleMs)
+            lineBuffer.clear()
+        }.isSuccess
+    }
+
     override fun writeAscii(text: String) {
         writeBytes(text.encodeToByteArray())
     }
@@ -112,4 +125,9 @@ class DesktopFirmwareUpdateTransport(
             SerialPort.ONE_STOP_BIT,
             SerialPort.NO_PARITY,
         )
+
+    private companion object {
+        private const val ResetPulseMs = 120L
+        private const val ResetSettleMs = 500L
+    }
 }

@@ -8974,7 +8974,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "Sending update" -> "Sending update"
             "Verifying update" -> "Verifying update"
             "Restarting SignalSlinger" -> "Restarting SignalSlinger"
-            else -> "Updating SignalSlinger"
+            "Restarting Arducon" -> "Restarting Arducon"
+            else -> "Updating device"
         }
 
     private fun confirmResidentSignalSlingerUpdate(
@@ -9011,7 +9012,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         SwingUtilities.invokeAndWait {
             val choice = JOptionPane.showConfirmDialog(
                 this,
-                "SerialSlinger could not download the latest Arducon update.\n\nUse the resident Arducon $version update for $board?",
+                "The latest Arducon update could not be downloaded.\n\nUse the resident Arducon $version update for $board?",
                 "Update Arducon",
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE,
@@ -9169,14 +9170,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             exception.isArduconAlreadyCurrentUpdate() -> failureDetails
             failureDetails.contains("hash mismatch", ignoreCase = true) ||
                 failureDetails.contains("size mismatch", ignoreCase = true) ->
-                "SerialSlinger could not verify the Arducon update file.\n\n$failureDetails"
+                "The Arducon update file could not be verified.\n\n$failureDetails"
             failureDetails.contains("does not match package", ignoreCase = true) ||
                 failureDetails.contains("product", ignoreCase = true) ||
                 failureDetails.contains("protocol", ignoreCase = true) ->
                 "This update package is not compatible with the attached Arducon.\n\n$failureDetails"
             failureDetails.contains("did not enter update mode", ignoreCase = true) ||
                 failureDetails.contains("did not respond", ignoreCase = true) ||
-                failureDetails.contains("could not confirm the updated firmware", ignoreCase = true) ->
+                failureDetails.contains("could not confirm the updated firmware", ignoreCase = true) ||
+                failureDetails.contains("updated Arducon firmware could not be confirmed", ignoreCase = true) ->
                 "The update was interrupted or Arducon did not restart as expected.\n\nReconnect Arducon and try Update Arducon Firmware again.\n\n$failureDetails"
             else -> "Arducon update failed.\n\n$failureDetails"
         }
@@ -11757,12 +11759,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             is AutomaticFirmwareUpdateSelection.Arducon ->
                 if (selection.selection.source == ArduconReleaseSelectionSource.RESIDENT) {
                     if (selection.selection.downloadFailure != null) {
-                        "SerialSlinger could not download the latest Arducon release, but a resident update is available."
+                        "The latest Arducon release could not be downloaded, but a resident update is available."
                     } else {
-                        "SerialSlinger already has this Arducon update saved locally."
+                        "This Arducon update is already saved locally."
                     }
                 } else {
-                    "SerialSlinger downloaded the latest Arducon update."
+                    "Downloaded the latest Arducon update."
                 }
         }
     }

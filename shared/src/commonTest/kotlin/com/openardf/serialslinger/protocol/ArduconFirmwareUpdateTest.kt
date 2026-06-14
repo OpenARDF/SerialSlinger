@@ -96,6 +96,23 @@ class ArduconFirmwareUpdateTest {
         assertTrue(error.message.orEmpty().contains("STK500v1/Optiboot"))
     }
 
+    @Test
+    fun reportsArduconSpecificFailureWhenUpdatedAppDoesNotRestart() {
+        val hex = sampleHex()
+        val manifest = ArduconFirmwareUpdate.parseReleaseInfo(sampleManifest(hex.encodeToByteArray()))
+
+        val error = assertFailsWith<IllegalStateException> {
+            ArduconFirmwareUpdate.performUpdate(
+                transport = FakeStk500Transport(confirmRestart = false),
+                release = manifest,
+                hexText = hex,
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("updated Arducon firmware could not be confirmed"))
+        assertTrue(!error.message.orEmpty().contains("SignalSlinger"))
+    }
+
     private fun sampleManifest(
         updateBytes: ByteArray,
         bytesInImage: Int = 4,
@@ -176,7 +193,9 @@ class ArduconFirmwareUpdateTest {
         return ":" + (values + checksum).joinToString("") { it.toString(16).uppercase().padStart(2, '0') }
     }
 
-    private class FakeStk500Transport : SignalSlingerFirmwareUpdateTransport {
+    private class FakeStk500Transport(
+        private val confirmRestart: Boolean = true,
+    ) : SignalSlingerFirmwareUpdateTransport {
         val connectedBauds = mutableListOf<Int>()
         val reconfiguredBauds = mutableListOf<Int>()
         val asciiWrites = mutableListOf<String>()
@@ -248,6 +267,9 @@ class ArduconFirmwareUpdateTest {
 
         override fun readLines(timeoutMs: Long): List<String> {
             if (asciiWrites.lastOrNull() != "INF\r") {
+                return emptyList()
+            }
+            if (finalInfo && !confirmRestart) {
                 return emptyList()
             }
             return listOf(

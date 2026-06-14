@@ -9,6 +9,8 @@ private const val ArduconFormat = "arducon-release-info-v1"
 private const val StkOk = 0x10
 private const val StkInSync = 0x14
 private const val StkCrcEop = 0x20
+private const val ArduconRestartConfirmationFailureMessage =
+    "Arducon update was sent, but the updated Arducon firmware could not be confirmed after restart."
 
 data class ArduconReleaseInfo(
     val format: String,
@@ -306,13 +308,13 @@ object ArduconFirmwareUpdate {
         if (!recoverAlreadyWaiting) {
             transport.connect(release.firmwareUpdate.appBaud)
             val appInfo = readAppInfo(transport, release)
-                ?: error("SerialSlinger could not confirm Arducon firmware update support.")
+                ?: error("Could not confirm Arducon firmware update support.")
             validateAppInfoForRelease(appInfo, release, requireVersion = false)
             transport.writeAscii("${release.firmwareUpdate.appUpdateCommand}\r")
             transport.readLines(300)
             progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0, "Switching Arducon update connection to ${release.firmwareUpdate.updateBaud} baud"))
             require(transport.reconfigureBaudRate(release.firmwareUpdate.updateBaud)) {
-                "SerialSlinger could not switch the open Arducon serial connection to ${release.firmwareUpdate.updateBaud} baud."
+                "Could not switch the open Arducon serial connection to ${release.firmwareUpdate.updateBaud} baud."
             }
         } else {
             progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0, "Waiting for Arducon update mode"))
@@ -364,14 +366,14 @@ object ArduconFirmwareUpdate {
             try {
                 transport.connect(release.firmwareUpdate.appBaud)
                 val appInfo = readAppInfo(transport, release)
-                    ?: error("Arducon update was sent, but SerialSlinger could not confirm the updated firmware after restart.")
+                    ?: error(ArduconRestartConfirmationFailureMessage)
                 validateAppInfoForRelease(appInfo, release, requireVersion = true)
                 return
             } catch (failure: Throwable) {
                 lastFailure = failure
             }
         }
-        throw lastFailure ?: IllegalStateException("Arducon update was sent, but SerialSlinger could not confirm the updated firmware after restart.")
+        throw lastFailure ?: IllegalStateException(ArduconRestartConfirmationFailureMessage)
     }
 
     private fun readAppInfo(
