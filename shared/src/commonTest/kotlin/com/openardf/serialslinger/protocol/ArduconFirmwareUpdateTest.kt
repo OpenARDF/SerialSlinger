@@ -80,6 +80,33 @@ class ArduconFirmwareUpdateTest {
     }
 
     @Test
+    fun refusesToDowngradeArduconAcrossBootloaderBoundary() {
+        val hex = sampleHex()
+        val manifest = ArduconFirmwareUpdate.parseReleaseInfo(
+            sampleManifest(
+                updateBytes = hex.encodeToByteArray(),
+                version = "2.0.9",
+            ),
+        )
+        val transport = FakeStk500Transport(appVersion = "2.1.0")
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            ArduconFirmwareUpdate.performUpdate(
+                transport = transport,
+                release = manifest,
+                hexText = hex,
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("cannot be downgraded to 2.0.9"))
+        assertTrue(error.message.orEmpty().contains("bootloader"))
+        assertEquals(listOf("INF\r"), transport.asciiWrites)
+        assertEquals(emptyList(), transport.reconfiguredBauds)
+        assertEquals(emptyList(), transport.binaryWrites)
+        assertEquals(0, transport.resetPulseCount)
+    }
+
+    @Test
     fun reportsWhenAppKeepsRunningAfterBootloaderEntryCommand() {
         val hex = sampleHex()
         val manifest = ArduconFirmwareUpdate.parseReleaseInfo(sampleManifest(hex.encodeToByteArray()))
@@ -117,15 +144,16 @@ class ArduconFirmwareUpdateTest {
         updateBytes: ByteArray,
         bytesInImage: Int = 4,
         product: String = "Arducon",
+        version: String = "2.0.0",
     ): String {
         return """
             {
               "format": "arducon-release-info-v1",
               "product": "$product",
-              "version": "2.0.0",
+              "version": "$version",
               "board": "ATmega328P",
               "update": {
-                "fileName": "Arducon-Update-v2.0.0-ATmega328P.hex",
+                "fileName": "Arducon-Update-v$version-ATmega328P.hex",
                 "startAddress": "0x0000",
                 "bytesInImage": $bytesInImage
               },
@@ -154,7 +182,7 @@ class ArduconFirmwareUpdateTest {
               },
               "files": [
                 {
-                  "fileName": "Arducon-Update-v2.0.0-ATmega328P.hex",
+                  "fileName": "Arducon-Update-v$version-ATmega328P.hex",
                   "kind": "update",
                   "purpose": "Application HEX for normal bootloader updates.",
                   "sizeBytes": ${updateBytes.size},
@@ -195,6 +223,7 @@ class ArduconFirmwareUpdateTest {
 
     private class FakeStk500Transport(
         private val confirmRestart: Boolean = true,
+        private val appVersion: String = "2.0.0",
     ) : SignalSlingerFirmwareUpdateTransport {
         val connectedBauds = mutableListOf<Int>()
         val reconfiguredBauds = mutableListOf<Int>()
@@ -274,7 +303,7 @@ class ArduconFirmwareUpdateTest {
             }
             return listOf(
                 "* INF product=Arducon update=UPD",
-                "* INF sw=2.0.0 hw=ATmega328P-16 app=0x0000 appbaud=57600 baud=115200 bl=unknown proto=stk500v1",
+                "* INF sw=$appVersion hw=ATmega328P-16 app=0x0000 appbaud=57600 baud=115200 bl=unknown proto=stk500v1",
             )
         }
 

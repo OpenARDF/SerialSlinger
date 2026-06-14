@@ -9263,6 +9263,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             exception.isArduconRestartHandoffFailure() ->
                 "Arducon update was verified, but Arducon did not restart.\n\n" +
                     "Manually restart the Arducon by cycling power."
+            failureDetails.contains("cannot be downgraded", ignoreCase = true) ||
+                failureDetails.contains("bootloader that is not compatible", ignoreCase = true) ->
+                "This Arducon cannot be downgraded to the selected firmware.\n\n$failureDetails"
             failureDetails.contains("hash mismatch", ignoreCase = true) ||
                 failureDetails.contains("size mismatch", ignoreCase = true) ->
                 "The Arducon update file could not be verified.\n\n$failureDetails"

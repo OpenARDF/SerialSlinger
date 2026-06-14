@@ -13,6 +13,7 @@ private const val OptibootWatchdogExitSettleMs = 1_500L
 private const val ArduconRestartConfirmationFailureMessage =
     "Arducon update was sent, but the updated Arducon firmware could not be confirmed after restart."
 private const val ArduconRestartConfirmationAttempts = 3
+private const val ArduconBootloaderIncompatibleVersion = "2.1.0"
 
 class ArduconRestartHandoffException(message: String) : IllegalStateException(message)
 
@@ -466,11 +467,23 @@ object ArduconFirmwareUpdate {
         require(info.bootloaderProtocol.equals(release.firmwareUpdate.bootloaderProtocol, ignoreCase = true)) {
             "Connected bootloader protocol `${info.bootloaderProtocol.orEmpty()}` does not match package protocol `${release.firmwareUpdate.bootloaderProtocol}`."
         }
+        require(!wouldDowngradeAcrossArduconBootloaderBoundary(info.softwareVersion, release.version)) {
+            "Arducon firmware ${info.softwareVersion.orEmpty().ifBlank { "unknown" }} cannot be downgraded to ${release.version}. " +
+                "Arducon 2.1.0 and newer use a bootloader that is not compatible with earlier firmware."
+        }
         if (requireVersion) {
             require(info.softwareVersion == release.version) {
                 "Updated Arducon reported firmware ${info.softwareVersion.orEmpty().ifBlank { "unknown" }} instead of ${release.version}."
             }
         }
+    }
+
+    private fun wouldDowngradeAcrossArduconBootloaderBoundary(
+        currentVersion: String?,
+        targetVersion: String,
+    ): Boolean {
+        return SignalSlingerFirmwareUpdate.compareVersionStrings(currentVersion, ArduconBootloaderIncompatibleVersion) >= 0 &&
+            SignalSlingerFirmwareUpdate.compareVersionStrings(targetVersion, ArduconBootloaderIncompatibleVersion) < 0
     }
 
     private fun trySync(transport: SignalSlingerFirmwareUpdateTransport): Boolean =

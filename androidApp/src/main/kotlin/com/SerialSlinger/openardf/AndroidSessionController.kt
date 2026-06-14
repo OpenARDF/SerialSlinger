@@ -6702,6 +6702,9 @@ object AndroidSessionController {
     private fun friendlyArduconUpdateFailureMessage(error: Throwable?): String {
         val details = rootMessage(error)
         return when {
+            details.contains("cannot be downgraded", ignoreCase = true) ||
+                details.contains("bootloader that is not compatible", ignoreCase = true) ->
+                "This Arducon cannot be downgraded to the selected firmware.\n\n$details"
             details.contains("hash mismatch", ignoreCase = true) ||
                 details.contains("size mismatch", ignoreCase = true) ->
                 "SerialSlinger could not verify the Arducon update file.\n\n$details"
