@@ -36,6 +36,7 @@ data class DesktopDisplayPreferences(
     val defaultEventLengthMinutes: Int = 6 * 60,
     val advancedModeEnabled: Boolean = false,
     val automaticFirmwareUpdatesEnabled: Boolean = true,
+    val serialSlingerUpdateChecksEnabled: Boolean = true,
     val timedEventDefaultFrequencies: TimedEventDefaultFrequencies = FrequencySupport.defaultTimedEventFrequencies,
 )
 
@@ -57,6 +58,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
     private const val keyDefaultEventLengthMinutes = "defaultEventLengthMinutes"
     private const val keyAdvancedModeEnabled = "advancedModeEnabled"
     private const val keyAutomaticFirmwareUpdatesEnabled = "automaticFirmwareUpdatesEnabled"
+    private const val keySerialSlingerUpdateChecksEnabled = "serialSlingerUpdateChecksEnabled"
     private const val keyTimedEventDefaultFrequency1Hz = "timedEventDefaultFrequency1Hz"
     private const val keyTimedEventDefaultFrequency2Hz = "timedEventDefaultFrequency2Hz"
     private const val keyTimedEventDefaultFrequency3Hz = "timedEventDefaultFrequency3Hz"
@@ -88,6 +90,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
             defaultEventLengthMinutes = preferences.getInt(keyDefaultEventLengthMinutes, 6 * 60).coerceIn(10, 24 * 60),
             advancedModeEnabled = preferences.getBoolean(keyAdvancedModeEnabled, false),
             automaticFirmwareUpdatesEnabled = preferences.getBoolean(keyAutomaticFirmwareUpdatesEnabled, true),
+            serialSlingerUpdateChecksEnabled = preferences.getBoolean(keySerialSlingerUpdateChecksEnabled, true),
             timedEventDefaultFrequencies =
                 FrequencySupport.sanitizeTimedEventDefaultFrequencies(
                     TimedEventDefaultFrequencies(
@@ -125,6 +128,7 @@ object PreferencesDesktopDisplayPreferencesStore : DesktopDisplayPreferencesStor
         this.preferences.putInt(keyDefaultEventLengthMinutes, preferences.defaultEventLengthMinutes.coerceIn(10, 24 * 60))
         this.preferences.putBoolean(keyAdvancedModeEnabled, preferences.advancedModeEnabled)
         this.preferences.putBoolean(keyAutomaticFirmwareUpdatesEnabled, preferences.automaticFirmwareUpdatesEnabled)
+        this.preferences.putBoolean(keySerialSlingerUpdateChecksEnabled, preferences.serialSlingerUpdateChecksEnabled)
         this.preferences.putLong(keyTimedEventDefaultFrequency1Hz, sanitizedTimedEventDefaults.frequency1Hz)
         this.preferences.putLong(keyTimedEventDefaultFrequency2Hz, sanitizedTimedEventDefaults.frequency2Hz)
         this.preferences.putLong(keyTimedEventDefaultFrequency3Hz, sanitizedTimedEventDefaults.frequency3Hz)

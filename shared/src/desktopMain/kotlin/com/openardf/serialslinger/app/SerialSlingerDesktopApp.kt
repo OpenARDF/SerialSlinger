@@ -776,6 +776,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private lateinit var showRawSerialMenuItem: JCheckBoxMenuItem
     private lateinit var updateFirmwareMenuItem: JMenuItem
     private lateinit var automaticFirmwareUpdatesMenuItem: JCheckBoxMenuItem
+    private lateinit var serialSlingerUpdateChecksMenuItem: JCheckBoxMenuItem
     private lateinit var frequencyKhzMenuItem: JRadioButtonMenuItem
     private lateinit var frequencyMhzMenuItem: JRadioButtonMenuItem
     private lateinit var temperatureCMenuItem: JRadioButtonMenuItem
@@ -1091,6 +1092,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 DesktopLogEntry("Current log file: ${sessionLog.currentLogFile()}", DesktopLogCategory.APP),
             ),
         )
+        SwingUtilities.invokeLater { maybeShowSerialSlingerUpdateNotice() }
     }
 
     private fun buildHeader(): JPanel {
@@ -1187,6 +1189,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     add(
                         JMenuItem("Set Frequencies to Defaults").apply {
                             addActionListener { applyTimedEventDefaultFrequenciesFromMenu() }
+                        },
+                    )
+                    addSeparator()
+                    serialSlingerUpdateChecksMenuItem = JCheckBoxMenuItem(
+                        "Check For SerialSlinger Updates",
+                        displayPreferences.serialSlingerUpdateChecksEnabled,
+                    ).apply {
+                        addActionListener { setSerialSlingerUpdateChecksEnabled(isSelected) }
+                    }
+                    add(serialSlingerUpdateChecksMenuItem)
+                    add(
+                        JMenuItem("SerialSlinger Update Status...").apply {
+                            addActionListener { showSerialSlingerUpdateStatusDialog() }
                         },
                     )
                     addSeparator()
@@ -1363,6 +1378,64 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             "About SerialSlinger",
             JOptionPane.INFORMATION_MESSAGE,
         )
+    }
+
+    private fun maybeShowSerialSlingerUpdateNotice() {
+        if (!displayPreferences.serialSlingerUpdateChecksEnabled) {
+            return
+        }
+        val status = DesktopAppUpdateSupport.status(currentVersion = SerialSlingerAppVersion.value)
+        if (DesktopAppUpdateSupport.shouldShowAutomaticNotice(status)) {
+            showSerialSlingerUpdateStatusDialog(status)
+        }
+    }
+
+    private fun showSerialSlingerUpdateStatusDialog(
+        status: DesktopAppUpdateStatus = DesktopAppUpdateSupport.status(currentVersion = SerialSlingerAppVersion.value),
+    ) {
+        val options = arrayOf("Open Update Page", "OK")
+        val choice = JOptionPane.showOptionDialog(
+            this,
+            DesktopAppUpdateSupport.dialogMessage(status),
+            "SerialSlinger Updates",
+            JOptionPane.DEFAULT_OPTION,
+            if (status.jdeployUpdatesAvailable == true) JOptionPane.INFORMATION_MESSAGE else JOptionPane.PLAIN_MESSAGE,
+            null,
+            options,
+            options[0],
+        )
+        if (choice == 0) {
+            runCatching { openSerialSlingerUpdatePage() }
+                .onFailure { error ->
+                    JOptionPane.showMessageDialog(
+                        this,
+                        error.message ?: "Could not open the SerialSlinger update page.",
+                        "SerialSlinger Updates",
+                        JOptionPane.WARNING_MESSAGE,
+                    )
+                }
+        }
+        appendLog(
+            "SerialSlinger Update Check",
+            listOf(
+                DesktopLogEntry(
+                    when (status.jdeployUpdatesAvailable) {
+                        true -> "jDeploy reported a SerialSlinger update is available."
+                        false -> "jDeploy did not report a SerialSlinger update at launch."
+                        null -> "jDeploy update status was unavailable in this run."
+                    },
+                    DesktopLogCategory.APP,
+                ),
+            ),
+        )
+    }
+
+    private fun openSerialSlingerUpdatePage() {
+        require(Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+            "Desktop browser integration is not supported on this system. Open ${DesktopAppUpdateSupport.updatePageUrl} manually."
+        }
+        Desktop.getDesktop().browse(URI(DesktopAppUpdateSupport.updatePageUrl))
+        setStatus("Opened SerialSlinger update page.")
     }
 
     private fun showAppMessageDialog(
@@ -9955,6 +10028,24 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         updateAdvancedDeviceDataRefreshTimer()
         updateWritableControlAvailability(backgroundWorkInProgress)
         setStatus(if (enabled) "Advanced mode enabled." else "Advanced mode disabled.")
+    }
+
+    private fun setSerialSlingerUpdateChecksEnabled(enabled: Boolean) {
+        if (displayPreferences.serialSlingerUpdateChecksEnabled == enabled) {
+            return
+        }
+        displayPreferences = displayPreferences.copy(serialSlingerUpdateChecksEnabled = enabled)
+        persistDisplayPreferences()
+        if (::serialSlingerUpdateChecksMenuItem.isInitialized) {
+            serialSlingerUpdateChecksMenuItem.isSelected = enabled
+        }
+        setStatus(
+            if (enabled) {
+                "SerialSlinger update checks enabled."
+            } else {
+                "SerialSlinger update checks disabled."
+            },
+        )
     }
 
     private fun updateAdvancedMenuItems() {
