@@ -9,6 +9,7 @@ private const val ArduconFormat = "arducon-release-info-v1"
 private const val StkOk = 0x10
 private const val StkInSync = 0x14
 private const val StkCrcEop = 0x20
+private const val OptibootWatchdogExitSettleMs = 1_500L
 private const val ArduconRestartConfirmationFailureMessage =
     "Arducon update was sent, but the updated Arducon firmware could not be confirmed after restart."
 
@@ -293,10 +294,12 @@ object ArduconFirmwareUpdate {
 
         progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", pages.size, pages.size))
         stkCommand(transport, byteArrayOf(0x51), 0, "leave programming mode")
-        if (transport.pulseTargetReset()) {
+        val resetPulsed = transport.pulseTargetReset()
+        if (resetPulsed) {
             progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", pages.size, pages.size, "Pulsed Arducon reset after update."))
         } else {
             progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", pages.size, pages.size, "Waiting for Arducon app after leaving bootloader."))
+            platformSleep(OptibootWatchdogExitSettleMs)
         }
         confirmUpdatedApp(transport, release, progress)
     }
@@ -375,7 +378,26 @@ object ArduconFirmwareUpdate {
                 lastFailure = failure
             }
         }
+        if (bootloaderStillRespondsAfterLeaveProgramming(transport, release)) {
+            error(
+                "Arducon update was sent and verified, but the bootloader is still responding at " +
+                    "${release.firmwareUpdate.updateBaud} baud after the leave-programming command. " +
+                    "The bootloader did not hand off to the application at ${release.firmwareUpdate.appStartAddress.toHex32()}.",
+            )
+        }
         throw lastFailure ?: IllegalStateException(ArduconRestartConfirmationFailureMessage)
+    }
+
+    private fun bootloaderStillRespondsAfterLeaveProgramming(
+        transport: SignalSlingerFirmwareUpdateTransport,
+        release: ArduconReleaseInfo,
+    ): Boolean {
+        return runCatching {
+            transport.disconnect()
+            platformSleep(200)
+            transport.connect(release.firmwareUpdate.updateBaud)
+            trySync(transport)
+        }.getOrDefault(false)
     }
 
     private fun readAppInfo(

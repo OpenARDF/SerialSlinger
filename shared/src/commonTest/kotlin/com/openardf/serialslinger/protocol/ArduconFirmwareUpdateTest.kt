@@ -97,7 +97,7 @@ class ArduconFirmwareUpdateTest {
     }
 
     @Test
-    fun reportsArduconSpecificFailureWhenUpdatedAppDoesNotRestart() {
+    fun reportsWhenBootloaderStillRespondsAfterLeaveProgramming() {
         val hex = sampleHex()
         val manifest = ArduconFirmwareUpdate.parseReleaseInfo(sampleManifest(hex.encodeToByteArray()))
 
@@ -109,8 +109,8 @@ class ArduconFirmwareUpdateTest {
             )
         }
 
-        assertTrue(error.message.orEmpty().contains("updated Arducon firmware could not be confirmed"))
-        assertTrue(!error.message.orEmpty().contains("SignalSlinger"))
+        assertTrue(error.message.orEmpty().contains("bootloader is still responding"))
+        assertTrue(error.message.orEmpty().contains("did not hand off to the application"))
     }
 
     private fun sampleManifest(
