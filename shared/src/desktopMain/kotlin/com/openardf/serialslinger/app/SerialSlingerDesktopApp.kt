@@ -2716,8 +2716,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val selectedPath = selectedProbe()?.portInfo?.systemPortPath
         val connectedAliasGroup = connectedAliasGroupKey()
         knownProbeResults.keys.retainAll(freshPorts.map { it.portInfo.systemPortPath }.toSet())
+        val connectedPortPath = currentConnectedPortPath.takeIf {
+            currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
+        }
         val merged = freshPorts.map { fresh ->
-            val mergedProbe = knownProbeResults[fresh.portInfo.systemPortPath] ?: fresh
+            val mergedProbe = if (fresh.portInfo.systemPortPath == connectedPortPath) {
+                connectedDeviceProbe(fresh.portInfo).also { knownProbeResults[fresh.portInfo.systemPortPath] = it }
+            } else {
+                knownProbeResults[fresh.portInfo.systemPortPath] ?: fresh
+            }
             if (
                 connectedAliasGroup != null &&
                 fresh.portInfo.systemPortPath != currentConnectedPortPath &&
@@ -8957,8 +8964,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 )
             } else {
                 clearFormForUnread()
+                showConnectionIndicator(
+                    ConnectionIndicatorState.DISCONNECTED,
+                    "Arducon update completed, but the device did not reload. Reconnect Arducon and click Find Device.",
+                )
             }
-            setStatus("Arducon update completed.")
+            setStatus(
+                if (refreshedConnection != null) {
+                    "Arducon update completed."
+                } else {
+                    "Arducon update completed, but the device did not reload."
+                },
+            )
         }
     }
 
@@ -11228,6 +11245,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return (portComboBox.selectedItem as? SignalSlingerPortProbe)?.takeUnless { it.isPlaceholder }
     }
 
+    private fun connectedDeviceProbe(portInfo: com.openardf.serialslinger.transport.DesktopSerialPortInfo): SignalSlingerPortProbe {
+        val snapshot = currentState?.snapshot ?: loadedSnapshot
+        val productName = snapshot?.info?.productName?.takeIf { it.isNotBlank() }
+            ?: selectedDeviceMode().productName
+        return SignalSlingerPortProbe(
+            portInfo = portInfo,
+            state = PortProbeState.DETECTED,
+            summary = "$productName connected",
+            productName = productName,
+            appBaud = snapshot?.info?.appBaud,
+            lastProbedAtMs = System.currentTimeMillis(),
+        )
+    }
+
     private fun noConnectedDeviceProbe(): SignalSlingerPortProbe {
         return SignalSlingerPortProbe(
             portInfo = com.openardf.serialslinger.transport.DesktopSerialPortInfo(
@@ -11663,24 +11694,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
         }
         autoDetectNoDeviceFound = false
-        val productName = connection.result.state.snapshot?.info?.productName ?: "SignalSlinger"
         showConnectionIndicator(ConnectionIndicatorState.CONNECTED, connectionIndicatorText(connection.result.state.snapshot, connection.portPath))
         portMemory.saveLastWorkingPortPath(connection.portPath)
         try {
-            knownProbeResults[connection.portPath] = knownProbeResults[connection.portPath]?.copy(
-                state = PortProbeState.DETECTED,
-                summary = "$productName detected",
-                productName = productName,
-                appBaud = connection.result.state.snapshot?.info?.appBaud,
-                lastProbedAtMs = System.currentTimeMillis(),
-            ) ?: SignalSlingerPortProbe(
-                portInfo = resolvePortInfoFor(connection.portPath),
-                state = PortProbeState.DETECTED,
-                summary = "$productName detected",
-                productName = productName,
-                appBaud = connection.result.state.snapshot?.info?.appBaud,
-                lastProbedAtMs = System.currentTimeMillis(),
-            )
+            knownProbeResults[connection.portPath] = connectedDeviceProbe(resolvePortInfoFor(connection.portPath))
             connection.clockAnchor?.let { anchor ->
                 applyClockDisplayAnchor(anchor)
                 updateClockPhaseWarning(anchor.phaseErrorMillis)
