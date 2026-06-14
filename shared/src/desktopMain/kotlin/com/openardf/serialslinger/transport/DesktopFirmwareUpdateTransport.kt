@@ -7,6 +7,7 @@ class DesktopFirmwareUpdateTransport(
     private val portDescriptor: String,
     private val readQuietPeriodMs: Long = 120,
     private val pollIntervalMs: Long = 20,
+    private val stopBitsForBaudRate: (Int) -> DesktopSerialStopBits = { DesktopSerialStopBits.ONE },
 ) : SignalSlingerFirmwareUpdateTransport {
     private var serialPort: SerialPort? = null
     private val lineBuffer = DesktopSerialLineBuffer()
@@ -122,7 +123,7 @@ class DesktopFirmwareUpdateTransport(
         port.setComPortParameters(
             baudRate,
             8,
-            SerialPort.ONE_STOP_BIT,
+            stopBitsForBaudRate(baudRate).serialCommValue,
             SerialPort.NO_PARITY,
         )
 

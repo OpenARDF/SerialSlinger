@@ -58,10 +58,12 @@ import com.openardf.serialslinger.session.FirmwareCloneSession
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.session.SettingVerification
-import com.openardf.serialslinger.transport.DesktopSerialPortInfo
 import com.openardf.serialslinger.transport.DesktopFirmwareUpdateTransport
+import com.openardf.serialslinger.transport.DesktopSerialPortInfo
+import com.openardf.serialslinger.transport.DesktopSerialStopBits
 import com.openardf.serialslinger.transport.DesktopSerialTransport
 import com.openardf.serialslinger.transport.DeviceTransport
+import com.openardf.serialslinger.transport.arduconStopBitsForBaudRate
 import java.awt.AWTEvent
 import java.awt.Desktop
 import java.awt.Dialog
@@ -8915,7 +8917,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentTransport = null
         currentConnectedPortPath = null
 
-        val delegate = DesktopFirmwareUpdateTransport(portPath)
+        val delegate = DesktopFirmwareUpdateTransport(
+            portDescriptor = portPath,
+            stopBitsForBaudRate = arduconStopBitsForBaudRate(manifest.firmwareUpdate.appBaud),
+        )
         val updateTransport = loggingFirmwareUpdateTransport(delegate, logEntries)
         try {
             ArduconFirmwareUpdate.performUpdate(
@@ -11426,6 +11431,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             baudRate = 57_600,
             lineTerminator = "\r",
             wakePreamble = "",
+            stopBits = DesktopSerialStopBits.TWO,
         )
     }
 

@@ -19,6 +19,7 @@ class DesktopSerialTransport(
     private val readTimeoutMs: Long = 1_000,
     private val quietPeriodMs: Long = 120,
     private val pollIntervalMs: Long = 20,
+    private val stopBits: DesktopSerialStopBits = DesktopSerialStopBits.ONE,
 ) : DeviceTransport {
     private var serialPort: SerialPort? = null
     private val lineBuffer = DesktopSerialLineBuffer()
@@ -35,7 +36,7 @@ class DesktopSerialTransport(
         port.setComPortParameters(
             baudRate,
             8,
-            SerialPort.ONE_STOP_BIT,
+            stopBits.serialCommValue,
             SerialPort.NO_PARITY,
         )
         port.setComPortTimeouts(SerialPort.TIMEOUT_NONBLOCKING, 0, 0)

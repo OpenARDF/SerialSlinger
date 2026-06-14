@@ -2,6 +2,7 @@ package com.openardf.serialslinger.app
 
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.transport.DesktopSerialPortInfo
+import com.openardf.serialslinger.transport.DesktopSerialStopBits
 import com.openardf.serialslinger.transport.DesktopSerialTransport
 import com.openardf.serialslinger.transport.DeviceTransport
 
@@ -222,6 +223,7 @@ object SignalSlingerPortDiscovery {
             wakePreamble = "",
             readTimeoutMs = 500,
             quietPeriodMs = 80,
+            stopBits = DesktopSerialStopBits.TWO,
         )
         return try {
             transport.connect()

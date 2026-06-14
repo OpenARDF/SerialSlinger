@@ -1,5 +1,6 @@
 package com.openardf.serialslinger.transport
 
+import com.fazecast.jSerialComm.SerialPort
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -56,5 +57,20 @@ class DesktopSerialTransportTest {
         assertTrue(DesktopSerialTransport.shouldRetryOpenPort(errorCode = 2, attemptIndex = 2, maxAttempts = 4))
         assertFalse(DesktopSerialTransport.shouldRetryOpenPort(errorCode = 2, attemptIndex = 3, maxAttempts = 4))
         assertFalse(DesktopSerialTransport.shouldRetryOpenPort(errorCode = 5, attemptIndex = 0, maxAttempts = 4))
+    }
+
+    @Test
+    fun mapsStopBitChoicesToJSerialCommConstants() {
+        assertEquals(SerialPort.ONE_STOP_BIT, DesktopSerialStopBits.ONE.serialCommValue)
+        assertEquals(SerialPort.TWO_STOP_BITS, DesktopSerialStopBits.TWO.serialCommValue)
+    }
+
+    @Test
+    fun usesTwoStopBitsForArduconAppBaudOnly() {
+        val stopBitsForBaudRate = arduconStopBitsForBaudRate(appBaud = 57_600)
+
+        assertEquals(DesktopSerialStopBits.TWO, stopBitsForBaudRate(57_600))
+        assertEquals(DesktopSerialStopBits.ONE, stopBitsForBaudRate(115_200))
+        assertEquals(DesktopSerialStopBits.ONE, stopBitsForBaudRate(9_600))
     }
 }

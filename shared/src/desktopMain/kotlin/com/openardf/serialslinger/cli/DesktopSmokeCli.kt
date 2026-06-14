@@ -15,6 +15,7 @@ import com.openardf.serialslinger.protocol.ArduconFirmwareUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
 import com.openardf.serialslinger.transport.DesktopFirmwareUpdateTransport
 import com.openardf.serialslinger.transport.DesktopSerialTransport
+import com.openardf.serialslinger.transport.arduconStopBitsForBaudRate
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
@@ -394,7 +395,10 @@ private fun runArduconUpdate(
     val hexFile = manifestFile.parent.resolve(updateFile.fileName)
     val hexBytes = Files.readAllBytes(hexFile)
     ArduconFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
-    val transport = DesktopFirmwareUpdateTransport(port)
+    val transport = DesktopFirmwareUpdateTransport(
+        portDescriptor = port,
+        stopBitsForBaudRate = arduconStopBitsForBaudRate(release.firmwareUpdate.appBaud),
+    )
     try {
         ArduconFirmwareUpdate.performUpdate(
             transport = transport,
