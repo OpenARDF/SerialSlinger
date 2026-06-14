@@ -10,6 +10,7 @@ internal data class DesktopAppUpdateStatus(
 
 internal object DesktopAppUpdateSupport {
     const val updatePageUrl = "https://www.jdeploy.com/gh/OpenARDF/SerialSlinger"
+    const val aboutUpdateCheckHref = "serialslinger-check-updates"
 
     private const val jdeployUpdatesAvailableProperty = "jdeploy.updatesAvailable"
     private const val jdeployAppVersionProperty = "jdeploy.app.version"

@@ -1359,18 +1359,25 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     append("<div>Platform: Desktop</div>")
                     append("<div>Project: <a href='${SerialSlingerVersion.projectUrl}'>${SerialSlingerVersion.projectUrl}</a></div>")
                     append("<div>License: <a href='${SerialSlingerVersion.licenseUrl}'>${SerialSlingerVersion.licenseLabel}</a></div>")
+                    append("<div>Updates: <a href='${DesktopAppUpdateSupport.aboutUpdateCheckHref}'>Check for updates</a></div>")
                     append("</body></html>")
                 },
             ).apply {
                 isEditable = false
                 isOpaque = false
                 addHyperlinkListener { event ->
-                    if (event.eventType == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED &&
-                        Desktop.isDesktopSupported() &&
-                        Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)
-                    ) {
-                        runCatching {
-                            Desktop.getDesktop().browse(URI(event.url.toString()))
+                    if (event.eventType != javax.swing.event.HyperlinkEvent.EventType.ACTIVATED) {
+                        return@addHyperlinkListener
+                    }
+                    if (event.description == DesktopAppUpdateSupport.aboutUpdateCheckHref) {
+                        showSerialSlingerUpdateStatusDialog()
+                        return@addHyperlinkListener
+                    }
+                    if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                        event.url?.let { url ->
+                            runCatching {
+                                Desktop.getDesktop().browse(URI(url.toString()))
+                            }
                         }
                     }
                 }
@@ -6349,7 +6356,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             addAll(traceEntriesToLogEntries(result.traceEntries))
             add(
                 DesktopLogEntry(
-                    message = "Device settings loaded.",
+                    message =
+                        "Device settings loaded. " +
+                            "Accepted ${DesktopLoadValidationSupport.settingsOrStatusResponseCount(result)} settings/status response(s).",
                     category = DesktopLogCategory.DEVICE,
                     timestampMs = latestTraceTimestamp(result.traceEntries),
                 ),
@@ -11324,12 +11333,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         portPath: String,
         result: DeviceLoadResult,
     ) {
-        require(result.linesReceived.isNotEmpty()) {
-            "No response from device on `$portPath` while loading settings."
-        }
-        require(result.linesReceived.any { SignalSlingerProtocolCodec.parseReportLine(it) != null }) {
-            "No recognizable device response on `$portPath` while loading settings."
-        }
+        DesktopLoadValidationSupport.validate(portPath, result)?.let { error(it) }
     }
 
     private fun drainResidualStartupReportAfterVer(
