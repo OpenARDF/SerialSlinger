@@ -154,9 +154,82 @@ import javax.swing.Timer
 import javax.swing.WindowConstants
 import javax.swing.SpinnerDateModel
 import javax.swing.border.TitledBorder
+import javax.swing.filechooser.FileFilter
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
 import javax.swing.filechooser.FileNameExtensionFilter
+
+private object ArduconReleaseInfoFileFilter : FileFilter() {
+    override fun accept(file: File): Boolean {
+        return file.isDirectory ||
+            (
+                file.isFile &&
+                    file.name.startsWith("Arducon-Release-Info-", ignoreCase = true) &&
+                    file.extension.equals("json", ignoreCase = true)
+                )
+    }
+
+    override fun getDescription(): String = "Arducon release info folder or JSON (*.json)"
+}
+
+internal object DesktopLocalReleaseSelectionSupport {
+    fun resolveArduconUpdateManifestSelection(selection: File): File {
+        require(selection.exists()) {
+            "Selected Arducon update path `${selection.path}` does not exist."
+        }
+        if (selection.isFile) {
+            validateArduconUpdateManifest(selection)
+            return selection
+        }
+        require(selection.isDirectory) {
+            "Selected Arducon update path `${selection.path}` is not a file or folder."
+        }
+        val candidates = Files.walk(selection.toPath()).use { paths ->
+            paths
+                .iterator()
+                .asSequence()
+                .filter { Files.isRegularFile(it) }
+                .filter { path ->
+                    val name = path.fileName.toString()
+                    name.startsWith("Arducon-Release-Info-", ignoreCase = true) &&
+                        name.endsWith(".json", ignoreCase = true)
+                }
+                .mapNotNull { path ->
+                    runCatching {
+                        val release = validateArduconUpdateManifest(path.toFile())
+                        ArduconUpdateManifestCandidate(
+                            manifestFile = path.toFile(),
+                            version = release.version,
+                        )
+                    }.getOrNull()
+                }
+                .toList()
+        }
+        val selected = candidates.maxWithOrNull { first, second ->
+            SignalSlingerFirmwareUpdate.compareVersionStrings(first.version, second.version)
+        }
+        return requireNotNull(selected?.manifestFile) {
+            "Selected folder `${selection.path}` does not contain a valid Arducon release info JSON."
+        }
+    }
+
+    private fun validateArduconUpdateManifest(manifestFile: File): ArduconReleaseInfo {
+        require(manifestFile.isFile) {
+            "Selected Arducon update file `${manifestFile.path}` was not found."
+        }
+        require(manifestFile.extension.equals("json", ignoreCase = true)) {
+            "Selected Arducon update file must be a release info JSON."
+        }
+        val release = ArduconFirmwareUpdate.parseReleaseInfo(manifestFile.readText())
+        ArduconFirmwareUpdate.validateReleaseManifest(release)
+        return release
+    }
+
+    private data class ArduconUpdateManifestCandidate(
+        val manifestFile: File,
+        val version: String,
+    )
+}
 
 fun main() {
     System.setProperty("apple.laf.useScreenMenuBar", shouldUseMacScreenMenuBar().toString())
@@ -6533,15 +6606,26 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             else -> {
                 val chooser = JFileChooser().apply {
                     dialogTitle = "Update Arducon"
-                    fileSelectionMode = JFileChooser.FILES_ONLY
+                    fileSelectionMode = JFileChooser.FILES_AND_DIRECTORIES
                     isFileHidingEnabled = false
                     currentDirectory = desktopArduconReleaseCacheDirectory()
-                    fileFilter = FileNameExtensionFilter("Arducon release info (*.json)", "json")
+                    fileFilter = ArduconReleaseInfoFileFilter
                 }
                 if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
                     return
                 }
-                updateArduconFromReleaseInfo(portPath, chooser.selectedFile)
+                val manifestFile = runCatching {
+                    DesktopLocalReleaseSelectionSupport.resolveArduconUpdateManifestSelection(chooser.selectedFile)
+                }.getOrElse { failure ->
+                    JOptionPane.showMessageDialog(
+                        this,
+                        failure.message ?: "The selected Arducon update package could not be opened.",
+                        "Update Arducon",
+                        JOptionPane.ERROR_MESSAGE,
+                    )
+                    return
+                }
+                updateArduconFromReleaseInfo(portPath, manifestFile)
             }
         }
     }
