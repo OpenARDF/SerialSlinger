@@ -80,8 +80,8 @@
     },
     {
       "id": "merged-to-main",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "main fast-forwarded to release commit 1984a6e, including the tested Development_Android changes and 2.0.11 version alignment.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
