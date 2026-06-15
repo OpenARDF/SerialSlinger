@@ -87,29 +87,29 @@
     },
     {
       "id": "tag-pushed",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Annotated tag v2.0.12 pushed to origin, targeting efbcea93c86891e509c895d7959ed961b1f7bf27.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "workflow-published",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions jDeploy Release run 27566775785 completed successfully for tag v2.0.12; publish-macos-release job passed in 3m44s.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "release-verified",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub release https://github.com/OpenARDF/SerialSlinger/releases/tag/v2.0.12 is published, non-draft, non-prerelease, targets efbcea93c86891e509c895d7959ed961b1f7bf27, and includes serialslinger-2.0.12.tgz plus macOS, Windows, and Linux installer assets.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "final-checklist-audit",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Final checklist audit completed after release verification; skipped Windows/Linux packaged smoke checks remain explicitly documented with requester and reason.",
       "skipReason": "",
       "skipRequestedBy": ""
     }
