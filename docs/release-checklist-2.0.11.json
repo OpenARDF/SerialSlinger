@@ -1,0 +1,117 @@
+{
+  "version": "2.0.11",
+  "items": [
+    {
+      "id": "version-aligned",
+      "status": "done",
+      "evidence": "build.gradle.kts, package.json, package-lock.json, and Android versionName source aligned to 2.0.11 with serialSlingerVersionSuffix cleared.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts versionCode incremented from 18 to 19 for release 2.0.11.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "status": "done",
+      "evidence": "npm run jdeploy:release-preflight passed for serialslinger@2.0.11 / tag v2.0.11; ./gradlew check passed; desktop jDeploy bundle verified; Android release bundle built; npm run jdeploy:pack-preview, jdeploy:install-local, jdeploy:verify-install, and jdeploy:local passed; gitleaks detect . --no-banner and git diff --check passed.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "status": "done",
+      "evidence": "Release changes are shared Arducon firmware/session behavior with matching Android and desktop UI surfaces; version labels remain unified at 2.0.11.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "status": "done",
+      "evidence": "User confirmed the app works correctly on hardware before requesting full jDeployment.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "desktop-regression",
+      "status": "done",
+      "evidence": "User confirmed the app works correctly on hardware before requesting full jDeployment.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows Intel x64 packaged-app smoke host is available in this Mac Codex session; release requested after hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows ARM64 packaged-app smoke host is available in this Mac Codex session; release requested after hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux Intel x64 packaged-app smoke host is available in this Mac Codex session; release requested after hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux ARM64 packaged-app smoke host is available in this Mac Codex session; release requested after hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "android-release-notes",
+      "status": "done",
+      "evidence": "Release notes prepared: Adds Arducon 2.1.0+ Days To Run support, blocks incompatible Arducon downgrades, and keeps Android and desktop firmware update behavior aligned.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}
