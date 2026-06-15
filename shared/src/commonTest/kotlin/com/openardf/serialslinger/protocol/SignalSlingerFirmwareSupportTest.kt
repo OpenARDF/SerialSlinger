@@ -73,7 +73,27 @@ class SignalSlingerFirmwareSupportTest {
         assertTrue(profile.capabilities.supportsTemperatureReadback)
         assertTrue(profile.capabilities.supportsExtendedTemperatureReadback)
         assertTrue(profile.capabilities.supportsTemperatureLogging)
+        assertFalse(profile.capabilities.supportsDaysToRun)
         assertTrue("UTI" in profile.fullLoadCommands)
+        assertFalse("CLK D" in profile.fullLoadCommands)
+        assertEquals(
+            null,
+            profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.DAYS_TO_RUN],
+        )
+    }
+
+    @Test
+    fun enablesDaysToRunForArducon210AndLater() {
+        val profile = SignalSlingerFirmwareSupport.resolve("2.1.0", productName = "Arducon")
+
+        assertEquals("arducon-atmega328p-2.1.0+", profile.id)
+        assertTrue(profile.capabilities.supportsScheduling)
+        assertTrue(profile.capabilities.supportsDaysToRun)
+        assertTrue("CLK D" in profile.fullLoadCommands)
+        assertEquals(
+            listOf("CLK D"),
+            profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.DAYS_TO_RUN],
+        )
     }
 
     @Test

@@ -791,6 +791,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val eventTypeEditingSupported = snapshot?.capabilities?.supportsEventTypeEditing != false
         val foxRoleEditingSupported = snapshot?.capabilities?.supportsFoxRoleEditing != false
         val idCodeSpeedEditingSupported = snapshot?.capabilities?.supportsIdCodeSpeedEditing != false
+        val daysToRunSupported = snapshot?.capabilities?.supportsDaysToRun != false
         val isArducon = loadedInfo?.productName.equals("Arducon", ignoreCase = true)
         val connectedProductLabel = loadedInfo?.productName?.takeIf { it.isNotBlank() } ?: "Device"
         displayedTimedEventSettings = if (timedEventUnavailable) null else timedEventSettings
@@ -1753,7 +1754,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 daysRemainingSummaryView = daysRemainingView
                 addView(daysRemainingView)
             }
-        if (!isArducon) {
+        if (daysToRunSupported) {
             timedEventCard.addView(
                 compactLabeledRow(
                     "Days To Run",

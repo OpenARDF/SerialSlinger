@@ -161,6 +161,31 @@ object SignalSlingerFirmwareSupport {
         ),
     )
 
+    private val arduconBaseLoadCommands = listOf(
+        "ID",
+        "FOX",
+        "CLK T",
+        "CLK S",
+        "CLK F",
+        "UTI",
+        "SET S",
+        "PWD",
+        "AM",
+        "SET P",
+    )
+
+    private val arduconBaseVerificationReadbackCommands = mapOf(
+        SettingKey.STATION_ID to listOf("ID"),
+        SettingKey.ARDUCON_FOX_ROLE to listOf("FOX"),
+        SettingKey.ID_CODE_SPEED_WPM to listOf("SET S"),
+        SettingKey.CURRENT_TIME to listOf("CLK T"),
+        SettingKey.START_TIME to listOf("CLK S"),
+        SettingKey.FINISH_TIME to listOf("CLK F"),
+        SettingKey.DTMF_PASSWORD to listOf("PWD"),
+        SettingKey.AM_TONE_FREQUENCY to listOf("AM"),
+        SettingKey.PTT_RESET_SETTING to listOf("SET P"),
+    )
+
     private val arduconProfile = SignalSlingerFirmwareProfile(
         id = "arducon-atmega328p",
         capabilities = DeviceCapabilities(
@@ -178,29 +203,22 @@ object SignalSlingerFirmwareSupport {
             supportsFirmwareUpdate = true,
         ),
         bootstrapLoadCommands = versionBootstrapCommands,
-        loadCommandsAfterVersion = listOf(
-            "ID",
-            "FOX",
-            "CLK T",
-            "CLK S",
-            "CLK F",
-            "UTI",
-            "SET S",
-            "PWD",
-            "AM",
-            "SET P",
+        loadCommandsAfterVersion = arduconBaseLoadCommands,
+        verificationReadbackCommands = arduconBaseVerificationReadbackCommands,
+    )
+
+    private val arducon210Profile = arduconProfile.copy(
+        id = "arducon-atmega328p-2.1.0+",
+        minimumVersion = SignalSlingerFirmwareVersion(2, 1, 0),
+        capabilities = arduconProfile.capabilities.copy(
+            supportsDaysToRun = true,
         ),
-        verificationReadbackCommands = mapOf(
-            SettingKey.STATION_ID to listOf("ID"),
-            SettingKey.ARDUCON_FOX_ROLE to listOf("FOX"),
-            SettingKey.ID_CODE_SPEED_WPM to listOf("SET S"),
-            SettingKey.CURRENT_TIME to listOf("CLK T"),
-            SettingKey.START_TIME to listOf("CLK S"),
-            SettingKey.FINISH_TIME to listOf("CLK F"),
-            SettingKey.DTMF_PASSWORD to listOf("PWD"),
-            SettingKey.AM_TONE_FREQUENCY to listOf("AM"),
-            SettingKey.PTT_RESET_SETTING to listOf("SET P"),
-        ),
+        loadCommandsAfterVersion =
+            arduconBaseLoadCommands.take(5) +
+                "CLK D" +
+                arduconBaseLoadCommands.drop(5),
+        verificationReadbackCommands = arduconBaseVerificationReadbackCommands +
+            (SettingKey.DAYS_TO_RUN to listOf("CLK D")),
     )
 
     fun resolve(
@@ -208,7 +226,13 @@ object SignalSlingerFirmwareSupport {
         productName: String? = null,
     ): SignalSlingerFirmwareProfile {
         if (productName.equals("Arducon", ignoreCase = true)) {
-            return arduconProfile
+            val parsedArduconVersion = SignalSlingerFirmwareVersion.parse(softwareVersion)
+                ?: SignalSlingerFirmwareVersion(0, 0)
+            return if (parsedArduconVersion >= SignalSlingerFirmwareVersion(2, 1, 0)) {
+                arducon210Profile
+            } else {
+                arduconProfile
+            }
         }
         val parsedVersion = SignalSlingerFirmwareVersion.parse(softwareVersion)
         if (parsedVersion == null) {
