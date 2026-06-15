@@ -1,0 +1,117 @@
+{
+  "version": "2.0.12",
+  "items": [
+    {
+      "id": "version-aligned",
+      "status": "done",
+      "evidence": "build.gradle.kts, package.json, package-lock.json, and Android versionName source aligned to 2.0.12 with serialSlingerVersionSuffix cleared.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts versionCode incremented from 19 to 20 for release 2.0.12.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "status": "done",
+      "evidence": "npm run jdeploy:release-preflight passed for serialslinger@2.0.12 / tag v2.0.12; ./gradlew check passed; desktop jDeploy bundle verified; Android release bundle built; npm run jdeploy:pack-preview, jdeploy:install-local, jdeploy:verify-install, and jdeploy:local passed; gitleaks detect . --no-banner and git diff --check passed.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "status": "done",
+      "evidence": "Release change is shared Arducon days-to-run readback parsing, used by both Android and desktop through shared protocol/session behavior; version labels remain unified at 2.0.12.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "status": "done",
+      "evidence": "User confirmed hardware testing passed before requesting redeploy.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "desktop-regression",
+      "status": "done",
+      "evidence": "User confirmed hardware testing passed before requesting redeploy.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows Intel x64 packaged-app smoke host is available in this Mac Codex session; redeploy requested after hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows ARM64 packaged-app smoke host is available in this Mac Codex session; redeploy requested after hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux Intel x64 packaged-app smoke host is available in this Mac Codex session; redeploy requested after hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux ARM64 packaged-app smoke host is available in this Mac Codex session; redeploy requested after hardware validation.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "android-release-notes",
+      "status": "done",
+      "evidence": "Release notes prepared: Improves Arducon 2.1.0+ Days To Run readback so saved days settings are parsed correctly after loading from the device.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}
