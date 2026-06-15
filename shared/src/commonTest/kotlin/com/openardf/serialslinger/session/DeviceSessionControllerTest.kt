@@ -165,7 +165,7 @@ class DeviceSessionControllerTest {
                 "CLK T" to listOf("Epoch:1779988193"),
                 "CLK S" to listOf("Start:0"),
                 "CLK F" to listOf("Finish:0"),
-                "CLK D" to listOf("* Days to run: 4"),
+                "CLK D" to listOf("CLK D 4"),
                 "UTI" to listOf("T=34C", "V=11.31V"),
                 "SET S" to listOf("ID: 20 wpm"),
                 "PWD" to listOf("PWD=1357"),
@@ -232,8 +232,8 @@ class DeviceSessionControllerTest {
         )
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(
-                "CLK D 3" to listOf("* Days to run: 3"),
-                "CLK D" to listOf("* Days to run: 3"),
+                "CLK D 3" to listOf("CLK D 3"),
+                "CLK D" to listOf("CLK D 3"),
             ),
         )
 

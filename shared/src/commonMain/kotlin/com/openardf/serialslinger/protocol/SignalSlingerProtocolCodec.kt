@@ -136,6 +136,7 @@ object SignalSlingerProtocolCodec {
     private val arduconEpochPattern = Regex("""^Epoch:(\d+)$""", RegexOption.IGNORE_CASE)
     private val arduconStartEpochPattern = Regex("""^Start:(\d+)$""", RegexOption.IGNORE_CASE)
     private val arduconFinishEpochPattern = Regex("""^Finish:(\d+)$""", RegexOption.IGNORE_CASE)
+    private val arduconDaysToRunPattern = Regex("""^CLK\s+D\s+(\d+)$""", RegexOption.IGNORE_CASE)
     private val arduconIdSpeedPattern = Regex("""^ID:\s*(\d+)\s+wpm$""", RegexOption.IGNORE_CASE)
     private val arduconStationIdPattern = Regex("""^ID:\s*(\S+)$""")
     private val arduconTemperaturePattern = Regex("""^T=(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
@@ -248,6 +249,14 @@ object SignalSlingerProtocolCodec {
                 settingsPatch = DeviceSettingsPatch(
                     finishTimeCompact = parseEpochSecondsCompact(match.groupValues[1]),
                     finishTimeObserved = true,
+                ),
+            )
+        }
+
+        arduconDaysToRunPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    daysToRun = match.groupValues[1].toInt(),
                 ),
             )
         }

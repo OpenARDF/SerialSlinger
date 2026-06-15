@@ -168,10 +168,12 @@ class SignalSlingerProtocolCodecTest {
     fun parsesObservedArduconReadbackLines() {
         val stationUpdate = SignalSlingerProtocolCodec.parseReportLine("ID: NZ0I")
         val idSpeedUpdate = SignalSlingerProtocolCodec.parseReportLine("ID: 20 wpm")
+        val daysToRunUpdate = SignalSlingerProtocolCodec.parseReportLine("CLK D 2")
         val temperatureUpdate = SignalSlingerProtocolCodec.parseReportLine("T=34C")
 
         assertEquals("NZ0I", stationUpdate?.settingsPatch?.stationId)
         assertEquals(20, idSpeedUpdate?.settingsPatch?.idCodeSpeedWpm)
+        assertEquals(2, daysToRunUpdate?.settingsPatch?.daysToRun)
         assertEquals(34.0, temperatureUpdate?.deviceStatusPatch?.temperatureC)
     }
 
