@@ -24,6 +24,7 @@ import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.ClockPhaseSample
+import com.openardf.serialslinger.model.CloneTemplateEligibility
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
@@ -517,6 +518,7 @@ object AndroidSessionController {
         thread(name = "serialslinger-android-clone-submit") {
             var resolvedTarget: AndroidConnectionTarget? = null
             var cloneFailureTraceEntries: List<SerialTraceEntry> = emptyList()
+            val sourceIsArducon = sessionState.snapshot?.info?.productName.equals("Arducon", ignoreCase = true)
             val result = runWithResolvedTransport(
                 context = context,
                 requestedDeviceName = requestedDeviceName,
@@ -525,12 +527,22 @@ object AndroidSessionController {
                 missingMessage = "Device is no longer connected.",
             ) { target, transport ->
                 resolvedTarget = target
-                val targetRefresh = DeviceSessionController.refreshFromDevice(sessionState, transport, startEditing = true)
-                require(hasSignalSlingerReportLine(targetRefresh.linesReceived)) {
+                val targetIsArduconTransport =
+                    (target as? AndroidConnectionTarget.Usb)?.baudRate == arduconAppBaudRate
+                val targetRefresh = DeviceSessionController.refreshFromDevice(
+                    sessionState,
+                    transport,
+                    startEditing = true,
+                    suspendArduconTransmissions = sourceIsArducon || targetIsArduconTransport,
+                    resumeArduconTransmissions = false,
+                )
+                cloneFailureTraceEntries = targetRefresh.traceEntries
+                val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
+                val targetIsArducon = targetSnapshot.info.productName.equals("Arducon", ignoreCase = true)
+                require(targetIsArducon || hasSignalSlingerReportLine(targetRefresh.linesReceived)) {
                     "The attached device did not respond. Check the configuration cable and try again."
                 }
                 clearFirmwareCloneBufferedFragments(transport)
-                val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
                 val possibleNewDeviceReasons =
                     possibleNewDeviceReasons(
                         previousSnapshot = sessionState.snapshot,
@@ -540,8 +552,13 @@ object AndroidSessionController {
                     )
                 val editable = buildCloneEditableSettings(targetSnapshot.settings, templateSettings, targetSnapshot.capabilities)
                 val validated = editable.toValidatedDeviceSettings()
-                if (targetSnapshot.info.productName.equals("Arducon", ignoreCase = true)) {
-                    val submitResult = DeviceSessionController.submitEdits(targetRefresh.state, editable, transport)
+                if (targetIsArducon) {
+                    val submitResult = DeviceSessionController.submitEdits(
+                        targetRefresh.state,
+                        editable,
+                        transport,
+                        manageArduconTransmissions = false,
+                    )
                     cloneFailureTraceEntries = targetRefresh.traceEntries + submitResult.submitTraceEntries + submitResult.readbackTraceEntries
                     val refreshed = DeviceSessionController.refreshFromDevice(submitResult.state, transport, startEditing = true)
                     cloneFailureTraceEntries = cloneFailureTraceEntries + refreshed.traceEntries
@@ -564,13 +581,14 @@ object AndroidSessionController {
                     val finalState = syncResult?.finalAttempt?.state ?: finalRefresh.state
                     val finalPhaseErrorMillis = syncResult?.finalAttempt?.phaseErrorMillis ?: clockAnchor?.phaseErrorMillis
                     val syncTraceEntries = syncResult?.let(::buildSyncTraceEntries).orEmpty()
+                    val resume = DeviceSessionController.resumeArduconClockControlledEvent(finalState, transport)
                     return@runWithResolvedTransport CloneSubmitResult(
-                        state = finalState,
+                        state = resume.state,
                         cloneProtocol = "Arducon serial commands",
                         writeCommandCount = submitResult.commandsSent.size,
                         writeResponseLineCount = submitResult.linesReceived.size + submitResult.readbackLinesReceived.size,
-                        refreshCommandCount = refreshed.commandsSent.size + (clockSample?.first?.commandsSent?.size ?: 0),
-                        refreshResponseLineCount = refreshed.linesReceived.size + (clockSample?.first?.linesReceived?.size ?: 0),
+                        refreshCommandCount = refreshed.commandsSent.size + (clockSample?.first?.commandsSent?.size ?: 0) + resume.commandsSent.size,
+                        refreshResponseLineCount = refreshed.linesReceived.size + (clockSample?.first?.linesReceived?.size ?: 0) + resume.linesReceived.size,
                         syncAttemptCount = syncResult?.attempts?.size ?: 0,
                         syncSucceeded = syncResult?.succeeded ?: true,
                         traceEntries =
@@ -581,6 +599,7 @@ object AndroidSessionController {
                                 addAll(refreshed.traceEntries)
                                 clockSample?.first?.let { addAll(it.traceEntries) }
                                 addAll(syncTraceEntries)
+                                addAll(resume.traceEntries)
                             },
                         clockPhaseErrorMillis = finalPhaseErrorMillis,
                         clockReferenceTime = clockAnchor?.referenceTime,
@@ -762,7 +781,11 @@ object AndroidSessionController {
         if (!snapshot.capabilities.supportsScheduling) {
             return false
         }
-        return hasCompleteCloneTimedEventSettings(template, cloneTemplateDaysRemaining)
+        return CloneTemplateEligibility.hasCompleteTimedEventSettings(
+            settings = template,
+            daysRemaining = cloneTemplateDaysRemaining,
+            productName = snapshot.info.productName,
+        )
     }
 
     private fun clonePreflightError(
@@ -776,7 +799,13 @@ object AndroidSessionController {
         if (!snapshot.capabilities.supportsScheduling) {
             return IllegalStateException("Clone requires a SignalSlinger snapshot with timed-event support.")
         }
-        if (!hasCompleteCloneTimedEventSettings(template, cloneTemplateDaysRemaining)) {
+        if (
+            !CloneTemplateEligibility.hasCompleteTimedEventSettings(
+                settings = template,
+                daysRemaining = cloneTemplateDaysRemaining,
+                productName = snapshot.info.productName,
+            )
+        ) {
             return IllegalStateException("Clone template is missing complete timed-event settings.")
         }
         if (cloneTemplateEventWouldAlreadyBeRunning(template, cloneTemplateDaysRemaining)) {
@@ -818,46 +847,6 @@ object AndroidSessionController {
             ?.let(JvmTimeSupport::parseCompactTimestamp)
             ?: return null
         return Duration.between(displayedDeviceTime, systemNow).toMillis()
-    }
-
-    private fun hasCompleteCloneTimedEventSettings(settings: DeviceSettings, daysRemaining: Int?): Boolean {
-        if (settings.idCodeSpeedWpm !in 5..20) {
-            return false
-        }
-        if (
-            EventProfileSupport.patternSpeedBelongsToTimedEventSettings(settings.eventType) &&
-            settings.patternCodeSpeedWpm !in 5..20
-        ) {
-            return false
-        }
-        if (
-            !JvmTimeSupport.isCloneScheduleEligible(
-                startTimeCompact = settings.startTimeCompact,
-                finishTimeCompact = settings.finishTimeCompact,
-                currentTimeCompact = settings.currentTimeCompact,
-                daysToRun = settings.daysToRun,
-                daysRemaining = daysRemaining,
-            )
-        ) {
-            return false
-        }
-        if (settings.daysToRun !in 1..255) {
-            return false
-        }
-        val frequencyVisibility = EventProfileSupport.timedEventFrequencyVisibility(settings.eventType)
-        if (frequencyVisibility.showFrequency1 && settings.lowFrequencyHz == null) {
-            return false
-        }
-        if (frequencyVisibility.showFrequency2 && settings.mediumFrequencyHz == null) {
-            return false
-        }
-        if (frequencyVisibility.showFrequency3 && settings.highFrequencyHz == null) {
-            return false
-        }
-        if (frequencyVisibility.showFrequencyB && settings.beaconFrequencyHz == null) {
-            return false
-        }
-        return true
     }
 
     private fun cloneTemplateEventWouldAlreadyBeRunning(settings: DeviceSettings, daysRemaining: Int?): Boolean {
@@ -1006,18 +995,24 @@ object AndroidSessionController {
             Thread.sleep(arduconUsbOpenSettleMs)
             usbTransport.readAvailableLinesBriefly(300)
             usbTransport.clearBufferedInputFragments()
+            runUsbStartupCommand(
+                transport = usbTransport,
+                command = "SYN 0",
+                responseWaitMs = arduconUsbStartupAttemptWaitMs,
+                commands = warmupCommands,
+                lines = warmupLines,
+                traceEntries = warmupTraceEntries,
+            )
+            usbTransport.clearBufferedInputFragments()
             for (attempt in 0 until arduconUsbStartupAttempts) {
-                val command = "INF"
-                val sentAtMs = System.currentTimeMillis()
-                usbTransport.sendCommands(listOf(command))
-                warmupCommands += command
-                warmupTraceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
-                val responseLines = waitForUsbStartupReport(usbTransport, arduconUsbStartupAttemptWaitMs)
-                val receivedAtMs = System.currentTimeMillis()
-                warmupLines += responseLines
-                warmupTraceEntries += responseLines.map { line ->
-                    SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
-                }
+                runUsbStartupCommand(
+                    transport = usbTransport,
+                    command = "INF",
+                    responseWaitMs = arduconUsbStartupAttemptWaitMs,
+                    commands = warmupCommands,
+                    lines = warmupLines,
+                    traceEntries = warmupTraceEntries,
+                )
                 if (hasSignalSlingerReportLine(warmupLines)) {
                     break
                 }
@@ -1071,7 +1066,40 @@ object AndroidSessionController {
             onReportReceived = onReportReceived,
             afterCommand = afterCommand,
         )
-        return mergeLoadResults(warmupResult, fullLoad)
+        val loadedResult = mergeLoadResults(warmupResult, fullLoad)
+        if (usbTransport.baudRate != arduconAppBaudRate) {
+            return loadedResult
+        }
+        val resume = DeviceSessionController.resumeArduconClockControlledEvent(loadedResult.state, usbTransport)
+        return mergeLoadResults(
+            loadedResult,
+            DeviceLoadResult(
+                state = resume.state,
+                commandsSent = resume.commandsSent,
+                linesReceived = resume.linesReceived,
+                traceEntries = resume.traceEntries,
+            ),
+        )
+    }
+
+    private fun runUsbStartupCommand(
+        transport: AndroidUsbTransport,
+        command: String,
+        responseWaitMs: Long,
+        commands: MutableList<String>,
+        lines: MutableList<String>,
+        traceEntries: MutableList<SerialTraceEntry>,
+    ) {
+        val sentAtMs = System.currentTimeMillis()
+        transport.sendCommands(listOf(command))
+        commands += command
+        traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+        val responseLines = waitForUsbStartupReport(transport, responseWaitMs)
+        val receivedAtMs = System.currentTimeMillis()
+        lines += responseLines
+        traceEntries += responseLines.map { line ->
+            SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+        }
     }
 
     private fun waitForUsbStartupReport(
@@ -4729,8 +4757,13 @@ object AndroidSessionController {
         requestedTarget: AndroidConnectionTarget?,
         requestedDeviceName: String?,
     ): AndroidConnectionTarget? {
+        val loadedUsbTarget = latestLoadedTarget as? AndroidConnectionTarget.Usb
         return requestedTarget
-            ?: requestedDeviceName?.let(AndroidConnectionTarget::Usb)
+            ?: requestedDeviceName?.let { deviceName ->
+                loadedUsbTarget
+                    ?.takeIf { it.deviceName == deviceName }
+                    ?: AndroidConnectionTarget.Usb(deviceName)
+            }
             ?: latestLoadedTarget
     }
 

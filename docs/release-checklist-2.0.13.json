@@ -1,0 +1,117 @@
+{
+  "version": "2.0.13",
+  "items": [
+    {
+      "id": "version-aligned",
+      "status": "done",
+      "evidence": "build.gradle.kts serialSlingerVersion=2.0.13 with blank suffix; package.json and package-lock.json are 2.0.13; npm run jdeploy:release-preflight confirmed Gradle base/display/package 2.0.13.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts versionCode bumped from 20 to 21; versionName remains root serialSlingerDisplayVersion, so Android will report 2.0.13.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "status": "done",
+      "evidence": "Passed npm run jdeploy:release-preflight, ./gradlew check, ./gradlew prepareDesktopJdeployBundle verifyDesktopJdeployBundle, ./gradlew shared:desktopTest, ./gradlew androidApp:compileDebugKotlin, npm run jdeploy:pack-preview, gitleaks detect . --no-banner, git diff --check, and local jDeploy prepare/package/install-local/verify-install/local launch.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "status": "done",
+      "evidence": "Reviewed Arducon clone eligibility and SYN guard behavior across shared, Android, and desktop paths; Android-specific USB target preservation and finish-date crash fixes do not require desktop equivalents.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "Full destructive Android hardware regression was deferred for this jDeploy request; targeted Moto Arducon clone hardware verification passed immediately before 2.0.13 version alignment, and the user plans a signed Android bundle afterward.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "desktop-regression",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "Real desktop hardware regression was not run in this Mac release session; automated checks and local jDeploy install/launch verification passed.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows Intel x64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows ARM64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux Intel x64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux ARM64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "android-release-notes",
+      "status": "done",
+      "evidence": "Prepared release notes: SerialSlinger 2.0.13 improves Arducon support by pausing transmissions during protected operations, fixing Android FTDI clone targeting, allowing Arducon clone without SignalSlinger-only frequency fields, and fixing Android far-future finish-date selection.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}

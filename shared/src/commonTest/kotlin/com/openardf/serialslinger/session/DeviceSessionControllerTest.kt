@@ -209,6 +209,47 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun connectAndLoadCanSuspendArduconTransmissionsOnSameTransport() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "INF" to listOf(
+                    "* INF product=Arducon",
+                    "* INF update=UPD",
+                    "* INF sw=1.0.1",
+                    "* INF hw=ATmega328P-16",
+                    "* INF app=0x0000",
+                    "* INF appbaud=57600",
+                    "* INF baud=115200",
+                    "* INF bl=unknown",
+                    "* INF proto=stk500v1",
+                ),
+                "ID" to listOf("ID: NZ0I"),
+                "FOX" to listOf("Fox=1"),
+                "CLK T" to listOf("Epoch:1779988193"),
+                "CLK S" to listOf("Start:0"),
+                "CLK F" to listOf("Finish:0"),
+                "UTI" to listOf("T=34C", "V=11.31V"),
+                "SET S" to listOf("ID: 20 wpm"),
+                "PWD" to listOf("PWD=1357"),
+                "AM" to listOf("AM:0"),
+                "SET P" to listOf("DRP:0"),
+            ),
+        )
+
+        val result = DeviceSessionController.connectAndLoad(
+            transport = transport,
+            suspendArduconTransmissions = true,
+        )
+
+        assertEquals("SYN 0", result.commandsSent.first())
+        assertEquals("SYN 2", result.commandsSent.last())
+        assertEquals(result.commandsSent, transport.sentCommands)
+        assertTrue(result.commandsSent.indexOf("SYN 0") < result.commandsSent.indexOf("INF"))
+        assertTrue(result.commandsSent.lastIndexOf("INF") < result.commandsSent.indexOf("SYN 2"))
+        assertEquals("Arducon", result.state.snapshot?.info?.productName)
+    }
+
+    @Test
     fun submitEditsWritesArduconDaysToRunWithReadbackForVersion210() {
         val connected = DeviceSessionController.connectAndLoad(
             FakeDeviceTransport(),
@@ -429,7 +470,7 @@ class DeviceSessionControllerTest {
 
         assertEquals(listOf("PWD 2468"), result.commandsSent)
         assertEquals(listOf("PWD"), result.readbackCommandsSent)
-        assertEquals(listOf("PWD 2468", "PWD"), transport.sentCommands)
+        assertEquals(listOf("SYN 0", "PWD 2468", "PWD", "SYN 2"), transport.sentCommands)
         assertEquals("2468", result.state.snapshot?.settings?.dtmfPassword)
         assertEquals(
             SettingVerification(

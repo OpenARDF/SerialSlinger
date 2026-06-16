@@ -71,6 +71,8 @@ object DeviceSessionController {
             state: DeviceSessionState,
             transport: DeviceTransport,
         ) -> DeviceLoadInterventionResult?)? = null,
+        suspendArduconTransmissions: Boolean = false,
+        resumeArduconTransmissions: Boolean = true,
     ): DeviceLoadResult {
         transport.connect()
         val connectedState = DeviceSessionWorkflow.connected(baseSettings)
@@ -81,6 +83,8 @@ object DeviceSessionController {
             progress = progress,
             onReportReceived = onReportReceived,
             afterCommand = afterCommand,
+            suspendArduconTransmissions = suspendArduconTransmissions,
+            resumeArduconTransmissions = resumeArduconTransmissions,
         )
     }
 
@@ -95,6 +99,8 @@ object DeviceSessionController {
             state: DeviceSessionState,
             transport: DeviceTransport,
         ) -> DeviceLoadInterventionResult?)? = null,
+        suspendArduconTransmissions: Boolean = false,
+        resumeArduconTransmissions: Boolean = true,
     ): DeviceLoadResult {
         val commands = mutableListOf<String>()
         val lines = mutableListOf<String>()
@@ -109,6 +115,15 @@ object DeviceSessionController {
             }
         }
         progress?.invoke(0, bootstrapCommands.size.coerceAtLeast(1))
+
+        if (suspendArduconTransmissions) {
+            val intervention = stopArduconTransmissions(updatedState, transport)
+            commands += intervention.commandsSent
+            lines += intervention.linesReceived
+            traceEntries += intervention.traceEntries
+            notifyReportReceived(intervention.linesReceived)
+            updatedState = intervention.state
+        }
 
         for (command in bootstrapCommands) {
             updatedState = sendCommandAndIngest(
@@ -217,6 +232,15 @@ object DeviceSessionController {
             updatedState = DeviceSessionWorkflow.startEditing(updatedState)
         }
 
+        if (suspendArduconTransmissions && resumeArduconTransmissions) {
+            val intervention = resumeArduconClockControlledEvent(updatedState, transport)
+            commands += intervention.commandsSent
+            lines += intervention.linesReceived
+            traceEntries += intervention.traceEntries
+            notifyReportReceived(intervention.linesReceived)
+            updatedState = intervention.state
+        }
+
         return DeviceLoadResult(
             state = updatedState,
             commandsSent = commands,
@@ -296,12 +320,50 @@ object DeviceSessionController {
         return DeviceSessionWorkflow.ingestReportLines(state, responseLines)
     }
 
+    fun stopArduconTransmissions(
+        state: DeviceSessionState,
+        transport: DeviceTransport,
+    ): DeviceLoadInterventionResult =
+        sendInterventionCommand("SYN 0", state, transport)
+
+    fun resumeArduconClockControlledEvent(
+        state: DeviceSessionState,
+        transport: DeviceTransport,
+    ): DeviceLoadInterventionResult =
+        sendInterventionCommand("SYN 2", state, transport)
+
+    fun sendInterventionCommand(
+        command: String,
+        state: DeviceSessionState,
+        transport: DeviceTransport,
+    ): DeviceLoadInterventionResult {
+        val commands = mutableListOf<String>()
+        val lines = mutableListOf<String>()
+        val traceEntries = mutableListOf<SerialTraceEntry>()
+        val updatedState = sendCommandAndIngest(
+            command = command,
+            state = state,
+            transport = transport,
+            commands = commands,
+            lines = lines,
+            traceEntries = traceEntries,
+            notifyReportReceived = {},
+        )
+        return DeviceLoadInterventionResult(
+            state = updatedState,
+            commandsSent = commands,
+            linesReceived = lines,
+            traceEntries = traceEntries,
+        )
+    }
+
     fun submitEdits(
         state: DeviceSessionState,
         editedSettings: EditableDeviceSettings,
         transport: DeviceTransport,
         forceWriteKeys: Set<SettingKey> = emptySet(),
         allowFullReloadVerification: Boolean = true,
+        manageArduconTransmissions: Boolean = true,
         progress: ((completed: Int, total: Int) -> Unit)? = null,
     ): DeviceSubmitResult {
         val submission = DeviceSessionWorkflow.submitChanges(state, editedSettings, forceWriteKeys = forceWriteKeys)
@@ -315,6 +377,9 @@ object DeviceSessionController {
             softwareVersion = submissionSnapshot.info.softwareVersion,
             productName = submissionSnapshot.info.productName,
         )
+        val shouldManageArduconTransmissions =
+            manageArduconTransmissions &&
+                submissionSnapshot.info.productName.equals("Arducon", ignoreCase = true)
         val requiresFullReloadVerification =
             allowFullReloadVerification &&
                 requiresFullReloadVerification(submission.writePlan)
@@ -330,6 +395,12 @@ object DeviceSessionController {
                 if (requiresFullReloadVerification) firmwareProfile.fullLoadCommands.size else 0
         ).coerceAtLeast(1)
         progress?.invoke(0, totalCommands)
+
+        if (shouldManageArduconTransmissions) {
+            val intervention = stopArduconTransmissions(submission.state, transport)
+            submitTraceEntries += intervention.traceEntries
+        }
+
         for (command in submission.commands) {
             val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
@@ -383,13 +454,24 @@ object DeviceSessionController {
         }
 
         if (requiresFullReloadVerification) {
-            val reloadResult = refreshFromDevice(nextState, transport, startEditing = false)
+            val reloadResult = refreshFromDevice(
+                nextState,
+                transport,
+                startEditing = false,
+                suspendArduconTransmissions = false,
+            )
             reportedReadbackCommands += reloadResult.commandsSent
             readbackLines += reloadResult.linesReceived
             readbackTraceEntries += reloadResult.traceEntries
             observedReadbackKeys += extractObservedSettingKeys(reloadResult.linesReceived)
             nextState = reloadResult.state
             progress?.invoke(totalCommands, totalCommands)
+        }
+
+        if (shouldManageArduconTransmissions) {
+            val intervention = resumeArduconClockControlledEvent(nextState, transport)
+            readbackTraceEntries += intervention.traceEntries
+            nextState = intervention.state
         }
 
         nextState = nextState.copy(

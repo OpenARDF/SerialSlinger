@@ -1,6 +1,8 @@
 package com.openardf.serialslinger.app
 
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
+import com.openardf.serialslinger.session.DeviceSessionController
+import com.openardf.serialslinger.session.DeviceSessionWorkflow
 import com.openardf.serialslinger.transport.DesktopSerialPortInfo
 import com.openardf.serialslinger.transport.DesktopSerialStopBits
 import com.openardf.serialslinger.transport.DesktopSerialTransport
@@ -227,15 +229,25 @@ object SignalSlingerPortDiscovery {
         )
         return try {
             transport.connect()
+            var resumeState = DeviceSessionWorkflow.connected()
+            var shouldResume = false
             try {
                 Thread.sleep(500)
                 transport.readAvailableLinesBriefly(700)
+                val stop = DeviceSessionController.stopArduconTransmissions(resumeState, transport)
+                resumeState = stop.state
+                shouldResume = true
                 probeWithCommands(
                     portInfo = portInfo,
                     transport = transport,
                     commands = arduconProbeCommands,
                 )
             } finally {
+                if (shouldResume) {
+                    runCatching {
+                        DeviceSessionController.resumeArduconClockControlledEvent(resumeState, transport)
+                    }
+                }
                 transport.disconnect()
             }
         } catch (exception: Exception) {

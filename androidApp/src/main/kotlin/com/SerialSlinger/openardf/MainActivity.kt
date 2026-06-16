@@ -1565,10 +1565,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     guardCloneTemplate = true,
                 ) {
                     pickDateTime(initialValue = finishTimeField.text.toString()) { selected ->
-                        val formattedTimestamp = formatDisplayTimestamp(selected)
+                        val selectedFinishCompact = JvmTimeSupport.formatCompactTimestamp(selected)
                         val proposedDuration = JvmTimeSupport.validEventDuration(
                             timedEventSettings.startTimeCompact,
-                            JvmTimeSupport.parseOptionalCompactTimestamp(formattedTimestamp),
+                            selectedFinishCompact,
                         )
                         chooseScheduleChangeDurationResolution(
                             currentDaysToRun = timedEventSettings.daysToRun,
@@ -1584,7 +1584,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 val startTimeCompact = timedEventSettings.startTimeCompact ?: return@chooseScheduleChangeDurationResolution
                                 JvmTimeSupport.finishTimeCompactFromStart(startTimeCompact, effectiveDuration)
                             } else {
-                                formattedTimestamp
+                                selectedFinishCompact
                             }
                             finishTimeField.setText(JvmTimeSupport.formatCompactTimestamp(finalFinishTimeInput))
                             runFinishTimeSubmitOrPreview(
@@ -7597,7 +7597,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     requestedDeviceName = uiState.latestLoadedDeviceName,
                 )
             }
-            contentDescription = "Clone timed event settings to attached SignalSlinger"
+            contentDescription = "Clone timed event settings to attached device"
             installLongPressGesture(this, allowShortTap = true) {
                 if (!isEnabled) {
                     return@installLongPressGesture
@@ -7625,7 +7625,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }.apply {
             setBackgroundColor(cloneButtonColor())
             setTextColor(Color.WHITE)
-            contentDescription = "Clone timed event settings to attached SignalSlinger"
+            contentDescription = "Clone timed event settings to attached device"
             installLongPressGesture(this, allowShortTap = true) {
                 animateFeedback(this, null, playSound = true)
                 clockDisplayHandler.postDelayed(
@@ -7676,7 +7676,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         text =
                             "Device Time differs noticeably from Android system time.\n\n" +
                                 "Measured phase error: $phaseSummary\n\n" +
-                                "Clone copies the stored timed-event template to the attached SignalSlinger. " +
+                                "Clone copies the stored timed-event template to the attached device. " +
                                 "Syncing the attached device clock first is strongly recommended."
                         textSize = 15f
                         setTextColor(Color.parseColor("#1F2937"))
@@ -7766,7 +7766,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
                 addView(
                     TextView(this@MainActivity).apply {
-                        text = "Cloning timed event settings to the attached SignalSlinger..."
+                        text = "Cloning timed event settings to the attached device..."
                         textSize = 15f
                         setTextColor(Color.parseColor("#1F2937"))
                     },

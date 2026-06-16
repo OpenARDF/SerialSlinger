@@ -3792,6 +3792,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 progress = { completed, total ->
                     setBusyProgressRange(0, 20, completed, total, commandProgressLabel(completed, total))
                 },
+                suspendArduconTransmissions = snapshot.info.productName.equals("Arducon", ignoreCase = true),
+                resumeArduconTransmissions = false,
             )
             val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
             val editable = DesktopCloneSupport.buildEditableSettings(targetSnapshot.settings, templateSettings, targetSnapshot.capabilities)
@@ -3804,6 +3806,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     targetRefresh.state,
                     editable,
                     transport,
+                    manageArduconTransmissions = false,
                     progress = { completed, total ->
                         setBusyProgressRange(20, 62, completed, total, commandProgressLabel(completed, total))
                     },
@@ -3843,10 +3846,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                             ),
                         )
                     } ?: refreshedWithClock
+                val resume = DeviceSessionController.resumeArduconClockControlledEvent(finalRefresh.state, transport)
+                val finalRefreshWithResume = mergeLoadResults(
+                    finalRefresh,
+                    DeviceLoadResult(
+                        state = resume.state,
+                        commandsSent = resume.commandsSent,
+                        linesReceived = resume.linesReceived,
+                        traceEntries = resume.traceEntries,
+                    ),
+                )
                 setBusyProgress(100, 100, "Done")
 
-                currentState = finalRefresh.state
-                loadedSnapshot = finalRefresh.state.snapshot
+                currentState = finalRefreshWithResume.state
+                loadedSnapshot = finalRefreshWithResume.state.snapshot
 
                 SwingUtilities.invokeLater {
                     if (syncResult != null) {
@@ -3856,7 +3869,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         clockSample?.second?.let(::applyClockDisplayAnchor)
                     }
                     applySnapshotToForm(
-                        finalRefresh.state.snapshot,
+                        finalRefreshWithResume.state.snapshot,
                         recalculateClockOffset = clockSample == null && syncResult == null,
                     )
                     appendWriteLog(
@@ -3871,7 +3884,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                             ),
                         ),
                         preRefreshResult = targetRefresh,
-                        refreshResult = finalRefresh,
+                        refreshResult = finalRefreshWithResume,
                         comparedFieldKeys = DesktopCloneSupport.comparedFieldKeys(targetSnapshot.capabilities, templateSettings),
                     )
                     updateClockPhaseWarning(syncResult?.finalAttempt?.phaseErrorMillis ?: clockSample?.second?.phaseErrorMillis)
@@ -11323,6 +11336,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     setBusyProgressRange(0, 85, completed, total, commandProgressLabel(completed, total))
                 },
                 afterCommand = ::drainResidualStartupReportAfterVer,
+                suspendArduconTransmissions = loadedSnapshot?.info?.productName.equals("Arducon", ignoreCase = true),
             )
             requireLoadResponses(portPath, initialRefresh)
             setBusyProgress(88, 100, "Checking temperature reset support")
@@ -11349,7 +11363,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         var transport = desktopLoadTransportFor(portPath)
         val initialLoad =
             try {
-                loadWithTransport(portPath, transport)
+                loadWithTransport(
+                    portPath = portPath,
+                    transport = transport,
+                    suspendArduconTransmissions = isArduconLoadMode(portPath),
+                )
             } catch (failure: Exception) {
                 transport.disconnect()
                 if (!shouldTryArduconLoadFallback(portPath, failure)) {
@@ -11357,7 +11375,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
                 val fallbackTransport = arduconDesktopLoadTransportFor(portPath)
                 try {
-                    val fallbackLoad = loadWithTransport(portPath, fallbackTransport)
+                    val fallbackLoad = loadWithTransport(
+                        portPath = portPath,
+                        transport = fallbackTransport,
+                        suspendArduconTransmissions = true,
+                    )
                     transport = fallbackTransport
                     knownProbeResults[portPath] = SignalSlingerPortProbe(
                         portInfo = resolvePortInfoFor(portPath),
@@ -11397,6 +11419,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun loadWithTransport(
         portPath: String,
         transport: DesktopSerialTransport,
+        suspendArduconTransmissions: Boolean,
     ): DeviceLoadResult {
         val load = DeviceSessionController.connectAndLoad(
             transport,
@@ -11404,9 +11427,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 setBusyProgressRange(0, 85, completed, total, commandProgressLabel(completed, total))
             },
             afterCommand = ::drainResidualStartupReportAfterVer,
+            suspendArduconTransmissions = suspendArduconTransmissions,
         )
         requireLoadResponses(portPath, load)
         return load
+    }
+
+    private fun isArduconLoadMode(portPath: String): Boolean {
+        val probe = knownProbeResults[portPath]
+        return selectedDeviceMode() == DeviceMode.ARDUCON ||
+            probe?.productName.equals("Arducon", ignoreCase = true) ||
+            probe?.appBaud == 57_600
     }
 
     private fun shouldTryArduconLoadFallback(
