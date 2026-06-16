@@ -70,7 +70,7 @@ class ArduconFirmwareUpdateTest {
         assertEquals(listOf(57_600, 57_600), transport.connectedBauds)
         assertEquals(listOf(115_200), transport.reconfiguredBauds)
         assertEquals(1, transport.resetPulseCount)
-        assertEquals(listOf("INF\r", "UPD\r", "INF\r"), transport.asciiWrites)
+        assertEquals(listOf("SYN 0\r", "INF\r", "UPD\r", "SYN 0\r", "INF\r"), transport.asciiWrites)
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x30 })
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x50 })
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x55 })
@@ -100,7 +100,7 @@ class ArduconFirmwareUpdateTest {
 
         assertTrue(error.message.orEmpty().contains("cannot be downgraded to 2.0.9"))
         assertTrue(error.message.orEmpty().contains("bootloader"))
-        assertEquals(listOf("INF\r"), transport.asciiWrites)
+        assertEquals(listOf("SYN 0\r", "INF\r"), transport.asciiWrites)
         assertEquals(emptyList(), transport.reconfiguredBauds)
         assertEquals(emptyList(), transport.binaryWrites)
         assertEquals(0, transport.resetPulseCount)

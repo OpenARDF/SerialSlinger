@@ -14,6 +14,7 @@ private const val ArduconRestartConfirmationFailureMessage =
     "Arducon update was sent, but the updated Arducon firmware could not be confirmed after restart."
 private const val ArduconRestartConfirmationAttempts = 3
 private const val ArduconBootloaderIncompatibleVersion = "2.1.0"
+private const val ArduconStopTransmissionsCommand = "SYN 0"
 
 class ArduconRestartHandoffException(message: String) : IllegalStateException(message)
 
@@ -433,6 +434,8 @@ object ArduconFirmwareUpdate {
     ): SignalSlingerAppInfo? {
         val allLines = mutableListOf<String>()
         repeat(attempts.coerceAtLeast(1)) {
+            transport.readLines(drainTimeoutMs)
+            transport.writeAscii("$ArduconStopTransmissionsCommand\r")
             transport.readLines(drainTimeoutMs)
             transport.writeAscii("${release.firmwareUpdate.appInfoCommand}\r")
             allLines += transport.readLines(responseTimeoutMs)
