@@ -17,6 +17,7 @@ Usage:
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] clear-log
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] load
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] load-emulator
+  ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] arducon-recovery-update [version]
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-event-type <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-fox-role <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-station-id <value>
@@ -149,6 +150,12 @@ load)
 	;;
 load-emulator)
 	ACTION="com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR"
+	;;
+arducon-recovery-update)
+	ACTION="com.SerialSlinger.openardf.DEBUG_ARDUCON_RECOVERY_UPDATE"
+	if [ -n "$ARG1" ]; then
+		EXTRA_ARGS+=(--es update_version "$ARG1")
+	fi
 	;;
 set-event-type)
 	if [ -z "$ARG1" ]; then

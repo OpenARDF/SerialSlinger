@@ -46,6 +46,7 @@ import com.openardf.serialslinger.protocol.ArduconFirmwareUpdate
 import com.openardf.serialslinger.protocol.ArduconReleaseCache
 import com.openardf.serialslinger.protocol.ArduconReleaseSelectionSource
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdate
+import com.openardf.serialslinger.protocol.SignalSlingerAppInfo
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateProgress
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareUpdateTransport
 import com.openardf.serialslinger.protocol.SignalSlingerAlreadyCurrentException
@@ -6295,6 +6296,8 @@ object AndroidSessionController {
     fun runArduconFirmwareUpdate(
         context: Context,
         requestedVersion: String? = null,
+        recoverAlreadyWaiting: Boolean = false,
+        requestedDeviceName: String? = null,
         confirmResidentFallback: ((version: String, board: String, downloadFailure: String) -> Boolean)? = null,
         onComplete: ((Result<Unit>) -> Unit)? = null,
     ) {
@@ -6303,23 +6306,66 @@ object AndroidSessionController {
             synchronized(this) {
                 val snapshot = latestSessionViewState?.state?.snapshot
                 val target = latestLoadedTarget
+                val requestedUsbDeviceName = requestedDeviceName?.trim()?.takeIf(String::isNotBlank)
+                val recoveryUsbDeviceName =
+                    if (recoverAlreadyWaiting && target !is AndroidConnectionTarget.Usb) {
+                        resolveUsbDevice(usbManager, requestedUsbDeviceName)?.deviceName
+                    } else {
+                        null
+                    }
                 val firmwareVersion = snapshot?.info?.softwareVersion?.trim().orEmpty()
-                val updateBlockedByActiveRead = signalSlingerReadInFlight || probeInFlight
+                val confirmedAppInfo =
+                    if (!recoverAlreadyWaiting && snapshot != null) {
+                        SignalSlingerAppInfo(
+                            product = snapshot.info.productName,
+                            softwareVersion = snapshot.info.softwareVersion,
+                            hardwareBuild = snapshot.info.hardwareBuild,
+                            appStartAddress = snapshot.info.appStartAddress,
+                            appBaud = snapshot.info.appBaud,
+                            updateBaud = snapshot.info.updateBaud,
+                            appUpdateCommand = snapshot.info.appUpdateCommand,
+                            bootloaderVersion = snapshot.info.bootloaderVersion,
+                            bootloaderProtocolVersion = snapshot.info.bootloaderProtocolVersion,
+                            bootloaderProtocol = snapshot.info.bootloaderProtocol,
+                        )
+                    } else {
+                        null
+                    }
+                val updateBlockedByActiveRead = !recoverAlreadyWaiting && (signalSlingerReadInFlight || probeInFlight)
+                if (recoverAlreadyWaiting) {
+                    probeInFlight = false
+                    signalSlingerReadInFlight = false
+                }
                 when {
                     updateBlockedByActiveRead -> Result.failure(IllegalStateException("Arducon is busy. Try the update again after the current operation finishes."))
-                    snapshot == null -> Result.failure(IllegalStateException("Load the attached Arducon before starting an update."))
-                    !snapshot.info.productName.equals("Arducon", ignoreCase = true) -> Result.failure(IllegalStateException("The attached device does not identify as Arducon."))
-                    target !is AndroidConnectionTarget.Usb -> Result.failure(IllegalStateException("Android firmware update requires a USB-connected Arducon."))
+                    recoverAlreadyWaiting && target !is AndroidConnectionTarget.Usb && recoveryUsbDeviceName == null -> Result.failure(IllegalStateException("Connect Arducon to the USB port before starting Recovery Update."))
+                    !recoverAlreadyWaiting && snapshot == null -> Result.failure(IllegalStateException("Load the attached Arducon before starting an update."))
+                    !recoverAlreadyWaiting && snapshot?.info?.productName?.equals("Arducon", ignoreCase = true) != true -> Result.failure(IllegalStateException("The attached device does not identify as Arducon."))
+                    !recoverAlreadyWaiting && target !is AndroidConnectionTarget.Usb -> Result.failure(IllegalStateException("Android firmware update requires a USB-connected Arducon."))
                     else -> {
+                        val deviceName =
+                            if (recoverAlreadyWaiting) {
+                                requestedUsbDeviceName ?: (target as? AndroidConnectionTarget.Usb)?.deviceName ?: recoveryUsbDeviceName
+                            } else {
+                                (target as AndroidConnectionTarget.Usb).deviceName
+                            }
+                        require(!deviceName.isNullOrBlank()) { "Android firmware update requires a USB-connected Arducon." }
                         signalSlingerReadInFlight = true
                         firmwareUpdateProgress = AndroidFirmwareUpdateProgress("Preparing update", 0, 0, null)
                         statusText = "Preparing update..."
                         statusIsError = false
-                        latestSubmitSummary = "Preparing Arducon update..."
+                        latestSubmitSummary =
+                            if (recoverAlreadyWaiting) {
+                                "Preparing Arducon recovery update..."
+                            } else {
+                                "Preparing Arducon update..."
+                            }
                         Result.success(
                             ArduconUpdateStart(
-                                deviceName = target.deviceName,
-                                firmwareVersion = firmwareVersion,
+                                deviceName = deviceName,
+                                firmwareVersion = if (recoverAlreadyWaiting) null else firmwareVersion,
+                                confirmedAppInfo = confirmedAppInfo,
+                                recoverAlreadyWaiting = recoverAlreadyWaiting,
                                 requestedVersion = requestedVersion?.trim()?.removePrefix("v")?.takeIf(String::isNotBlank),
                             ),
                         )
@@ -6368,7 +6414,14 @@ object AndroidSessionController {
                         updateLog += AndroidLogEntry("GitHub update check failed: $failure", AndroidLogCategory.APP)
                     }
                     val transport = loggingFirmwareUpdateTransport(
-                        AndroidFirmwareUpdateTransport(usbManager, usbDevice),
+                        AndroidFirmwareUpdateTransport(
+                            usbManager,
+                            usbDevice,
+                            pollIntervalMs = 5L,
+                            postBinaryWriteReadDelayMs = 15L,
+                            binaryWriteChunkBytes = 64,
+                            targetResetSettleMs = if (start.recoverAlreadyWaiting) 40L else 500L,
+                        ),
                         updateLog,
                     )
                     try {
@@ -6376,6 +6429,10 @@ object AndroidSessionController {
                             transport = transport,
                             release = selection.release,
                             hexText = hexBytes.decodeToString(),
+                            recoverAlreadyWaiting = start.recoverAlreadyWaiting,
+                            confirmedAppInfo = start.confirmedAppInfo,
+                            stkCommandPaceMs = 25L,
+                            verifyReadback = false,
                             progress = ::recordFirmwareUpdateProgress,
                         )
                     } finally {
@@ -6763,6 +6820,8 @@ object AndroidSessionController {
     private data class ArduconUpdateStart(
         val deviceName: String,
         val firmwareVersion: String?,
+        val confirmedAppInfo: SignalSlingerAppInfo?,
+        val recoverAlreadyWaiting: Boolean,
         val requestedVersion: String?,
     )
 

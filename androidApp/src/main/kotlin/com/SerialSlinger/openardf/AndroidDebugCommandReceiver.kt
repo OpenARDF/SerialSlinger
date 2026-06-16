@@ -70,6 +70,25 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                     pendingResult.finish()
                 }
             }
+            ACTION_ARDUCON_RECOVERY_UPDATE -> {
+                val pendingResult = goAsync()
+                AndroidSessionController.runArduconFirmwareUpdate(
+                    context = context,
+                    requestedVersion = intent.getStringExtra(EXTRA_UPDATE_VERSION),
+                    recoverAlreadyWaiting = true,
+                    requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
+                    confirmResidentFallback = { _, _, _ -> true },
+                ) { result ->
+                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
+                    pendingResult.resultData =
+                        if (result.isSuccess) {
+                            AndroidSessionController.debugStateSummary()
+                        } else {
+                            result.exceptionOrNull()?.message ?: "Unknown Arducon recovery update failure"
+                        }
+                    pendingResult.finish()
+                }
+            }
             ACTION_SET_EVENT_TYPE -> {
                 val eventType = intent.getStringExtra(EXTRA_EVENT_TYPE)
                 if (eventType == null) {
@@ -565,6 +584,7 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val ACTION_CLEAR_LOG = "com.SerialSlinger.openardf.DEBUG_CLEAR_LOG"
         const val ACTION_LOAD = "com.SerialSlinger.openardf.DEBUG_LOAD"
         const val ACTION_LOAD_EMULATOR = "com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR"
+        const val ACTION_ARDUCON_RECOVERY_UPDATE = "com.SerialSlinger.openardf.DEBUG_ARDUCON_RECOVERY_UPDATE"
         const val ACTION_SET_EVENT_TYPE = "com.SerialSlinger.openardf.DEBUG_SET_EVENT_TYPE"
         const val ACTION_SET_FOX_ROLE = "com.SerialSlinger.openardf.DEBUG_SET_FOX_ROLE"
         const val ACTION_SET_STATION_ID = "com.SerialSlinger.openardf.DEBUG_SET_STATION_ID"
@@ -602,5 +622,6 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val EXTRA_FINISH_TIME = "finish_time"
         const val EXTRA_DAYS_TO_RUN = "days_to_run"
         const val EXTRA_RAW_COMMAND = "command"
+        const val EXTRA_UPDATE_VERSION = "update_version"
     }
 }

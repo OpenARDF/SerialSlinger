@@ -256,6 +256,9 @@ object ArduconFirmwareUpdate {
         release: ArduconReleaseInfo,
         hexText: String,
         recoverAlreadyWaiting: Boolean = false,
+        confirmedAppInfo: SignalSlingerAppInfo? = null,
+        stkCommandPaceMs: Long = 0,
+        verifyReadback: Boolean = true,
         progress: (SignalSlingerFirmwareUpdateProgress) -> Unit = {},
     ) {
         progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0))
@@ -269,36 +272,42 @@ object ArduconFirmwareUpdate {
         }
         val pages = pagesFromImage(image, release.firmwareUpdate.pageBytes)
 
-        enterUpdateMode(transport, release, recoverAlreadyWaiting, progress)
-        stkCommand(transport, byteArrayOf(0x50), 0, "enter programming mode")
+        enterUpdateMode(transport, release, recoverAlreadyWaiting, confirmedAppInfo, progress)
+        stkCommand(transport, byteArrayOf(0x50), 0, "enter programming mode", stkCommandPaceMs)
 
         pages.forEachIndexed { index, page ->
             progress(SignalSlingerFirmwareUpdateProgress("Sending update", index, pages.size, page.address.toHex32()))
-            loadAddress(transport, page.address)
+            loadAddress(transport, page.address, stkCommandPaceMs)
             stkCommand(
                 transport = transport,
                 command = byteArrayOf(0x64, 0x00, page.bytes.size.toByte(), 'F'.code.toByte()) + page.bytes,
                 responseBytes = 0,
                 description = "program page ${page.address.toHex32()}",
+                paceMs = stkCommandPaceMs,
             )
         }
 
-        pages.forEachIndexed { index, page ->
-            progress(SignalSlingerFirmwareUpdateProgress("Verifying update", index, pages.size, page.address.toHex32()))
-            loadAddress(transport, page.address)
-            val readback = stkCommand(
-                transport = transport,
-                command = byteArrayOf(0x74, 0x00, page.bytes.size.toByte(), 'F'.code.toByte()),
-                responseBytes = page.bytes.size,
-                description = "read page ${page.address.toHex32()}",
-            )
-            require(readback.contentEquals(page.bytes)) {
-                "Arducon verification failed at ${page.address.toHex32()}."
+        if (verifyReadback) {
+            pages.forEachIndexed { index, page ->
+                progress(SignalSlingerFirmwareUpdateProgress("Verifying update", index, pages.size, page.address.toHex32()))
+                loadAddress(transport, page.address, stkCommandPaceMs)
+                val readback = stkCommand(
+                    transport = transport,
+                    command = byteArrayOf(0x74, 0x00, page.bytes.size.toByte(), 'F'.code.toByte()),
+                    responseBytes = page.bytes.size,
+                    description = "read page ${page.address.toHex32()}",
+                    paceMs = stkCommandPaceMs,
+                )
+                require(readback.contentEquals(page.bytes)) {
+                    "Arducon verification failed at ${page.address.toHex32()}."
+                }
             }
+        } else {
+            progress(SignalSlingerFirmwareUpdateProgress("Verifying update", pages.size, pages.size, "Skipping bootloader readback; confirming Arducon app after restart."))
         }
 
         progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", pages.size, pages.size))
-        stkCommand(transport, byteArrayOf(0x51), 0, "leave programming mode")
+        stkCommand(transport, byteArrayOf(0x51), 0, "leave programming mode", stkCommandPaceMs)
         val resetPulsed = transport.pulseTargetReset()
         if (resetPulsed) {
             progress(SignalSlingerFirmwareUpdateProgress("Restarting Arducon", pages.size, pages.size, "Pulsed Arducon reset after update."))
@@ -313,11 +322,13 @@ object ArduconFirmwareUpdate {
         transport: SignalSlingerFirmwareUpdateTransport,
         release: ArduconReleaseInfo,
         recoverAlreadyWaiting: Boolean,
+        confirmedAppInfo: SignalSlingerAppInfo?,
         progress: (SignalSlingerFirmwareUpdateProgress) -> Unit,
     ) {
         if (!recoverAlreadyWaiting) {
             transport.connect(release.firmwareUpdate.appBaud)
             val appInfo = readAppInfo(transport, release)
+                ?: confirmedAppInfo?.takeIf { it.hasRequiredArduconUpdateIdentity() }
                 ?: error("Could not confirm Arducon firmware update support.")
             validateAppInfoForRelease(appInfo, release, requireVersion = false)
             transport.writeAscii("${release.firmwareUpdate.appUpdateCommand}\r")
@@ -329,6 +340,9 @@ object ArduconFirmwareUpdate {
         } else {
             progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0, "Waiting for Arducon update mode"))
             transport.connect(release.firmwareUpdate.updateBaud)
+            if (transport.pulseTargetReset()) {
+                progress(SignalSlingerFirmwareUpdateProgress("Preparing update", 0, 0, "Pulsed Arducon reset for bootloader recovery."))
+            }
         }
         repeat(10) { attempt ->
             if (trySync(transport)) {
@@ -379,15 +393,16 @@ object ArduconFirmwareUpdate {
                 transport.disconnect()
             } catch (_: Throwable) {
             }
-            platformSleep(300)
+            platformSleep(1_000)
             try {
                 transport.connect(release.firmwareUpdate.appBaud)
                 val appInfo = readAppInfo(
                     transport = transport,
                     release = release,
-                    attempts = 1,
-                    drainTimeoutMs = 100,
-                    responseTimeoutMs = 500,
+                    attempts = 3,
+                    drainTimeoutMs = 300,
+                    responseTimeoutMs = 1_200,
+                    sendStopCommand = false,
                 )
                     ?: error(ArduconRestartConfirmationFailureMessage)
                 validateAppInfoForRelease(appInfo, release, requireVersion = true)
@@ -431,17 +446,32 @@ object ArduconFirmwareUpdate {
         attempts: Int = 3,
         drainTimeoutMs: Long = 300,
         responseTimeoutMs: Long = 1_200,
+        sendStopCommand: Boolean = true,
     ): SignalSlingerAppInfo? {
         val allLines = mutableListOf<String>()
         repeat(attempts.coerceAtLeast(1)) {
             transport.readLines(drainTimeoutMs)
-            transport.writeAscii("$ArduconStopTransmissionsCommand\r")
-            transport.readLines(drainTimeoutMs)
+            if (sendStopCommand) {
+                transport.writeAscii("$ArduconStopTransmissionsCommand\r")
+                transport.readLines(drainTimeoutMs)
+            }
             transport.writeAscii("${release.firmwareUpdate.appInfoCommand}\r")
             allLines += transport.readLines(responseTimeoutMs)
-            SignalSlingerFirmwareUpdate.parseAppInfo(allLines)?.let { return it }
+            SignalSlingerFirmwareUpdate.parseAppInfo(allLines)
+                ?.takeIf { it.hasRequiredArduconUpdateIdentity() }
+                ?.let { return it }
         }
         return null
+    }
+
+    private fun SignalSlingerAppInfo.hasRequiredArduconUpdateIdentity(): Boolean {
+        return product != null &&
+            softwareVersion != null &&
+            hardwareBuild != null &&
+            appStartAddress != null &&
+            updateBaud != null &&
+            appUpdateCommand != null &&
+            bootloaderProtocol != null
     }
 
     private fun validateAppInfoForRelease(
@@ -498,6 +528,7 @@ object ArduconFirmwareUpdate {
     private fun loadAddress(
         transport: SignalSlingerFirmwareUpdateTransport,
         byteAddress: Int,
+        paceMs: Long = 0,
     ) {
         val wordAddress = byteAddress / 2
         stkCommand(
@@ -505,6 +536,7 @@ object ArduconFirmwareUpdate {
             command = byteArrayOf(0x55, (wordAddress and 0xFF).toByte(), ((wordAddress ushr 8) and 0xFF).toByte()),
             responseBytes = 0,
             description = "load address ${byteAddress.toHex32()}",
+            paceMs = paceMs,
         )
     }
 
@@ -513,11 +545,15 @@ object ArduconFirmwareUpdate {
         command: ByteArray,
         responseBytes: Int,
         description: String,
+        paceMs: Long = 0,
     ): ByteArray {
         transport.writeBytes(command + StkCrcEop.toByte())
         val response = readStkResponse(transport, responseBytes, 1_500)
         require(response != null) {
             "Arducon bootloader did not respond to $description."
+        }
+        if (paceMs > 0) {
+            platformSleep(paceMs)
         }
         return response
     }

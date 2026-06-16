@@ -70,13 +70,29 @@ class ArduconFirmwareUpdateTest {
         assertEquals(listOf(57_600, 57_600), transport.connectedBauds)
         assertEquals(listOf(115_200), transport.reconfiguredBauds)
         assertEquals(1, transport.resetPulseCount)
-        assertEquals(listOf("SYN 0\r", "INF\r", "UPD\r", "SYN 0\r", "INF\r"), transport.asciiWrites)
+        assertEquals(listOf("SYN 0\r", "INF\r", "UPD\r", "INF\r"), transport.asciiWrites)
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x30 })
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x50 })
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x55 })
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x64 })
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x74 })
         assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x51 })
+    }
+
+    @Test
+    fun retriesWhenFirstArduconInfoReadIsIncomplete() {
+        val hex = sampleHex()
+        val manifest = ArduconFirmwareUpdate.parseReleaseInfo(sampleManifest(hex.encodeToByteArray()))
+        val transport = FakeStk500Transport(partialFirstInfo = true)
+
+        ArduconFirmwareUpdate.performUpdate(
+            transport = transport,
+            release = manifest,
+            hexText = hex,
+        )
+
+        assertEquals(listOf("SYN 0\r", "INF\r", "SYN 0\r", "INF\r", "UPD\r"), transport.asciiWrites.take(5))
+        assertTrue(transport.binaryWrites.any { it.first().toInt() == 0x64 })
     }
 
     @Test
@@ -224,6 +240,7 @@ class ArduconFirmwareUpdateTest {
     private class FakeStk500Transport(
         private val confirmRestart: Boolean = true,
         private val appVersion: String = "2.0.0",
+        private val partialFirstInfo: Boolean = false,
     ) : SignalSlingerFirmwareUpdateTransport {
         val connectedBauds = mutableListOf<Int>()
         val reconfiguredBauds = mutableListOf<Int>()
@@ -236,6 +253,7 @@ class ArduconFirmwareUpdateTest {
         private var loadedAddress = 0
         private var pendingBytes = ByteArray(0)
         private var finalInfo = false
+        private var appInfoReadCount = 0
 
         override fun connect(baudRate: Int) {
             connectedBaud = baudRate
@@ -297,6 +315,14 @@ class ArduconFirmwareUpdateTest {
         override fun readLines(timeoutMs: Long): List<String> {
             if (asciiWrites.lastOrNull() != "INF\r") {
                 return emptyList()
+            }
+            appInfoReadCount++
+            if (partialFirstInfo && appInfoReadCount == 1) {
+                return listOf(
+                    "> baud=115200",
+                    "* INF bl=unknown",
+                    "* INF proto=stk500v1",
+                )
             }
             if (finalInfo && !confirmRestart) {
                 return emptyList()

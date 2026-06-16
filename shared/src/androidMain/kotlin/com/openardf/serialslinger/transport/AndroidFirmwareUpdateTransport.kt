@@ -14,14 +14,17 @@ class AndroidFirmwareUpdateTransport(
     private val readQuietPeriodMs: Long = 120,
     private val pollIntervalMs: Long = 20,
     private val postWriteReadDelayMs: Long = 80,
+    private val postBinaryWriteReadDelayMs: Long = postWriteReadDelayMs,
     private val binaryWriteChunkBytes: Int = 64,
     private val ftdiLatencyTimerMs: Int = 8,
+    private val targetResetSettleMs: Long = DefaultResetSettleMs,
 ) : SignalSlingerFirmwareUpdateTransport {
     private var connection: UsbDeviceConnection? = null
     private var serialPort: UsbSerialPort? = null
     private var connectedBaudRate: Int? = null
     private val lineBuffer = AndroidSerialLineBuffer()
     private var lastWriteAtMs: Long? = null
+    private var lastWriteReadDelayMs: Long = 0
     private val requestedDeviceName = usbDevice.deviceName
 
     override fun connect(baudRate: Int) {
@@ -57,6 +60,7 @@ class AndroidFirmwareUpdateTransport(
             connectedBaudRate = baudRate
             lineBuffer.clear()
             lastWriteAtMs = null
+            lastWriteReadDelayMs = 0
         } catch (error: Throwable) {
             runCatching { port.close() }
             usbConnection.close()
@@ -72,6 +76,7 @@ class AndroidFirmwareUpdateTransport(
         lineBuffer.clear()
         connectedBaudRate = null
         lastWriteAtMs = null
+        lastWriteReadDelayMs = 0
     }
 
     override fun reconfigureBaudRate(baudRate: Int): Boolean {
@@ -86,6 +91,7 @@ class AndroidFirmwareUpdateTransport(
             connectedBaudRate = baudRate
             lineBuffer.clear()
             lastWriteAtMs = null
+            lastWriteReadDelayMs = 0
             true
         } catch (_: Throwable) {
             false
@@ -100,20 +106,25 @@ class AndroidFirmwareUpdateTransport(
             Thread.sleep(ResetPulseMs)
             port.setDTR(false)
             runCatching { port.setRTS(false) }
-            Thread.sleep(ResetSettleMs)
+            Thread.sleep(targetResetSettleMs)
             lineBuffer.clear()
             lastWriteAtMs = null
+            lastWriteReadDelayMs = 0
         }.isSuccess
     }
 
     override fun writeAscii(text: String) {
-        writeBytes(text.encodeToByteArray())
+        writeBytesForReadDelay(text.encodeToByteArray(), postWriteReadDelayMs)
     }
 
     override fun writeBytes(bytes: ByteArray) {
+        writeBytesForReadDelay(bytes, postBinaryWriteReadDelayMs)
+    }
+
+    private fun writeBytesForReadDelay(bytes: ByteArray, readDelayMs: Long) {
         val allowReconnectRetry = bytes.size <= SmallCommandRetryMaxBytes
         try {
-            writeConnectedBytes(bytes)
+            writeConnectedBytes(bytes, readDelayMs)
         } catch (failure: Throwable) {
             val baudRate = connectedBaudRate
             disconnect()
@@ -126,7 +137,7 @@ class AndroidFirmwareUpdateTransport(
             Thread.sleep(UsbReconnectSettleMs)
             try {
                 connect(baudRate)
-                writeConnectedBytes(bytes)
+                writeConnectedBytes(bytes, readDelayMs)
             } catch (retryFailure: Throwable) {
                 disconnect()
                 throw usbInterruptedFailure(retryFailure)
@@ -134,7 +145,7 @@ class AndroidFirmwareUpdateTransport(
         }
     }
 
-    private fun writeConnectedBytes(bytes: ByteArray) {
+    private fun writeConnectedBytes(bytes: ByteArray, readDelayMs: Long) {
         val port = requireNotNull(serialPort) {
             "USB serial device $requestedDeviceName is not connected for update."
         }
@@ -145,6 +156,7 @@ class AndroidFirmwareUpdateTransport(
             offset = nextOffset
         }
         lastWriteAtMs = System.currentTimeMillis()
+        lastWriteReadDelayMs = readDelayMs
     }
 
     override fun readLines(timeoutMs: Long): List<String> {
@@ -215,9 +227,10 @@ class AndroidFirmwareUpdateTransport(
 
     private fun sleepAfterRecentWrite() {
         val lastWrite = lastWriteAtMs ?: return
+        val readDelayMs = lastWriteReadDelayMs
         val elapsed = System.currentTimeMillis() - lastWrite
-        if (elapsed in 0 until postWriteReadDelayMs) {
-            Thread.sleep(postWriteReadDelayMs - elapsed)
+        if (elapsed in 0 until readDelayMs) {
+            Thread.sleep(readDelayMs - elapsed)
         }
     }
 
@@ -231,6 +244,6 @@ class AndroidFirmwareUpdateTransport(
         private const val SmallCommandRetryMaxBytes = 8
         private const val UsbReconnectSettleMs = 250L
         private const val ResetPulseMs = 120L
-        private const val ResetSettleMs = 500L
+        private const val DefaultResetSettleMs = 500L
     }
 }
