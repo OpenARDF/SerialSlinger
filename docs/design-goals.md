@@ -39,11 +39,13 @@ Make SignalSlinger configuration approachable through a graphical interface so u
 
 ## Platform Scope
 
-The first usable release should target:
+SerialSlinger targets:
 
 - macOS
 - Windows
 - Linux
 - Android
+
+Linux is now an active desktop platform: the desktop app has been demonstrated to install and run on Linux.
 
 iOS is deferred for now because the project depends on practical USB/serial device access, and that is not a good fit for the current iOS accessory model.

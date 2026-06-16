@@ -44,9 +44,9 @@ iOS is not a practical near-term target for this project's direct USB/serial wor
 
 For SerialSlinger, the critical path is reliable access to attached USB serial hardware. Android supports USB host APIs directly, while iOS generally requires Apple-supported accessory paths rather than broad direct USB serial access.
 
-That means the current platform plan is:
+That leaves the current platform plan as:
 
-- build and test desktop support first
+- keep desktop support active across macOS, Windows, and Linux
 - keep Android in scope as the first mobile target
 - defer iOS unless SignalSlinger adopts a transport model that fits Apple's supported frameworks
 

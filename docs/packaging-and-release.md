@@ -90,7 +90,7 @@ The intended release flow is:
    - either carry the needed changes across or explicitly record why no cross-platform change is needed
 5. run the automated Android tablet regression: `./scripts/android-regression.sh --serial <adb-serial>`
 6. run the desktop app regression series on macOS with a real attached SignalSlinger
-7. run packaged desktop smoke checks on Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64, recording concrete evidence for each architecture or an explicit skip reason and requester
+7. run packaged desktop smoke checks on Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64 when hosts are available, recording concrete evidence for each architecture or an explicit skip reason and requester
 8. generate terse Android release notes in plain language and provide them in a copyable text block for Play Console use
 9. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
 10. merge the desired release state to `main`
@@ -107,7 +107,7 @@ Do not push a normal public release tag until both real-device regression passes
 - automated Android tablet regression on a real attached SignalSlinger test device. The regression is destructive to the attached device settings and starts from normal Android UI mode before exercising normal-mode load, setting submit, schedule, raw command, log, and clone paths.
 - desktop app regression on macOS with the SerialSlinger desktop UI launched against a real attached SignalSlinger. The pass should exercise the actual app window, not only the desktop smoke CLI: connect/load, normal-mode setting edits and submit, relative start-time scheduling, disable event, sync/set time, raw command/log behavior, clone where appropriate, and post-test CLI readback to confirm the device is left in a known acceptable state. Before GUI automation, close any installed SerialSlinger app, launch the checkout with Gradle, and confirm the tested window/log session shows the intended version, process ID, and launch directory so installed-app sessions do not contaminate the regression log.
 
-Do not treat cross-platform desktop support as covered by the macOS regression alone. The release checklist must include packaged-app smoke evidence for Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64. If one of those architectures cannot be tested for a specific release, record it as a skipped checklist item with the concrete reason and the requester who accepted the risk.
+Do not treat cross-platform desktop support as covered by the macOS regression alone. The release checklist must include packaged-app smoke items for Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64. If one of those architectures cannot be tested for a specific release, record it as a skipped checklist item with the concrete reason and the requester who accepted the risk. Linux install/run has been demonstrated, so a skipped Linux smoke item is an evidence gap for that release, not a statement that Linux is unsupported or only aspirational.
 
 The chosen public package identity is `serialslinger`, and the shared public and app version line is `1.0.93`.
 
@@ -153,7 +153,7 @@ Notes:
 
 ## Linux Packaging
 
-Use the jDeploy package as the default Linux desktop distribution path. For release validation, install and launch the packaged app on Linux Intel x64 and Linux ARM64, or record an approved checklist skip for the missing architecture.
+Use the jDeploy package as the default Linux desktop distribution path. The desktop app has been demonstrated to install and run on Linux. For release validation, install and launch the packaged app on Linux Intel x64 and Linux ARM64 when those hosts are available; otherwise record an approved checklist skip for the missing architecture. Routine Linux smoke skips are acceptable when no Linux host is part of the release session, but the skip should remain explicit in the checklist.
 
 ## Android Signed Bundles
 

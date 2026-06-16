@@ -20,8 +20,8 @@ The goal is to make SignalSlinger setup practical without memorizing serial comm
 
 ## Platform Status
 
-- Verified on Windows, macOS, and Android
-- Linux is a planned target, but has not yet been verified
+- Desktop install and run verified on macOS, Windows, and Linux
+- Android is supported for tablet/mobile workflows
 
 ## Project Status
 

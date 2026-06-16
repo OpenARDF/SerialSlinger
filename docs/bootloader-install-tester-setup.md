@@ -63,7 +63,7 @@ Linux:
 - pymcuprog and pyusb
 - USB permissions that allow the user account to open the programmer
 
-Linux should use the same Java desktop app flow as macOS, but it needs validation on real hardware before it should be described as fully verified.
+The Java desktop app has been demonstrated to install and run on Linux. Bootloader-install testing on a Linux host should still confirm the tester's local USB permissions, programmer access, UPDI connection, target power, and post-install serial readback where the normal assembled-device flow is used.
 
 ## Friendly Failure Expectations
 

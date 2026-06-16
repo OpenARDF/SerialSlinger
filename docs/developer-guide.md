@@ -91,12 +91,14 @@ The software is organized around a structured settings model:
 
 ## Platform Targets
 
-Current target platforms are:
+Current supported platforms are:
 
 - macOS
 - Windows
 - Linux
 - Android
+
+The desktop app has been demonstrated to install and run on Linux; release validation should continue recording architecture-specific packaged-app smoke evidence for Linux Intel x64 and Linux ARM64 when those hosts are available.
 
 iOS is currently out of scope for direct USB or serial support. If SignalSlinger ever exposes a transport that fits Apple's supported accessory model, that decision can be revisited later.
 
