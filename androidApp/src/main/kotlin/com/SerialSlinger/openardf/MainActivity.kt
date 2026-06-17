@@ -5897,19 +5897,22 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun showTemperatureCalibrationDialog(currentCalibration: Int?) {
+        val minimum = TemperatureCalibrationSupport.minimum
+        val maximum = TemperatureCalibrationSupport.maximum
         val numberPicker =
             NumberPicker(this).apply {
-                minValue = TemperatureCalibrationSupport.minimum
-                maxValue = TemperatureCalibrationSupport.maximum
+                minValue = 0
+                maxValue = maximum - minimum
+                setFormatter { value -> (minimum + value).toString() }
                 value = (currentCalibration ?: TemperatureCalibrationSupport.defaultCalibration)
-                    .coerceIn(TemperatureCalibrationSupport.minimum, TemperatureCalibrationSupport.maximum)
+                    .coerceIn(minimum, maximum) - minimum
                 wrapSelectorWheel = false
             }
         AlertDialog.Builder(this)
             .setTitle("Temperature Calibration")
             .setView(numberPicker)
             .setPositiveButton("Set") { _, _ ->
-                runTemperatureCalibrationSubmitOrPreview(numberPicker.value)
+                runTemperatureCalibrationSubmitOrPreview(minimum + numberPicker.value)
             }
             .setNegativeButton("Cancel", null)
             .showLogged("Temperature Calibration")
