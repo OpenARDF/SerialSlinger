@@ -75,6 +75,7 @@ import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FrequencyBankId
 import com.openardf.serialslinger.model.FrequencySupport
+import com.openardf.serialslinger.model.FirmwareUpdateUiText
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
@@ -3293,7 +3294,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 else -> Color.parseColor("#9E1C1C")
             }
         val connectionClick =
-            if (!thermalWarningActive && !readingData && !connectingToDetectedDevice && !autoDetectSearchingForHeader) {
+            if (!readingData && !connectingToDetectedDevice && !autoDetectSearchingForHeader) {
                 { requestSignalSlingerReload() }
             } else {
                 null
@@ -3508,17 +3509,17 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 }
             firmwareUpdateDialog =
                 AlertDialog.Builder(this)
-                    .setTitle(firmwareUpdateDialogTitle(progress.stage))
+                    .setTitle(firmwareUpdateDialogTitle(progress.productLabel))
                     .setView(container)
                     .create()
                     .apply {
                         setCanceledOnTouchOutside(false)
                         setCancelable(false)
-                        showLogged(firmwareUpdateDialogTitle(progress.stage))
+                        showLogged(firmwareUpdateDialogTitle(progress.productLabel))
                     }
         }
 
-        firmwareUpdateStatusView?.text = userFacingFirmwareUpdateStage(progress.stage)
+        firmwareUpdateStatusView?.text = userFacingFirmwareUpdateStage(progress.stage, progress.productLabel)
         firmwareUpdateProgressBar?.let { bar ->
             bar.isIndeterminate = false
             bar.progress =
@@ -3530,23 +3531,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
     }
 
-    private fun userFacingFirmwareUpdateStage(stage: String): String =
-        when (stage) {
-            "Preparing update" -> "Preparing update"
-            "Checking file" -> "Checking file"
-            "Sending update" -> "Sending update"
-            "Verifying update" -> "Verifying update"
-            "Restarting SignalSlinger" -> "Restarting SignalSlinger"
-            "Restarting Arducon" -> "Restarting Arducon"
-            else -> "Updating SignalSlinger"
-        }
+    private fun userFacingFirmwareUpdateStage(stage: String, productLabel: String): String =
+        FirmwareUpdateUiText.stageLabel(stage, productLabel)
 
-    private fun firmwareUpdateDialogTitle(stage: String): String =
-        if (stage.contains("Arducon", ignoreCase = true)) {
-            "Updating Arducon"
-        } else {
-            "Updating SignalSlinger"
-        }
+    private fun firmwareUpdateDialogTitle(productLabel: String): String =
+        FirmwareUpdateUiText.dialogTitle(productLabel)
 
     private fun firmwareUpdateStageBaseline(stage: String): Int =
         when (stage) {
@@ -7853,7 +7842,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             TemperatureAlertLevel.DANGER -> {
                 thermalHeaderWarningText = "High Temperature Warning"
                 thermalHeaderWarningDetail =
-                    "Current temperature ${formatTemperatureForUnit(currentTemperatureC)}. Reduce device temperature before continuing."
+                    "Current temperature ${formatTemperatureForUnit(currentTemperatureC)}. Device data remains available."
             }
             TemperatureAlertLevel.NORMAL,
             TemperatureAlertLevel.WARNING,

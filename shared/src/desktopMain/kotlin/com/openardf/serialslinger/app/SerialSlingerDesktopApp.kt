@@ -10693,7 +10693,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                             currentTemperatureC,
                             displayPreferences.temperatureDisplayUnit,
                         )
-                    }. Reduce device temperature before continuing."
+                    }. Device data remains available."
                 }
                 TemperatureAlertLevel.NORMAL,
                 TemperatureAlertLevel.WARNING,
@@ -11252,7 +11252,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun renderConnectionIndicator() {
         val temperatureLoggingActive = temperatureLogTimer != null
         val state = when {
-            thermalHeadlineWarningMessage != null -> ConnectionIndicatorState.DISCONNECTED
+            thermalHeadlineWarningMessage != null -> ConnectionIndicatorState.WARNING
             temperatureLoggingActive -> ConnectionIndicatorState.CONNECTED
             else -> connectionIndicatorState
         }
@@ -14057,6 +14057,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val background: Color,
     ) {
         CONNECTED("GREEN", Color(0x0F, 0x51, 0x2A), Color(0xD1, 0xFA, 0xE5)),
+        WARNING("RED", Color(0x7F, 0x1D, 0x1D), Color(0xFE, 0xF2, 0xF2)),
         SEARCHING("YELLOW", Color(0x85, 0x4D, 0x0E), Color(0xFE, 0xF3, 0xC7)),
         DISCONNECTED("RED", Color(0x7F, 0x1D, 0x1D), Color(0xFE, 0xF2, 0xF2)),
     }

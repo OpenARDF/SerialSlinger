@@ -107,6 +107,7 @@ data class AndroidUiState(
 )
 
 data class AndroidFirmwareUpdateProgress(
+    val productLabel: String,
     val stage: String,
     val completedPages: Int,
     val totalPages: Int,
@@ -6067,7 +6068,7 @@ object AndroidSessionController {
                         val deviceName = (target as? AndroidConnectionTarget.Usb)?.deviceName ?: recoveryUsbDeviceName
                         require(!deviceName.isNullOrBlank()) { "Android firmware update requires a USB-connected SignalSlinger." }
                         signalSlingerReadInFlight = true
-                        firmwareUpdateProgress = AndroidFirmwareUpdateProgress("Preparing update", 0, 0, null)
+                        firmwareUpdateProgress = AndroidFirmwareUpdateProgress("SignalSlinger", "Preparing update", 0, 0, null)
                         statusText = "Preparing update..."
                         statusIsError = false
                         latestSubmitSummary = "Preparing SignalSlinger update..."
@@ -6147,7 +6148,9 @@ object AndroidSessionController {
                                 hexText = hexText,
                                 recoverAlreadyWaiting = recoverAlreadyWaitingForAttempt,
                                 allowAppHardwareMismatch = allowHardwareMismatch,
-                                progress = ::recordFirmwareUpdateProgress,
+                                progress = { progress ->
+                                    recordFirmwareUpdateProgress("SignalSlinger", progress)
+                                },
                             )
                         } finally {
                             transport.disconnect()
@@ -6384,7 +6387,7 @@ object AndroidSessionController {
                             }
                         require(!deviceName.isNullOrBlank()) { "Android firmware update requires a USB-connected Arducon." }
                         signalSlingerReadInFlight = true
-                        firmwareUpdateProgress = AndroidFirmwareUpdateProgress("Preparing update", 0, 0, null)
+                        firmwareUpdateProgress = AndroidFirmwareUpdateProgress("Arducon", "Preparing update", 0, 0, null)
                         statusText = "Preparing update..."
                         statusIsError = false
                         latestSubmitSummary =
@@ -6466,7 +6469,9 @@ object AndroidSessionController {
                             confirmedAppInfo = start.confirmedAppInfo,
                             stkCommandPaceMs = 25L,
                             verifyReadback = false,
-                            progress = ::recordFirmwareUpdateProgress,
+                            progress = { progress ->
+                                recordFirmwareUpdateProgress("Arducon", progress)
+                            },
                         )
                     } finally {
                         transport.disconnect()
@@ -6618,8 +6623,12 @@ object AndroidSessionController {
         }
     }
 
-    private fun recordFirmwareUpdateProgress(progress: SignalSlingerFirmwareUpdateProgress) {
+    private fun recordFirmwareUpdateProgress(
+        productLabel: String,
+        progress: SignalSlingerFirmwareUpdateProgress,
+    ) {
         val androidProgress = AndroidFirmwareUpdateProgress(
+            productLabel = productLabel,
             stage = progress.stage,
             completedPages = progress.completedPages,
             totalPages = progress.totalPages,
