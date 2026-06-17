@@ -168,6 +168,7 @@ object SignalSlingerFirmwareSupport {
         "CLK S",
         "CLK F",
         "UTI",
+        "UTI C",
         "SET S",
         "PWD",
         "AM",
@@ -184,6 +185,7 @@ object SignalSlingerFirmwareSupport {
         SettingKey.DTMF_PASSWORD to listOf("PWD"),
         SettingKey.AM_TONE_FREQUENCY to listOf("AM"),
         SettingKey.PTT_RESET_SETTING to listOf("SET P"),
+        SettingKey.TEMPERATURE_CALIBRATION to listOf("UTI C", "UTI"),
     )
 
     private val arduconProfile = SignalSlingerFirmwareProfile(
@@ -200,6 +202,7 @@ object SignalSlingerFirmwareSupport {
             supportsDtmfPasswordEditing = true,
             supportsAmToneEditing = true,
             supportsPttResetEditing = true,
+            supportsTemperatureCalibrationEditing = true,
             supportsFirmwareUpdate = true,
         ),
         bootstrapLoadCommands = versionBootstrapCommands,

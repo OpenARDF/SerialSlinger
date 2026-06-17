@@ -28,6 +28,7 @@ import com.openardf.serialslinger.model.CloneTemplateEligibility
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
+import com.openardf.serialslinger.model.TemperatureCalibrationSupport
 import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import com.openardf.serialslinger.model.hasWallClockTimeSet
@@ -2000,6 +2001,47 @@ object AndroidSessionController {
             alreadyMatches = { settings -> settings.pttResetSetting == pttResetSetting },
             editSettings = { settings ->
                 settings.copy(pttResetSetting = settings.pttResetSetting.copy(editedValue = pttResetSetting))
+            },
+            updateCloneTemplate = false,
+            onComplete = onComplete,
+        )
+    }
+
+    fun runTemperatureCalibrationSubmit(
+        context: Context,
+        calibration: Int,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
+    ) {
+        try {
+            TemperatureCalibrationSupport.validate(calibration)
+        } catch (error: IllegalArgumentException) {
+            synchronized(this) {
+                latestSubmitSummary = "Submit failed.\n${error.message}"
+                statusText = "Temperature Calibration update failed."
+                statusIsError = true
+            }
+            emitCommandLog("set-temperature-calibration", source, success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        runArduconEditableSettingSubmit(
+            context = context,
+            requestedDeviceName = requestedDeviceName,
+            source = source,
+            commandName = "set-temperature-calibration",
+            settingLabel = "Temperature Calibration",
+            capabilitySupported = { supportsTemperatureCalibrationEditing },
+            alreadyMatches = { settings -> settings.temperatureCalibration == calibration },
+            editSettings = { settings ->
+                settings.copy(
+                    temperatureCalibration = settings.temperatureCalibration.copy(
+                        editedValue = calibration,
+                    ),
+                )
             },
             updateCloneTemplate = false,
             onComplete = onComplete,

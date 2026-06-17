@@ -69,6 +69,7 @@ data class DeviceCapabilities(
     val supportsDtmfPasswordEditing: Boolean = false,
     val supportsAmToneEditing: Boolean = false,
     val supportsPttResetEditing: Boolean = false,
+    val supportsTemperatureCalibrationEditing: Boolean = false,
     val supportsExternalBatteryControl: Boolean = false,
     val supportsPatternEditing: Boolean = false,
     val supportsScheduling: Boolean = false,
@@ -131,6 +132,7 @@ data class DeviceSettings(
     val dtmfPassword: String? = null,
     val amToneFrequency: Int? = null,
     val pttResetSetting: Int? = null,
+    val temperatureCalibration: Int? = null,
 ) {
     companion object {
         fun empty(): DeviceSettings {
@@ -157,6 +159,7 @@ data class DeviceSettings(
                 dtmfPassword = null,
                 amToneFrequency = null,
                 pttResetSetting = null,
+                temperatureCalibration = null,
             )
         }
     }
@@ -183,6 +186,21 @@ fun normalizeDtmfPasswordForWrite(value: String?): String? {
         "DTMF Password must be 4 to 8 numeric characters."
     }
     return normalized
+}
+
+object TemperatureCalibrationSupport {
+    const val minimum = -1999
+    const val maximum = 1999
+    const val defaultCalibration = -110
+
+    fun validate(value: Int): Int {
+        require(value in minimum..maximum) {
+            "Temperature Calibration must be between $minimum and $maximum."
+        }
+        return value
+    }
+
+    fun format(value: Int?): String = value?.toString() ?: "Not read"
 }
 
 enum class ValidationState {
@@ -230,6 +248,7 @@ data class EditableDeviceSettings(
     val dtmfPassword: SettingsField<String?> = SettingsField("dtmfPassword", "DTMF Password", null, null),
     val amToneFrequency: SettingsField<Int?> = SettingsField("amToneFrequency", "AM Tone", null, null),
     val pttResetSetting: SettingsField<Int?> = SettingsField("pttResetSetting", "PTT Reset", null, null),
+    val temperatureCalibration: SettingsField<Int?> = SettingsField("temperatureCalibration", "Temperature Calibration", null, null),
 ) {
     val fields: List<SettingsField<*>> = listOf(
         stationId,
@@ -254,6 +273,7 @@ data class EditableDeviceSettings(
         dtmfPassword,
         amToneFrequency,
         pttResetSetting,
+        temperatureCalibration,
     )
 
     val hasDirtyFields: Boolean
@@ -296,6 +316,7 @@ data class EditableDeviceSettings(
             dtmfPassword = normalizedDtmfPassword,
             amToneFrequency = amToneFrequency.editedValue,
             pttResetSetting = pttResetSetting.editedValue,
+            temperatureCalibration = temperatureCalibration.editedValue?.let(TemperatureCalibrationSupport::validate),
         )
     }
 
@@ -315,6 +336,7 @@ data class EditableDeviceSettings(
             "dtmfPassword" -> capabilities.supportsDtmfPasswordEditing
             "amToneFrequency" -> capabilities.supportsAmToneEditing
             "pttResetSetting" -> capabilities.supportsPttResetEditing
+            "temperatureCalibration" -> capabilities.supportsTemperatureCalibrationEditing
             "patternText", "patternCodeSpeedWpm" -> capabilities.supportsPatternEditing
             "defaultFrequencyHz", "lowFrequencyHz", "mediumFrequencyHz", "highFrequencyHz", "beaconFrequencyHz" -> capabilities.supportsFrequencyProfiles
             "lowBatteryThresholdVolts", "externalBatteryControlMode" -> capabilities.supportsExternalBatteryControl
@@ -369,6 +391,12 @@ data class EditableDeviceSettings(
                 dtmfPassword = SettingsField("dtmfPassword", "DTMF Password", settings.dtmfPassword, settings.dtmfPassword),
                 amToneFrequency = SettingsField("amToneFrequency", "AM Tone", settings.amToneFrequency, settings.amToneFrequency),
                 pttResetSetting = SettingsField("pttResetSetting", "PTT Reset", settings.pttResetSetting, settings.pttResetSetting),
+                temperatureCalibration = SettingsField(
+                    "temperatureCalibration",
+                    "Temperature Calibration",
+                    settings.temperatureCalibration,
+                    settings.temperatureCalibration,
+                ),
             )
         }
     }

@@ -107,6 +107,23 @@ class DeviceModelsTest {
     }
 
     @Test
+    fun validatedSettingsEnforceTemperatureCalibrationRange() {
+        val validSettings = sampleEditableSettings(
+            temperatureCalibration = SettingsField("temperatureCalibration", "Temperature Calibration", -110, -125),
+        ).toValidatedDeviceSettings()
+
+        assertEquals(-125, validSettings.temperatureCalibration)
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            sampleEditableSettings(
+                temperatureCalibration = SettingsField("temperatureCalibration", "Temperature Calibration", -110, 2000),
+            ).toValidatedDeviceSettings()
+        }
+
+        assertTrue(error.message!!.contains("Temperature Calibration"))
+    }
+
+    @Test
     fun unsupportedFieldsAreFilteredOutByCapabilities() {
         val editable = sampleEditableSettings()
         val capabilities = DeviceCapabilities(
@@ -121,6 +138,7 @@ class DeviceModelsTest {
         assertFalse("patternText" in writable)
         assertFalse("lowFrequencyHz" in writable)
         assertFalse("externalBatteryControlMode" in writable)
+        assertFalse("temperatureCalibration" in writable)
         assertFalse("daysToRun" in writable)
         assertTrue("stationId" in writable)
     }
@@ -228,6 +246,7 @@ class DeviceModelsTest {
         externalBatteryControlMode: SettingsField<ExternalBatteryControlMode?> = SettingsField("externalBatteryControlMode", "External Battery Control", ExternalBatteryControlMode.OFF, ExternalBatteryControlMode.OFF),
         transmissionsEnabled: SettingsField<Boolean> = SettingsField("transmissionsEnabled", "RF Transmissions", true, true),
         dtmfPassword: SettingsField<String?> = SettingsField("dtmfPassword", "DTMF Password", null, null),
+        temperatureCalibration: SettingsField<Int?> = SettingsField("temperatureCalibration", "Temperature Calibration", null, null),
     ): EditableDeviceSettings {
         return EditableDeviceSettings(
             stationId = stationId,
@@ -249,6 +268,7 @@ class DeviceModelsTest {
             externalBatteryControlMode = externalBatteryControlMode,
             transmissionsEnabled = transmissionsEnabled,
             dtmfPassword = dtmfPassword,
+            temperatureCalibration = temperatureCalibration,
         )
     }
 }

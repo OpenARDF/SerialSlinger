@@ -455,12 +455,14 @@ class SignalSlingerProtocolCodecTest {
         val amUpdate = SignalSlingerProtocolCodec.parseReportLine("AM:3")
         val pttUpdate = SignalSlingerProtocolCodec.parseReportLine("DRP:1")
         val invalidPttUpdate = SignalSlingerProtocolCodec.parseReportLine("DRP:2")
+        val calibrationUpdate = SignalSlingerProtocolCodec.parseReportLine("T Cal= -110")
 
         assertEquals(11.07, voltageUpdate?.deviceStatusPatch?.externalBatteryVolts)
         assertEquals("1357", passwordUpdate?.settingsPatch?.dtmfPassword)
         assertEquals(3, amUpdate?.settingsPatch?.amToneFrequency)
         assertEquals(1, pttUpdate?.settingsPatch?.pttResetSetting)
         assertNull(invalidPttUpdate)
+        assertEquals(-110, calibrationUpdate?.settingsPatch?.temperatureCalibration)
     }
 
     @Test
@@ -469,11 +471,13 @@ class SignalSlingerProtocolCodecTest {
             dtmfPassword = "1357",
             amToneFrequency = 0,
             pttResetSetting = 0,
+            temperatureCalibration = -110,
         )
         val edited = original.copy(
             dtmfPassword = "2468",
             amToneFrequency = 3,
             pttResetSetting = 1,
+            temperatureCalibration = -125,
         )
 
         val writePlan = WritePlanner.create(original, edited)
@@ -483,7 +487,7 @@ class SignalSlingerProtocolCodecTest {
             deviceInfo = DeviceInfo(productName = "Arducon"),
         )
 
-        assertEquals(listOf("PWD 2468", "AM 3", "SET P 1"), commands)
+        assertEquals(listOf("PWD 2468", "AM 3", "SET P 1", "UTI C -125"), commands)
     }
 
     @Test

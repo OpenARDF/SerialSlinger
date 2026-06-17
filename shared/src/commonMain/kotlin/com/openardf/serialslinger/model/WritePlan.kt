@@ -23,6 +23,7 @@ enum class SettingKey {
     DTMF_PASSWORD,
     AM_TONE_FREQUENCY,
     PTT_RESET_SETTING,
+    TEMPERATURE_CALIBRATION,
 }
 
 data class SettingChange(
@@ -68,6 +69,7 @@ object WritePlanner {
             addIfChanged(SettingKey.DTMF_PASSWORD, 190, original.dtmfPassword, edited.dtmfPassword, true, forceWriteKeys)
             addIfChanged(SettingKey.AM_TONE_FREQUENCY, 200, original.amToneFrequency, edited.amToneFrequency, true, forceWriteKeys)
             addIfChanged(SettingKey.PTT_RESET_SETTING, 210, original.pttResetSetting, edited.pttResetSetting, true, forceWriteKeys)
+            addIfChanged(SettingKey.TEMPERATURE_CALIBRATION, 220, original.temperatureCalibration, edited.temperatureCalibration, true, forceWriteKeys)
             addFinishWriteNeededToPreserveAbsoluteFinishAfterStartChange(original, edited)
         }.sortedBy { it.writeOrder }
 

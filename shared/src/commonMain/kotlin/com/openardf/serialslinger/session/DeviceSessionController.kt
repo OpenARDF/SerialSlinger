@@ -607,6 +607,7 @@ object DeviceSessionController {
             if (patch.dtmfPassword != null) add(SettingKey.DTMF_PASSWORD)
             if (patch.amToneFrequency != null) add(SettingKey.AM_TONE_FREQUENCY)
             if (patch.pttResetSetting != null) add(SettingKey.PTT_RESET_SETTING)
+            if (patch.temperatureCalibration != null) add(SettingKey.TEMPERATURE_CALIBRATION)
         }
     }
 
@@ -726,6 +727,7 @@ object DeviceSessionController {
             SettingKey.DTMF_PASSWORD -> settings.dtmfPassword
             SettingKey.AM_TONE_FREQUENCY -> settings.amToneFrequency
             SettingKey.PTT_RESET_SETTING -> settings.pttResetSetting
+            SettingKey.TEMPERATURE_CALIBRATION -> settings.temperatureCalibration
         }
     }
 }

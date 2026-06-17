@@ -25,6 +25,7 @@ import com.openardf.serialslinger.model.StartTimeDaysToRunChoice
 import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
 import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
+import com.openardf.serialslinger.model.TemperatureCalibrationSupport
 import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import com.openardf.serialslinger.model.WritePlan
@@ -769,6 +770,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val maximumTemperatureField = JTextField()
     private val maximumEverTemperatureField = JTextField()
     private val thermalShutdownThresholdField = JTextField()
+    private val temperatureCalibrationField = JTextField()
     private val syncTimeButton = JButton("Sync").apply {
         val buttonWidth = maxOf(
             preferredSize.width,
@@ -793,6 +795,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val maximumTemperatureRowLabel = JLabel("Maximum Temperature")
     private val maximumEverTemperatureRowLabel = JLabel("Maximum Ever Temperature")
     private val thermalShutdownThresholdRowLabel = JLabel("Thermal Shutdown Threshold")
+    private val temperatureCalibrationRowLabel = JLabel("Temperature Calibration")
     private val externalBatteryControlRowLabel = JLabel("Ext. Bat. Ctrl")
     private val lowBatteryThresholdRowLabel = JLabel("Low Battery Threshold")
     private val transmissionsRowLabel = JLabel("External device being controlled")
@@ -955,6 +958,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         maximumTemperatureField.isEditable = false
         maximumEverTemperatureField.isEditable = false
         thermalShutdownThresholdField.isEditable = false
+        temperatureCalibrationField.isEditable = false
         transmissionsField.isEditable = false
         configureInformationalField(currentTimeField)
         configureInformationalField(systemTimeField)
@@ -972,6 +976,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureInformationalField(maximumTemperatureField)
         configureInformationalField(maximumEverTemperatureField)
         configureInformationalField(thermalShutdownThresholdField)
+        configureInformationalField(temperatureCalibrationField)
         thermalShutdownThresholdField.addMouseListener(
             object : MouseAdapter() {
                 override fun mouseClicked(event: MouseEvent) {
@@ -990,6 +995,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
             },
         )
+        val temperatureCalibrationMouseListener =
+            object : MouseAdapter() {
+                override fun mouseClicked(event: MouseEvent) {
+                    if (displayPreferences.advancedModeEnabled && temperatureCalibrationField.isEnabled) {
+                        showTemperatureCalibrationDialog()
+                    }
+                }
+            }
+        temperatureCalibrationField.addMouseListener(temperatureCalibrationMouseListener)
+        temperatureCalibrationRowLabel.addMouseListener(temperatureCalibrationMouseListener)
         configureInformationalField(transmissionsField)
         configureNullableDateTimeSpinner(startTimeSpinner, startTimeStatusLabel)
         configureNullableDateTimeSpinner(finishTimeSpinner, finishTimeStatusLabel)
@@ -1947,6 +1962,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 row = addRow(section, row, currentTemperatureRowLabel, currentTemperatureField)
                 row = addRow(section, row, minimumTemperatureRowLabel, minimumTemperatureField)
                 row = addRow(section, row, thermalShutdownThresholdRowLabel, thermalShutdownThresholdField)
+                row = addRow(section, row, temperatureCalibrationRowLabel, temperatureCalibrationField)
                 addRow(section, row, "Version", versionInfoField)
             })
             add(Box.createVerticalGlue())
@@ -4338,6 +4354,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             dtmfPassword = if (SettingKey.DTMF_PASSWORD in changedKeys) expected.dtmfPassword else current.dtmfPassword,
             amToneFrequency = if (SettingKey.AM_TONE_FREQUENCY in changedKeys) expected.amToneFrequency else current.amToneFrequency,
             pttResetSetting = if (SettingKey.PTT_RESET_SETTING in changedKeys) expected.pttResetSetting else current.pttResetSetting,
+            temperatureCalibration = if (SettingKey.TEMPERATURE_CALIBRATION in changedKeys) {
+                expected.temperatureCalibration
+            } else {
+                current.temperatureCalibration
+            },
         )
     }
 
@@ -4452,6 +4473,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     "PTT Reset",
                     base.pttResetSetting,
                     selectedPttResetValue(),
+                ),
+            )
+        }
+    }
+
+    private fun applyTemperatureCalibrationChange(calibration: Int) {
+        TemperatureCalibrationSupport.validate(calibration)
+        applyImmediateEdit("Temperature Calibration", updatesTimedEventTemplate = false) { base ->
+            EditableDeviceSettings.fromDeviceSettings(base).copy(
+                temperatureCalibration = SettingsField(
+                    "temperatureCalibration",
+                    "Temperature Calibration",
+                    base.temperatureCalibration,
+                    calibration,
                 ),
             )
         }
@@ -6011,6 +6046,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val dtmfPasswordEditingSupported = snapshot.capabilities.supportsDtmfPasswordEditing
         val amToneEditingSupported = snapshot.capabilities.supportsAmToneEditing
         val pttResetEditingSupported = snapshot.capabilities.supportsPttResetEditing
+        val temperatureCalibrationEditingSupported = snapshot.capabilities.supportsTemperatureCalibrationEditing
         val schedulingSupported = snapshot.capabilities.supportsScheduling
         val daysToRunSupported = snapshot.capabilities.supportsDaysToRun
         val patternEditingSupported = snapshot.capabilities.supportsPatternEditing
@@ -6083,6 +6119,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 dtmfPasswordEditingSupported = dtmfPasswordEditingSupported,
                 amToneEditingSupported = amToneEditingSupported,
                 pttResetEditingSupported = pttResetEditingSupported,
+                temperatureCalibrationEditingSupported = temperatureCalibrationEditingSupported,
                 patternEditingSupported = patternEditingSupported,
                 frequencyProfilesSupported = frequencyProfilesSupported,
                 externalBatteryControlSupported = externalBatteryControlSupported,
@@ -6128,6 +6165,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             thermalShutdownThresholdRowLabel.foreground = defaultRowLabelForeground
             thermalShutdownThresholdField.foreground = defaultInformationalFieldForeground
+            setInformationalFieldText(
+                temperatureCalibrationField,
+                TemperatureCalibrationSupport.format(settings.temperatureCalibration),
+                unreadPlaceholder = false,
+            )
+            temperatureCalibrationRowLabel.foreground = defaultRowLabelForeground
+            temperatureCalibrationField.foreground = defaultInformationalFieldForeground
             updateThermalHeadlineWarning(snapshot.status.temperatureC)
             if (recalculateClockOffset) {
                 updateDeviceClockOffset(settings.currentTimeCompact)
@@ -6190,6 +6234,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             thermalShutdownThresholdRowLabel.foreground = defaultRowLabelForeground
             thermalShutdownThresholdField.foreground = defaultInformationalFieldForeground
+            setInformationalFieldText(
+                temperatureCalibrationField,
+                TemperatureCalibrationSupport.format(snapshot.settings.temperatureCalibration),
+                unreadPlaceholder = false,
+            )
+            temperatureCalibrationRowLabel.foreground = defaultRowLabelForeground
+            temperatureCalibrationField.foreground = defaultInformationalFieldForeground
             updateThermalHeadlineWarning(snapshot.status.temperatureC)
             updateWritableControlAvailability(backgroundWorkInProgress)
         } finally {
@@ -6214,6 +6265,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         internalBatteryField.isVisible = !isArducon
         minimumTemperatureRowLabel.isVisible = !isArducon
         minimumTemperatureField.isVisible = !isArducon
+        temperatureCalibrationRowLabel.isVisible = isArducon
+        temperatureCalibrationField.isVisible = isArducon
         revalidate()
         repaint()
     }
@@ -6239,6 +6292,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         dtmfPasswordEditingSupported: Boolean,
         amToneEditingSupported: Boolean,
         pttResetEditingSupported: Boolean,
+        temperatureCalibrationEditingSupported: Boolean,
         patternEditingSupported: Boolean,
         frequencyProfilesSupported: Boolean,
         externalBatteryControlSupported: Boolean,
@@ -6255,6 +6309,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         setUnsupportedCapabilityHint(dtmfPasswordField, dtmfPasswordEditingSupported, "This device does not support DTMF Password editing in SerialSlinger.")
         setUnsupportedCapabilityHint(amToneField, amToneEditingSupported, "This device does not support AM Tone editing in SerialSlinger.")
         setUnsupportedCapabilityHint(pttResetField, pttResetEditingSupported, "This device does not support PTT Reset editing in SerialSlinger.")
+        setUnsupportedCapabilityHint(
+            temperatureCalibrationField,
+            temperatureCalibrationEditingSupported,
+            "This device does not support Temperature Calibration editing in SerialSlinger.",
+        )
         setUnsupportedCapabilityHint(patternTextField, patternEditingSupported, patternTooltip)
         setUnsupportedCapabilityHint(idSpeedField, idCodeSpeedEditingSupported, "This device does not support ID Speed editing in SerialSlinger.")
         setUnsupportedCapabilityHint(devicePatternSpeedField, patternEditingSupported, patternTooltip)
@@ -9508,6 +9567,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             SettingKey.DTMF_PASSWORD -> "DTMF Password"
             SettingKey.AM_TONE_FREQUENCY -> "AM Tone"
             SettingKey.PTT_RESET_SETTING -> "PTT Reset"
+            SettingKey.TEMPERATURE_CALIBRATION -> "Temperature Calibration"
         }
     }
 
@@ -9534,6 +9594,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             SettingKey.TRANSMISSIONS_ENABLED -> if (value == true) "Enabled" else "Disabled"
             SettingKey.AM_TONE_FREQUENCY -> (value as? Int)?.let { "AM ${formatAmToneSetting(it)}" } ?: "Not Set"
             SettingKey.PTT_RESET_SETTING -> formatPttResetSetting(value as? Int)
+            SettingKey.TEMPERATURE_CALIBRATION -> TemperatureCalibrationSupport.format(value as? Int)
             else -> value?.toString() ?: "Not Set"
         }
     }
@@ -9945,6 +10006,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val dtmfPasswordEditingSupported = loadedSnapshot?.capabilities?.supportsDtmfPasswordEditing == true
         val amToneEditingSupported = loadedSnapshot?.capabilities?.supportsAmToneEditing == true
         val pttResetEditingSupported = loadedSnapshot?.capabilities?.supportsPttResetEditing == true
+        val temperatureCalibrationEditingSupported = loadedSnapshot?.capabilities?.supportsTemperatureCalibrationEditing == true
         val schedulingSupported = loadedSnapshot?.capabilities?.supportsScheduling == true
         val daysToRunSupported = loadedSnapshot?.capabilities?.supportsDaysToRun != false
         val patternEditingSupported = loadedSnapshot?.capabilities?.supportsPatternEditing == true
@@ -9989,6 +10051,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 displayPreferences.advancedModeEnabled &&
                 loadedSnapshot?.capabilities?.supportsExtendedTemperatureReadback == true
         updateThermalShutdownThresholdEditability(thermalThresholdEditable)
+        val temperatureCalibrationEditable =
+            writableEnabled &&
+                displayPreferences.advancedModeEnabled &&
+                temperatureCalibrationEditingSupported
+        updateTemperatureCalibrationEditability(temperatureCalibrationEditable)
 
         daysField.isEnabled = schedulingFieldsEditable && daysToRunSupported
         val frequencyFieldsEditable =
@@ -10043,6 +10110,25 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val tooltip = if (editable) "Click to set thermal shutdown threshold." else null
         thermalShutdownThresholdField.toolTipText = tooltip
         thermalShutdownThresholdRowLabel.toolTipText = tooltip
+    }
+
+    private fun updateTemperatureCalibrationEditability(editable: Boolean) {
+        temperatureCalibrationField.isEnabled = editable
+        temperatureCalibrationRowLabel.isEnabled = editable
+        temperatureCalibrationField.border = if (editable) editableTextFieldBorder else informationalTextFieldBorder
+        temperatureCalibrationField.background = if (editable) editableTextFieldBackground else readOnlyTextFieldBackground
+        temperatureCalibrationField.isOpaque = editable
+        val cursor =
+            if (editable) {
+                java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+            } else {
+                java.awt.Cursor.getDefaultCursor()
+            }
+        temperatureCalibrationField.cursor = cursor
+        temperatureCalibrationRowLabel.cursor = cursor
+        val tooltip = if (editable) "Click to set temperature calibration." else null
+        temperatureCalibrationField.toolTipText = tooltip
+        temperatureCalibrationRowLabel.toolTipText = tooltip
     }
 
     private fun updateLastsRowEditability(enabled: Boolean) {
@@ -10460,6 +10546,40 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
         submitThermalShutdownThreshold(model.number.toInt())
+    }
+
+    private fun showTemperatureCalibrationDialog() {
+        val snapshot = loadedSnapshot ?: run {
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
+            return
+        }
+        if (!snapshot.capabilities.supportsTemperatureCalibrationEditing) {
+            JOptionPane.showMessageDialog(this, "Temperature Calibration is not supported by the loaded snapshot.")
+            return
+        }
+        val initial = (snapshot.settings.temperatureCalibration ?: TemperatureCalibrationSupport.defaultCalibration)
+            .coerceIn(TemperatureCalibrationSupport.minimum, TemperatureCalibrationSupport.maximum)
+        val model = SpinnerNumberModel(
+            initial,
+            TemperatureCalibrationSupport.minimum,
+            TemperatureCalibrationSupport.maximum,
+            1,
+        )
+        val spinner = JSpinner(model)
+        val result = JOptionPane.showConfirmDialog(
+            this,
+            arrayOf(
+                "Temperature Calibration (${TemperatureCalibrationSupport.minimum}-${TemperatureCalibrationSupport.maximum}):",
+                spinner,
+            ),
+            "Temperature Calibration",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (result != JOptionPane.OK_OPTION) {
+            return
+        }
+        applyTemperatureCalibrationChange(model.number.toInt())
     }
 
     private fun setTimeSetMode(mode: TimeSetMode) {
@@ -12714,6 +12834,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             dtmfPasswordEditingSupported = true,
             amToneEditingSupported = true,
             pttResetEditingSupported = true,
+            temperatureCalibrationEditingSupported = true,
             patternEditingSupported = true,
             frequencyProfilesSupported = true,
             externalBatteryControlSupported = true,
@@ -12728,6 +12849,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         clearTemperatureRow(minimumTemperatureRowLabel, minimumTemperatureField)
         thermalShutdownThresholdRowLabel.foreground = defaultRowLabelForeground
         setInformationalFieldText(thermalShutdownThresholdField, "Not read")
+        temperatureCalibrationRowLabel.foreground = defaultRowLabelForeground
+        setInformationalFieldText(temperatureCalibrationField, "Not read")
         lastsRowLabel.foreground = defaultRowLabelForeground
         updateDisplayedClockFields()
         updateWritableControlAvailability(backgroundWorkInProgress)

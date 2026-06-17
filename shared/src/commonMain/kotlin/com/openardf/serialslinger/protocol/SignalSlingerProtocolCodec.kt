@@ -8,6 +8,7 @@ import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.SettingKey
+import com.openardf.serialslinger.model.TemperatureCalibrationSupport
 import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.model.normalizeDtmfPasswordForWrite
 import com.openardf.serialslinger.platform.PlatformDateTimeFields
@@ -69,6 +70,7 @@ data class DeviceSettingsPatch(
     val dtmfPassword: String? = null,
     val amToneFrequency: Int? = null,
     val pttResetSetting: Int? = null,
+    val temperatureCalibration: Int? = null,
 ) {
     fun applyTo(base: DeviceSettings): DeviceSettings {
         val nextTransmissionsEnabled = transmissionsEnabled ?: base.transmissionsEnabled
@@ -108,6 +110,7 @@ data class DeviceSettingsPatch(
             dtmfPassword = dtmfPassword ?: base.dtmfPassword,
             amToneFrequency = amToneFrequency ?: base.amToneFrequency,
             pttResetSetting = pttResetSetting ?: base.pttResetSetting,
+            temperatureCalibration = temperatureCalibration ?: base.temperatureCalibration,
         )
     }
 }
@@ -144,6 +147,7 @@ object SignalSlingerProtocolCodec {
     private val arduconMaximumEverTemperaturePattern = Regex("""^Max Ever\s*=\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
     private val arduconMaximumEverResetTemperaturePattern = Regex("""^Max Ever Reset\s*=\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
     private val arduconThermalShutdownThresholdPattern = Regex("""^Thermal Shutdown\s*=\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
+    private val arduconTemperatureCalibrationPattern = Regex("""^T Cal\s*=\s*(-?\d+)$""", RegexOption.IGNORE_CASE)
     private val arduconVoltagePattern = Regex("""^V=([0-9]+(?:\.[0-9]+)?)V$""", RegexOption.IGNORE_CASE)
     private val arduconPasswordPattern = Regex("""^PWD=(\S*)$""", RegexOption.IGNORE_CASE)
     private val arduconAmTonePattern = Regex("""^AM:(\d+)$""", RegexOption.IGNORE_CASE)
@@ -331,6 +335,14 @@ object SignalSlingerProtocolCodec {
             return DeviceReportUpdate(
                 deviceStatusPatch = DeviceStatusPatch(
                     thermalShutdownThresholdC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        arduconTemperatureCalibrationPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                settingsPatch = DeviceSettingsPatch(
+                    temperatureCalibration = match.groupValues[1].toInt(),
                 ),
             )
         }
@@ -669,6 +681,9 @@ object SignalSlingerProtocolCodec {
                 SettingKey.DTMF_PASSWORD -> normalizeDtmfPasswordForWrite(editedSettings.dtmfPassword)?.let { commands += "PWD $it" }
                 SettingKey.AM_TONE_FREQUENCY -> editedSettings.amToneFrequency?.let { commands += "AM $it" }
                 SettingKey.PTT_RESET_SETTING -> editedSettings.pttResetSetting?.takeIf { it == 0 || it == 1 }?.let { commands += "SET P $it" }
+                SettingKey.TEMPERATURE_CALIBRATION -> editedSettings.temperatureCalibration?.let {
+                    commands += "UTI C ${TemperatureCalibrationSupport.validate(it)}"
+                }
             }
         }
 

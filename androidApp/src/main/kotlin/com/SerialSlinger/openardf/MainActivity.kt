@@ -49,6 +49,7 @@ import android.widget.CheckedTextView
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.NumberPicker
 import android.widget.PopupWindow
 import android.widget.ProgressBar
 import android.widget.RadioButton
@@ -90,6 +91,7 @@ import com.openardf.serialslinger.model.StartTimeDaysToRunChoice
 import com.openardf.serialslinger.model.StartTimeDaysToRunPlanner
 import com.openardf.serialslinger.model.TemperatureAlertLevel
 import com.openardf.serialslinger.model.TemperatureAlertSupport
+import com.openardf.serialslinger.model.TemperatureCalibrationSupport
 import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import com.openardf.serialslinger.model.isValidDtmfPassword
@@ -1965,6 +1967,40 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         deviceDataCard.addView(
             thermalThresholdRow,
         )
+        if (isArducon) {
+            val temperatureCalibrationText = TemperatureCalibrationSupport.format(loadedSettings.temperatureCalibration)
+            val temperatureCalibrationEditable =
+                advancedModeEnabled &&
+                    snapshot?.capabilities?.supportsTemperatureCalibrationEditing == true
+            val temperatureCalibrationField =
+                if (temperatureCalibrationEditable) {
+                    pickerField(
+                        text = temperatureCalibrationText,
+                        hint = "Temperature Calibration",
+                        actionLabel = "Temperature Calibration",
+                    ) {
+                        showTemperatureCalibrationDialog(loadedSettings.temperatureCalibration)
+                    }
+                } else {
+                    readOnlyField(temperatureCalibrationText)
+                }
+            var temperatureCalibrationLabelView: TextView? = null
+            val temperatureCalibrationRow =
+                compactLabeledRow(
+                    "Temperature Calibration",
+                    temperatureCalibrationField,
+                    labelWidthDp = 132,
+                    captureLabelView = { temperatureCalibrationLabelView = it },
+                )
+            if (temperatureCalibrationEditable) {
+                val clickListener = View.OnClickListener {
+                    showTemperatureCalibrationDialog(loadedSettings.temperatureCalibration)
+                }
+                temperatureCalibrationLabelView?.setOnClickListener(clickListener)
+                temperatureCalibrationRow.setOnClickListener(clickListener)
+            }
+            deviceDataCard.addView(temperatureCalibrationRow)
+        }
         installTemperatureDisplayUnitToggle(currentTemperatureField, currentTemperatureLabelView, currentTemperatureRow)
         deviceDataCard.addView(
             compactLabeledRow(
@@ -2042,6 +2078,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         DeviceCapabilities(
             supportsTemperatureReadback = true,
             supportsExtendedTemperatureReadback = true,
+            supportsTemperatureCalibrationEditing = true,
             supportsExternalBatteryControl = true,
             supportsPatternEditing = true,
             supportsScheduling = true,
@@ -2686,6 +2723,23 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.runPttResetSubmit(
             context = applicationContext,
             pttResetSetting = pttResetSetting,
+        )
+    }
+
+    private fun runTemperatureCalibrationSubmitOrPreview(calibration: Int) {
+        try {
+            TemperatureCalibrationSupport.validate(calibration)
+        } catch (error: IllegalArgumentException) {
+            AndroidSessionController.recordStatus(error.message ?: "Temperature Calibration is invalid.", isError = true)
+            return
+        }
+        if (isPreviewModeActive()) {
+            updatePreviewSettings { settings -> settings.copy(temperatureCalibration = calibration) }
+            return
+        }
+        AndroidSessionController.runTemperatureCalibrationSubmit(
+            context = applicationContext,
+            calibration = calibration,
         )
     }
 
@@ -5840,6 +5894,25 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
             .setNegativeButton("Cancel", null)
             .showLogged("Thermal Shutdown Threshold")
+    }
+
+    private fun showTemperatureCalibrationDialog(currentCalibration: Int?) {
+        val numberPicker =
+            NumberPicker(this).apply {
+                minValue = TemperatureCalibrationSupport.minimum
+                maxValue = TemperatureCalibrationSupport.maximum
+                value = (currentCalibration ?: TemperatureCalibrationSupport.defaultCalibration)
+                    .coerceIn(TemperatureCalibrationSupport.minimum, TemperatureCalibrationSupport.maximum)
+                wrapSelectorWheel = false
+            }
+        AlertDialog.Builder(this)
+            .setTitle("Temperature Calibration")
+            .setView(numberPicker)
+            .setPositiveButton("Set") { _, _ ->
+                runTemperatureCalibrationSubmitOrPreview(numberPicker.value)
+            }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Temperature Calibration")
     }
 
     private fun formatTemperatureLogListLabel(log: AndroidTemperatureLogFile): String {

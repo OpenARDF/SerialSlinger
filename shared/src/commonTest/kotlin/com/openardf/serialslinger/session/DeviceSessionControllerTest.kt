@@ -104,6 +104,7 @@ class DeviceSessionControllerTest {
                 "CLK S" to listOf("Start:0"),
                 "CLK F" to listOf("Finish:0"),
                 "UTI" to listOf("T=34C", "V=11.31V"),
+                "UTI C" to listOf("T Cal= -110"),
                 "SET S" to listOf("ID: 20 wpm"),
                 "PWD" to listOf("PWD=1357"),
                 "AM" to listOf("AM:0"),
@@ -114,7 +115,7 @@ class DeviceSessionControllerTest {
         val result = DeviceSessionController.connectAndLoad(transport)
 
         assertEquals(
-            listOf("VER", "INF", "ID", "FOX", "CLK T", "CLK S", "CLK F", "UTI", "SET S", "PWD", "AM", "SET P", "INF"),
+            listOf("VER", "INF", "ID", "FOX", "CLK T", "CLK S", "CLK F", "UTI", "UTI C", "SET S", "PWD", "AM", "SET P", "INF"),
             result.commandsSent,
         )
         val snapshot = assertNotNull(result.state.snapshot)
@@ -129,6 +130,7 @@ class DeviceSessionControllerTest {
         assertEquals("1357", snapshot.settings.dtmfPassword)
         assertEquals(0, snapshot.settings.amToneFrequency)
         assertEquals(0, snapshot.settings.pttResetSetting)
+        assertEquals(-110, snapshot.settings.temperatureCalibration)
         assertEquals(34.0, snapshot.status.temperatureC)
         assertEquals(11.31, snapshot.status.externalBatteryVolts)
         assertTrue(snapshot.capabilities.supportsFirmwareUpdate)
@@ -167,6 +169,7 @@ class DeviceSessionControllerTest {
                 "CLK F" to listOf("Finish:0"),
                 "CLK D" to listOf("CLK D 4"),
                 "UTI" to listOf("T=34C", "V=11.31V"),
+                "UTI C" to listOf("T Cal= -110"),
                 "SET S" to listOf("ID: 20 wpm"),
                 "PWD" to listOf("PWD=1357"),
                 "AM" to listOf("AM:0"),
@@ -187,6 +190,7 @@ class DeviceSessionControllerTest {
                 "CLK F",
                 "CLK D",
                 "UTI",
+                "UTI C",
                 "SET S",
                 "PWD",
                 "AM",
@@ -477,6 +481,48 @@ class DeviceSessionControllerTest {
                 fieldKey = SettingKey.DTMF_PASSWORD,
                 expectedValue = "2468",
                 actualValue = "2468",
+                observedInReadback = true,
+                verified = true,
+            ),
+            result.verifications.single(),
+        )
+    }
+
+    @Test
+    fun submitEditsWritesArduconTemperatureCalibrationAndRefreshesTemperature() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "UTI C -125" to listOf("T Cal= -125"),
+                "UTI C" to listOf("T Cal= -125"),
+                "UTI" to listOf("T=36.5C", "Max=36.5C", "Thermal Shutdown=50C"),
+            ),
+        )
+
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(temperatureCalibration = -110),
+        )
+        val state = connected.state.copy(
+            snapshot = assertNotNull(connected.state.snapshot).copy(info = DeviceInfo(productName = "Arducon")),
+        )
+        val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(state.snapshot).settings).copy(
+            temperatureCalibration = SettingsField("temperatureCalibration", "Temperature Calibration", -110, -125),
+        )
+
+        val result = DeviceSessionController.submitEdits(state, editable, transport)
+
+        assertEquals(listOf("UTI C -125"), result.commandsSent)
+        assertEquals(listOf("UTI C", "UTI"), result.readbackCommandsSent)
+        assertEquals(listOf("SYN 0", "UTI C -125", "UTI C", "UTI", "SYN 2"), transport.sentCommands)
+        assertEquals(-125, result.state.snapshot?.settings?.temperatureCalibration)
+        assertEquals(36.5, result.state.snapshot?.status?.temperatureC)
+        assertEquals(36.5, result.state.snapshot?.status?.maximumTemperatureC)
+        assertEquals(50.0, result.state.snapshot?.status?.thermalShutdownThresholdC)
+        assertEquals(
+            SettingVerification(
+                fieldKey = SettingKey.TEMPERATURE_CALIBRATION,
+                expectedValue = -125,
+                actualValue = -125,
                 observedInReadback = true,
                 verified = true,
             ),

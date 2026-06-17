@@ -73,9 +73,15 @@ class SignalSlingerFirmwareSupportTest {
         assertTrue(profile.capabilities.supportsTemperatureReadback)
         assertTrue(profile.capabilities.supportsExtendedTemperatureReadback)
         assertTrue(profile.capabilities.supportsTemperatureLogging)
+        assertTrue(profile.capabilities.supportsTemperatureCalibrationEditing)
         assertFalse(profile.capabilities.supportsDaysToRun)
         assertTrue("UTI" in profile.fullLoadCommands)
+        assertTrue("UTI C" in profile.fullLoadCommands)
         assertFalse("CLK D" in profile.fullLoadCommands)
+        assertEquals(
+            listOf("UTI C", "UTI"),
+            profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.TEMPERATURE_CALIBRATION],
+        )
         assertEquals(
             null,
             profile.verificationReadbackCommands[com.openardf.serialslinger.model.SettingKey.DAYS_TO_RUN],
