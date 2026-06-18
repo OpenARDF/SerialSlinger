@@ -80,8 +80,8 @@
     },
     {
       "id": "merged-to-main",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "main fast-forwarded to Development_Android release commit 0eac99d before tagging; git status reported main ahead of origin/main with the 2.0.14 release commits and no other working tree changes before this checklist update.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
