@@ -96,6 +96,37 @@ class ArduconFirmwareUpdateTest {
     }
 
     @Test
+    fun programsResetVectorPageLast() {
+        val hex = intelHex(
+            0x0000 to byteArrayOf(0x01, 0x02),
+            0x0080 to byteArrayOf(0x03, 0x04),
+            0x0100 to byteArrayOf(0x05, 0x06),
+        )
+        val manifest = ArduconFirmwareUpdate.parseReleaseInfo(
+            sampleManifest(
+                updateBytes = hex.encodeToByteArray(),
+                bytesInImage = 6,
+            ),
+        )
+        val transport = FakeStk500Transport()
+
+        ArduconFirmwareUpdate.performUpdate(
+            transport = transport,
+            release = manifest,
+            hexText = hex,
+            verifyReadback = false,
+        )
+
+        val programmedAddresses = transport.binaryWrites
+            .filter { bytes -> (bytes.first().toInt() and 0xFF) == 0x55 }
+            .map { bytes ->
+                val wordAddress = (bytes[1].toInt() and 0xFF) or ((bytes[2].toInt() and 0xFF) shl 8)
+                wordAddress * 2
+            }
+        assertEquals(listOf(0x0080, 0x0100, 0x0000), programmedAddresses)
+    }
+
+    @Test
     fun refusesToDowngradeArduconAcrossBootloaderBoundary() {
         val hex = sampleHex()
         val manifest = ArduconFirmwareUpdate.parseReleaseInfo(

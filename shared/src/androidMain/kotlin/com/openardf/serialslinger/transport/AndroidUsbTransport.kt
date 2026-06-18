@@ -40,6 +40,7 @@ class AndroidUsbTransport(
     private val quietPeriodMs: Long = 120,
     private val pollIntervalMs: Long = 50,
     private val postWriteReadDelayMs: Long = 25,
+    private val stopBits: Int = UsbSerialPort.STOPBITS_1,
     private val ftdiLatencyTimerMs: Int = 8,
 ) : DeviceTransport {
     private var connection: UsbDeviceConnection? = null
@@ -71,7 +72,7 @@ class AndroidUsbTransport(
             port.setParameters(
                 baudRate,
                 8,
-                UsbSerialPort.STOPBITS_1,
+                stopBits,
                 UsbSerialPort.PARITY_NONE,
             )
             runCatching { port.setDTR(false) }
@@ -212,6 +213,7 @@ class AndroidUsbTransport(
     }
 
     companion object {
+        val STOPBITS_2: Int = UsbSerialPort.STOPBITS_2
         private const val logTag = "SerialSlingerUsb"
 
         fun requestPermission(

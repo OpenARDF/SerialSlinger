@@ -1,0 +1,117 @@
+{
+  "version": "2.0.14",
+  "items": [
+    {
+      "id": "version-aligned",
+      "status": "done",
+      "evidence": "build.gradle.kts serialSlingerVersion=2.0.14 with blank suffix; package.json and package-lock.json are 2.0.14; npm run jdeploy:release-preflight confirmed Gradle base/display/package 2.0.14 and package serialslinger@2.0.14.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts versionCode bumped from 21 to 22; versionName still follows root serialSlingerDisplayVersion, so Android reports 2.0.14.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "status": "done",
+      "evidence": "Passed npm run jdeploy:release-preflight, just check, ./gradlew check, ./gradlew prepareDesktopJdeployBundle verifyDesktopJdeployBundle, ./gradlew androidApp:compileDebugKotlin, local jDeploy prepare/package/install-local/verify-install/local launch, npm run jdeploy:pack-preview, gitleaks detect . --no-banner, and git diff --check. Signed Android bundle is deferred until the user's follow-up request.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "status": "done",
+      "evidence": "Reviewed release diff: shared Arducon firmware-update/page ordering/readback validation changes apply to both platforms; binary-frame logging was mirrored in Android and desktop; Android-only debug/update entry and temperature calibration UI changes have no desktop equivalent needed.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "status": "done",
+      "evidence": "User confirmed hardware testing already passed before this 2.0.14 jDeploy request.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "desktop-regression",
+      "status": "done",
+      "evidence": "User confirmed hardware testing already passed before this 2.0.14 jDeploy request; local jDeploy install and launch also passed on this Mac.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows Intel x64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows ARM64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux Intel x64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux ARM64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "android-release-notes",
+      "status": "done",
+      "evidence": "Prepared release notes: SerialSlinger 2.0.14 improves Arducon firmware update reliability, uses safer Arducon bootloader entry behavior, caps Days To Run at the supported range, ignores erased/invalid Arducon readbacks, and improves Android temperature calibration entry.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}

@@ -18,6 +18,7 @@ class AndroidFirmwareUpdateTransport(
     private val binaryWriteChunkBytes: Int = 64,
     private val ftdiLatencyTimerMs: Int = 8,
     private val targetResetSettleMs: Long = DefaultResetSettleMs,
+    private val twoStopBitsBaudRate: Int? = null,
 ) : SignalSlingerFirmwareUpdateTransport {
     private var connection: UsbDeviceConnection? = null
     private var serialPort: UsbSerialPort? = null
@@ -49,7 +50,7 @@ class AndroidFirmwareUpdateTransport(
             port.setParameters(
                 baudRate,
                 8,
-                UsbSerialPort.STOPBITS_1,
+                stopBitsForBaudRate(baudRate),
                 UsbSerialPort.PARITY_NONE,
             )
             configureFtdiLatencyTimer(port)
@@ -85,7 +86,7 @@ class AndroidFirmwareUpdateTransport(
             port.setParameters(
                 baudRate,
                 8,
-                UsbSerialPort.STOPBITS_1,
+                stopBitsForBaudRate(baudRate),
                 UsbSerialPort.PARITY_NONE,
             )
             connectedBaudRate = baudRate
@@ -237,6 +238,14 @@ class AndroidFirmwareUpdateTransport(
     private fun configureFtdiLatencyTimer(port: UsbSerialPort) {
         if (port is FtdiSerialPort) {
             runCatching { port.setLatencyTimer(ftdiLatencyTimerMs) }
+        }
+    }
+
+    private fun stopBitsForBaudRate(baudRate: Int): Int {
+        return if (twoStopBitsBaudRate == baudRate) {
+            UsbSerialPort.STOPBITS_2
+        } else {
+            UsbSerialPort.STOPBITS_1
         }
     }
 

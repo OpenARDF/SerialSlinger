@@ -49,7 +49,6 @@ import android.widget.CheckedTextView
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
-import android.widget.NumberPicker
 import android.widget.PopupWindow
 import android.widget.ProgressBar
 import android.widget.RadioButton
@@ -70,6 +69,7 @@ import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.DeviceStatus
 import com.openardf.serialslinger.model.DeviceSettings
+import com.openardf.serialslinger.model.DaysToRunSupport
 import com.openardf.serialslinger.model.EditableDeviceSettings
 import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.EventType
@@ -1716,7 +1716,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
         val daysToRunSpinner =
             integerSpinner(
-                values = 1..255,
+                values = DaysToRunSupport.minimum..DaysToRunSupport.maximum,
                 selectedValue = timedEventSettings.daysToRun,
             ).apply {
                 isEnabled = schedulingFieldsEditable
@@ -1778,7 +1778,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     currentDuration = currentDuration,
                 ),
                 onCancel = {
-                    daysToRunSpinner.setSelection((timedEventSettings.daysToRun - 1).coerceAtLeast(0))
+                    daysToRunSpinner.setSelection(
+                        (timedEventSettings.daysToRun - DaysToRunSupport.minimum)
+                            .coerceIn(0, DaysToRunSupport.maximum - DaysToRunSupport.minimum),
+                    )
                 },
             ) { option ->
                 val resolution = ScheduleDurationGuardSupport.resolveDirectDaysToRunChange(
@@ -5899,23 +5902,94 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun showTemperatureCalibrationDialog(currentCalibration: Int?) {
         val minimum = TemperatureCalibrationSupport.minimum
         val maximum = TemperatureCalibrationSupport.maximum
-        val numberPicker =
-            NumberPicker(this).apply {
-                minValue = 0
-                maxValue = maximum - minimum
-                setFormatter { value -> (minimum + value).toString() }
-                value = (currentCalibration ?: TemperatureCalibrationSupport.defaultCalibration)
-                    .coerceIn(minimum, maximum) - minimum
-                wrapSelectorWheel = false
+        val initialValue =
+            (currentCalibration ?: TemperatureCalibrationSupport.defaultCalibration)
+                .coerceIn(minimum, maximum)
+        val density = resources.displayMetrics.density
+        val horizontalPadding = (20 * density).toInt()
+        val topPadding = (10 * density).toInt()
+        val rowGap = (8 * density).toInt()
+        val calibrationField =
+            EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED
+                setSingleLine(true)
+                setSelectAllOnFocus(true)
+                textSize = 20f
+                gravity = Gravity.CENTER
+                setText(initialValue.toString())
+                layoutParams =
+                    LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
+                        leftMargin = rowGap
+                        rightMargin = rowGap
+                    }
             }
-        AlertDialog.Builder(this)
+        fun parsedCalibrationOrNull(): Int? =
+            calibrationField.text.toString().trim().toIntOrNull()
+
+        fun setCalibration(value: Int) {
+            calibrationField.setText(value.coerceIn(minimum, maximum).toString())
+            calibrationField.selectAll()
+        }
+
+        fun stepButton(label: String, delta: Int): Button =
+            Button(this).apply {
+                text = label
+                setOnClickListener {
+                    val base = parsedCalibrationOrNull() ?: initialValue
+                    setCalibration(base + delta)
+                }
+            }
+
+        val stepRow =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(stepButton("-10", -10))
+                addView(stepButton("-1", -1))
+                addView(calibrationField)
+                addView(stepButton("+1", 1))
+                addView(stepButton("+10", 10))
+            }
+        val resetButton =
+            Button(this).apply {
+                text = "Default"
+                setOnClickListener { setCalibration(TemperatureCalibrationSupport.defaultCalibration) }
+            }
+        val content =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(horizontalPadding, topPadding, horizontalPadding, 0)
+                addView(stepRow)
+                addView(
+                    resetButton,
+                    LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                        topMargin = rowGap
+                    },
+                )
+            }
+        val dialog =
+            AlertDialog.Builder(this)
             .setTitle("Temperature Calibration")
-            .setView(numberPicker)
-            .setPositiveButton("Set") { _, _ ->
-                runTemperatureCalibrationSubmitOrPreview(minimum + numberPicker.value)
-            }
+            .setView(content)
+            .setPositiveButton("Set", null)
             .setNegativeButton("Cancel", null)
             .showLogged("Temperature Calibration")
+
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val calibration = parsedCalibrationOrNull()
+            if (calibration == null) {
+                calibrationField.error = "Enter a number"
+                return@setOnClickListener
+            }
+            try {
+                TemperatureCalibrationSupport.validate(calibration)
+            } catch (error: IllegalArgumentException) {
+                calibrationField.error = error.message ?: "Invalid value"
+                return@setOnClickListener
+            }
+            runTemperatureCalibrationSubmitOrPreview(calibration)
+            dialog.dismiss()
+        }
     }
 
     private fun formatTemperatureLogListLabel(log: AndroidTemperatureLogFile): String {

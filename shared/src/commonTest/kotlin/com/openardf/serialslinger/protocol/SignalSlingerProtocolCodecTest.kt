@@ -148,6 +148,7 @@ class SignalSlingerProtocolCodecTest {
         val startUpdate = SignalSlingerProtocolCodec.parseReportLine("Start:1779988200")
         val finishUpdate = SignalSlingerProtocolCodec.parseReportLine("Finish:0")
         val tooEarlyUpdate = SignalSlingerProtocolCodec.parseReportLine("Epoch:1609459199")
+        val erasedStartUpdate = SignalSlingerProtocolCodec.parseReportLine("Start:4294967295")
 
         val currentPatch = assertNotNull(currentUpdate?.settingsPatch)
         val startPatch = assertNotNull(startUpdate?.settingsPatch)
@@ -162,6 +163,8 @@ class SignalSlingerProtocolCodecTest {
         assertEquals(true, finishUpdate?.settingsPatch?.finishTimeObserved)
         assertEquals(null, tooEarlyUpdate?.settingsPatch?.currentTimeCompact)
         assertEquals(true, tooEarlyUpdate?.settingsPatch?.currentTimeObserved)
+        assertEquals(null, erasedStartUpdate?.settingsPatch?.startTimeCompact)
+        assertEquals(true, erasedStartUpdate?.settingsPatch?.startTimeObserved)
     }
 
     @Test
@@ -169,11 +172,13 @@ class SignalSlingerProtocolCodecTest {
         val stationUpdate = SignalSlingerProtocolCodec.parseReportLine("ID: NZ0I")
         val idSpeedUpdate = SignalSlingerProtocolCodec.parseReportLine("ID: 20 wpm")
         val daysToRunUpdate = SignalSlingerProtocolCodec.parseReportLine("CLK D 2")
+        val maximumDaysToRunUpdate = SignalSlingerProtocolCodec.parseReportLine("CLK D 100")
         val temperatureUpdate = SignalSlingerProtocolCodec.parseReportLine("T=34C")
 
         assertEquals("NZ0I", stationUpdate?.settingsPatch?.stationId)
         assertEquals(20, idSpeedUpdate?.settingsPatch?.idCodeSpeedWpm)
         assertEquals(2, daysToRunUpdate?.settingsPatch?.daysToRun)
+        assertEquals(100, maximumDaysToRunUpdate?.settingsPatch?.daysToRun)
         assertEquals(34.0, temperatureUpdate?.deviceStatusPatch?.temperatureC)
     }
 
@@ -463,6 +468,16 @@ class SignalSlingerProtocolCodecTest {
         assertEquals(1, pttUpdate?.settingsPatch?.pttResetSetting)
         assertNull(invalidPttUpdate)
         assertEquals(-110, calibrationUpdate?.settingsPatch?.temperatureCalibration)
+    }
+
+    @Test
+    fun ignoresErasedArduconEepromReadbacks() {
+        assertNull(SignalSlingerProtocolCodec.parseReportLine("ID:\uFFFFNZ0I"))
+        assertNull(SignalSlingerProtocolCodec.parseReportLine("PWD=\uFFFF\uFFFF\uFFFF\uFFFF\uFFFF\uFFFF\uFFFF\uFFFF"))
+        assertNull(SignalSlingerProtocolCodec.parseReportLine("AM:255"))
+        assertNull(SignalSlingerProtocolCodec.parseReportLine("Thermal Shutdown=-1C"))
+        assertNull(SignalSlingerProtocolCodec.parseReportLine("CLK D 0"))
+        assertNull(SignalSlingerProtocolCodec.parseReportLine("CLK D 255"))
     }
 
     @Test

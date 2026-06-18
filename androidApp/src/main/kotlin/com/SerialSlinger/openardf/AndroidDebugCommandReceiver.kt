@@ -71,23 +71,21 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                 }
             }
             ACTION_ARDUCON_RECOVERY_UPDATE -> {
+                resultCode = resultCanceled
+                resultData = "Arducon updates must be started from the running Arducon app with UPD. Hardware-reset recovery is not supported."
+            }
+            ACTION_ARDUCON_UPDATE -> {
                 val pendingResult = goAsync()
                 AndroidSessionController.runArduconFirmwareUpdate(
                     context = context,
                     requestedVersion = intent.getStringExtra(EXTRA_UPDATE_VERSION),
-                    recoverAlreadyWaiting = true,
+                    recoverAlreadyWaiting = false,
                     requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME),
                     confirmResidentFallback = { _, _, _ -> true },
-                ) { result ->
-                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
-                    pendingResult.resultData =
-                        if (result.isSuccess) {
-                            AndroidSessionController.debugStateSummary()
-                        } else {
-                            result.exceptionOrNull()?.message ?: "Unknown Arducon recovery update failure"
-                        }
-                    pendingResult.finish()
-                }
+                )
+                pendingResult.resultCode = resultOk
+                pendingResult.resultData = "Arducon update start requested.\n${AndroidSessionController.debugStateSummary()}"
+                pendingResult.finish()
             }
             ACTION_SET_EVENT_TYPE -> {
                 val eventType = intent.getStringExtra(EXTRA_EVENT_TYPE)
@@ -584,6 +582,7 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val ACTION_CLEAR_LOG = "com.SerialSlinger.openardf.DEBUG_CLEAR_LOG"
         const val ACTION_LOAD = "com.SerialSlinger.openardf.DEBUG_LOAD"
         const val ACTION_LOAD_EMULATOR = "com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR"
+        const val ACTION_ARDUCON_UPDATE = "com.SerialSlinger.openardf.DEBUG_ARDUCON_UPDATE"
         const val ACTION_ARDUCON_RECOVERY_UPDATE = "com.SerialSlinger.openardf.DEBUG_ARDUCON_RECOVERY_UPDATE"
         const val ACTION_SET_EVENT_TYPE = "com.SerialSlinger.openardf.DEBUG_SET_EVENT_TYPE"
         const val ACTION_SET_FOX_ROLE = "com.SerialSlinger.openardf.DEBUG_SET_FOX_ROLE"

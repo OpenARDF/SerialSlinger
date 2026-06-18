@@ -176,6 +176,18 @@ data class DeviceSnapshot(
 
 fun DeviceSnapshot.hasWallClockTimeSet(): Boolean = settings.hasWallClockTimeSet()
 
+object DaysToRunSupport {
+    const val minimum: Int = 1
+    const val maximum: Int = 100
+
+    fun validate(value: Int): Int {
+        require(value in minimum..maximum) {
+            "Days To Run must be between $minimum and $maximum."
+        }
+        return value
+    }
+}
+
 fun isValidDtmfPassword(value: String): Boolean {
     return value.length in 4..8 && value.all { it.isDigit() }
 }
@@ -304,7 +316,7 @@ data class EditableDeviceSettings(
             currentTimeCompact = currentTimeCompact.editedValue,
             startTimeCompact = startTimeCompact.editedValue,
             finishTimeCompact = finishTimeCompact.editedValue,
-            daysToRun = daysToRun.editedValue,
+            daysToRun = DaysToRunSupport.validate(daysToRun.editedValue),
             defaultFrequencyHz = defaultFrequencyHz.editedValue,
             lowFrequencyHz = lowFrequencyHz.editedValue,
             mediumFrequencyHz = mediumFrequencyHz.editedValue,

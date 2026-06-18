@@ -2,14 +2,17 @@ package com.openardf.serialslinger.protocol
 
 import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSettings
+import com.openardf.serialslinger.model.DaysToRunSupport
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.SettingKey
+import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.TemperatureCalibrationSupport
 import com.openardf.serialslinger.model.WritePlan
+import com.openardf.serialslinger.model.isValidDtmfPassword
 import com.openardf.serialslinger.model.normalizeDtmfPasswordForWrite
 import com.openardf.serialslinger.platform.PlatformDateTimeFields
 import com.openardf.serialslinger.platform.platformEpochSecondsFromLocalDateTimeFields
@@ -258,9 +261,11 @@ object SignalSlingerProtocolCodec {
         }
 
         arduconDaysToRunPattern.matchEntire(trimmed)?.let { match ->
+            val daysToRun = match.groupValues[1].toInt().takeIf { it in DaysToRunSupport.minimum..DaysToRunSupport.maximum }
+                ?: return null
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
-                    daysToRun = match.groupValues[1].toInt(),
+                    daysToRun = daysToRun,
                 ),
             )
         }
@@ -274,9 +279,10 @@ object SignalSlingerProtocolCodec {
         }
 
         arduconStationIdPattern.matchEntire(trimmed)?.let { match ->
+            val stationId = sanitizeFirmwareTextField(match.groupValues[1]) ?: return null
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
-                    stationId = match.groupValues[1].trim(),
+                    stationId = stationId,
                 ),
             )
         }
@@ -332,9 +338,12 @@ object SignalSlingerProtocolCodec {
         }
 
         arduconThermalShutdownThresholdPattern.matchEntire(trimmed)?.let { match ->
+            val thresholdC = match.groupValues[1].toDouble()
+                .takeIf { it >= ThermalShutdownSupport.minimumCelsius && it <= ThermalShutdownSupport.maximumCelsius }
+                ?: return null
             return DeviceReportUpdate(
                 deviceStatusPatch = DeviceStatusPatch(
-                    thermalShutdownThresholdC = match.groupValues[1].toDouble(),
+                    thermalShutdownThresholdC = thresholdC,
                 ),
             )
         }
@@ -356,17 +365,21 @@ object SignalSlingerProtocolCodec {
         }
 
         arduconPasswordPattern.matchEntire(trimmed)?.let { match ->
+            val password = sanitizeFirmwareTextField(match.groupValues[1])
+                ?.takeIf(::isValidDtmfPassword)
+                ?: return null
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
-                    dtmfPassword = match.groupValues[1].trim(),
+                    dtmfPassword = password,
                 ),
             )
         }
 
         arduconAmTonePattern.matchEntire(trimmed)?.let { match ->
+            val frequency = match.groupValues[1].toInt().takeIf { it in 0..6 } ?: return null
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
-                    amToneFrequency = match.groupValues[1].toInt(),
+                    amToneFrequency = frequency,
                 ),
             )
         }
@@ -406,9 +419,10 @@ object SignalSlingerProtocolCodec {
         }
 
         stationIdPattern.matchEntire(trimmed)?.let { match ->
+            val stationId = sanitizeFirmwareTextField(match.groupValues[1]) ?: return null
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
-                    stationId = match.groupValues[1].trim(),
+                    stationId = stationId,
                 ),
             )
         }
@@ -491,9 +505,11 @@ object SignalSlingerProtocolCodec {
         }
 
         daysToRunPattern.matchEntire(trimmed)?.let { match ->
+            val daysToRun = match.groupValues[1].toInt().takeIf { it in DaysToRunSupport.minimum..DaysToRunSupport.maximum }
+                ?: return null
             return DeviceReportUpdate(
                 settingsPatch = DeviceSettingsPatch(
-                    daysToRun = match.groupValues[1].toInt(),
+                    daysToRun = daysToRun,
                 ),
             )
         }
@@ -802,7 +818,7 @@ object SignalSlingerProtocolCodec {
 
     private fun parseEpochSecondsCompact(raw: String): String? {
         val epochSeconds = raw.trim().toLongOrNull() ?: return null
-        if (epochSeconds < MinimumValidEpochSeconds) {
+        if (epochSeconds < MinimumValidEpochSeconds || epochSeconds >= MaximumValidEpochSeconds) {
             return null
         }
         val fields = platformLocalDateTimeFields(epochSeconds) ?: return null
@@ -816,6 +832,18 @@ object SignalSlingerProtocolCodec {
     }
 
     private const val MinimumValidEpochSeconds = 1_609_459_200L
+    private const val MaximumValidEpochSeconds = 4_102_444_800L
+
+    private fun sanitizeFirmwareTextField(raw: String): String? {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) {
+            return null
+        }
+        if (trimmed.any { it.code !in 0x21..0x7E }) {
+            return null
+        }
+        return trimmed
+    }
 
     private fun parseEventState(trimmed: String): DeviceStatusPatch? {
         val summary = trimmed.removePrefix("*").trim()

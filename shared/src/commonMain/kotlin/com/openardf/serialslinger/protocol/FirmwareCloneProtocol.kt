@@ -1,6 +1,7 @@
 package com.openardf.serialslinger.protocol
 
 import com.openardf.serialslinger.model.DeviceSettings
+import com.openardf.serialslinger.model.DaysToRunSupport
 import com.openardf.serialslinger.model.EventType
 
 data class FirmwareCloneStep(
@@ -27,7 +28,7 @@ object FirmwareCloneProtocol {
         val startEpoch = requireFirmwareEpoch("Start Time", templateSettings.startTimeCompact)
         val finishEpoch = requireFirmwareEpoch("Finish Time", templateSettings.finishTimeCompact)
         val currentEpoch = requireFirmwareEpoch("Device Time", currentTimeCompact)
-        val daysToRun = templateSettings.daysToRun.coerceAtLeast(1)
+        val daysToRun = templateSettings.daysToRun.coerceIn(DaysToRunSupport.minimum, DaysToRunSupport.maximum)
         var checksum = 0L
         val steps = mutableListOf<FirmwareCloneStep>()
 

@@ -9449,6 +9449,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return "<empty binary frame>"
         }
         val command = bytes[0].toInt().toChar()
+        if ((bytes[0].toInt() and 0xFF) == 0x55 && bytes.size >= 3) {
+            val wordAddress = (bytes[1].toInt() and 0xFF) or ((bytes[2].toInt() and 0xFF) shl 8)
+            return "U frame addr=0x" + (wordAddress * 2).toString(16).uppercase().padStart(8, '0') + " bytes=${bytes.size}"
+        }
+        if ((bytes[0].toInt() and 0xFF) == 0x64 && bytes.size >= 4) {
+            val length = ((bytes[1].toInt() and 0xFF) shl 8) or (bytes[2].toInt() and 0xFF)
+            return "d frame pageBytes=$length memory=${bytes[3].toInt().toChar()} bytes=${bytes.size}"
+        }
+        if ((bytes[0].toInt() and 0xFF) == 0x74 && bytes.size >= 4) {
+            val length = ((bytes[1].toInt() and 0xFF) shl 8) or (bytes[2].toInt() and 0xFF)
+            return "t frame pageBytes=$length memory=${bytes[3].toInt().toChar()} bytes=${bytes.size}"
+        }
         val address =
             if (bytes.size >= 5) {
                 (bytes[1].toInt() and 0xFF) or

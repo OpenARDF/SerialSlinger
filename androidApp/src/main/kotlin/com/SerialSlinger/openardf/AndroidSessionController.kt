@@ -16,6 +16,7 @@ import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.EditableDeviceSettings
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
+import com.openardf.serialslinger.model.DaysToRunSupport
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.EventProfileSupport
@@ -3350,8 +3351,10 @@ object AndroidSessionController {
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
     ) {
         val parsedDaysToRun = daysToRunText.trim().toIntOrNull()
-        if (parsedDaysToRun == null || parsedDaysToRun < 1) {
-            val error = IllegalArgumentException("Days To Run must be an integer of at least 1.")
+        if (parsedDaysToRun == null || parsedDaysToRun !in DaysToRunSupport.minimum..DaysToRunSupport.maximum) {
+            val error = IllegalArgumentException(
+                "Days To Run must be an integer from ${DaysToRunSupport.minimum} to ${DaysToRunSupport.maximum}.",
+            )
             synchronized(this) {
                 latestSubmitSummary = "Submit failed.\n${error.message}"
                 statusText = "Days To Run update failed."
@@ -6379,6 +6382,20 @@ object AndroidSessionController {
         confirmResidentFallback: ((version: String, board: String, downloadFailure: String) -> Boolean)? = null,
         onComplete: ((Result<Unit>) -> Unit)? = null,
     ) {
+        if (recoverAlreadyWaiting) {
+            val error = IllegalStateException(
+                "Arducon updates must be started from the running Arducon app with UPD. Hardware-reset recovery is not supported.",
+            )
+            synchronized(this) {
+                latestSubmitSummary = "Arducon update failed. ${error.message}"
+                statusText = "Arducon update failed."
+                statusIsError = true
+            }
+            emitCommandLog("Update Arducon", "app", success = false, summary = error.message.orEmpty())
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
         val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
         val startState =
             synchronized(this) {
@@ -6496,9 +6513,9 @@ object AndroidSessionController {
                             usbManager,
                             usbDevice,
                             pollIntervalMs = 5L,
-                            postBinaryWriteReadDelayMs = 15L,
+                            postBinaryWriteReadDelayMs = 5L,
                             binaryWriteChunkBytes = 64,
-                            targetResetSettleMs = if (start.recoverAlreadyWaiting) 40L else 500L,
+                            twoStopBitsBaudRate = arduconAppBaudRate,
                         ),
                         updateLog,
                     )
@@ -6509,7 +6526,7 @@ object AndroidSessionController {
                             hexText = hexBytes.decodeToString(),
                             recoverAlreadyWaiting = start.recoverAlreadyWaiting,
                             confirmedAppInfo = start.confirmedAppInfo,
-                            stkCommandPaceMs = 25L,
+                            stkCommandPaceMs = 20L,
                             verifyReadback = false,
                             progress = { progress ->
                                 recordFirmwareUpdateProgress("Arducon", progress)
@@ -6760,6 +6777,18 @@ object AndroidSessionController {
             return "<empty binary frame>"
         }
         val command = bytes[0].toInt().toChar()
+        if ((bytes[0].toInt() and 0xFF) == 0x55 && bytes.size >= 3) {
+            val wordAddress = (bytes[1].toInt() and 0xFF) or ((bytes[2].toInt() and 0xFF) shl 8)
+            return "U frame addr=0x" + (wordAddress * 2).toString(16).uppercase().padStart(8, '0') + " bytes=${bytes.size}"
+        }
+        if ((bytes[0].toInt() and 0xFF) == 0x64 && bytes.size >= 4) {
+            val length = ((bytes[1].toInt() and 0xFF) shl 8) or (bytes[2].toInt() and 0xFF)
+            return "d frame pageBytes=$length memory=${bytes[3].toInt().toChar()} bytes=${bytes.size}"
+        }
+        if ((bytes[0].toInt() and 0xFF) == 0x74 && bytes.size >= 4) {
+            val length = ((bytes[1].toInt() and 0xFF) shl 8) or (bytes[2].toInt() and 0xFF)
+            return "t frame pageBytes=$length memory=${bytes[3].toInt().toChar()} bytes=${bytes.size}"
+        }
         val address =
             if (bytes.size >= 5) {
                 (bytes[1].toInt() and 0xFF) or

@@ -15,8 +15,13 @@ private const val ArduconRestartConfirmationFailureMessage =
 private const val ArduconRestartConfirmationAttempts = 3
 private const val ArduconBootloaderIncompatibleVersion = "2.1.0"
 private const val ArduconStopTransmissionsCommand = "SYN 0"
+private const val StkCommandAttempts = 5
 
 class ArduconRestartHandoffException(message: String) : IllegalStateException(message)
+private class ArduconStkNonResponseException(
+    val receivedBytes: List<Byte>,
+    message: String,
+) : IllegalStateException(message)
 
 data class ArduconReleaseInfo(
     val format: String,
@@ -270,7 +275,7 @@ object ArduconFirmwareUpdate {
         require(image.size == release.update.bytesInImage) {
             "Update image byte count mismatch: manifest says ${release.update.bytesInImage}, HEX contains ${image.size}."
         }
-        val pages = pagesFromImage(image, release.firmwareUpdate.pageBytes)
+        val pages = pagesFromImage(image, release.firmwareUpdate.pageBytes, release.firmwareUpdate.appStartAddress)
 
         enterUpdateMode(transport, release, recoverAlreadyWaiting, confirmedAppInfo, progress)
         stkCommand(transport, byteArrayOf(0x50), 0, "enter programming mode", stkCommandPaceMs)
@@ -547,21 +552,35 @@ object ArduconFirmwareUpdate {
         description: String,
         paceMs: Long = 0,
     ): ByteArray {
-        transport.writeBytes(command + StkCrcEop.toByte())
-        val response = readStkResponse(transport, responseBytes, 1_500)
-        require(response != null) {
-            "Arducon bootloader did not respond to $description."
+        var lastFailure: ArduconStkNonResponseException? = null
+        repeat(StkCommandAttempts) { attempt ->
+            transport.writeBytes(command + StkCrcEop.toByte())
+            try {
+                val response = readStkResponse(transport, responseBytes, 1_500, description)
+                    ?: throw ArduconStkNonResponseException(
+                        receivedBytes = emptyList(),
+                        "Arducon bootloader did not respond to $description.",
+                    )
+                if (paceMs > 0) {
+                    platformSleep(paceMs)
+                }
+                return response
+            } catch (failure: ArduconStkNonResponseException) {
+                if (!failure.isRetryableTransientResponse() || attempt == StkCommandAttempts - 1) {
+                    throw failure
+                }
+                lastFailure = failure
+                platformSleep(25)
+            }
         }
-        if (paceMs > 0) {
-            platformSleep(paceMs)
-        }
-        return response
+        throw lastFailure ?: IllegalStateException("Arducon bootloader did not respond to $description.")
     }
 
     private fun readStkResponse(
         transport: SignalSlingerFirmwareUpdateTransport,
         responseBytes: Int,
         timeoutMs: Long,
+        description: String,
     ): ByteArray? {
         val deadline = platformCurrentTimeMillis() + timeoutMs
         val bytes = mutableListOf<Byte>()
@@ -575,7 +594,43 @@ object ArduconFirmwareUpdate {
                 }
             }
         }
+        if (bytes.isNotEmpty()) {
+            throw ArduconStkNonResponseException(
+                receivedBytes = bytes,
+                "Arducon bootloader returned non-STK500 data while waiting for $description: " +
+                    firmwareBytesPreview(bytes),
+            )
+        }
         return null
+    }
+
+    private fun ArduconStkNonResponseException.isRetryableTransientResponse(): Boolean {
+        return receivedBytes.isEmpty() ||
+            receivedBytes.all { (it.toInt() and 0xFF) == 0x00 } ||
+            (receivedBytes.size <= 2 && receivedBytes.none { (it.toInt() and 0xFF) == StkInSync }) ||
+            (receivedBytes.size <= 4 && (receivedBytes.firstOrNull()?.toInt()?.and(0xFF) == StkInSync))
+    }
+
+    private fun firmwareBytesPreview(bytes: List<Byte>): String {
+        val previewBytes = bytes.take(160)
+        val textPreview =
+            previewBytes.joinToString("") { value ->
+                val code = value.toInt() and 0xFF
+                when (code) {
+                    0x0D -> "\\r"
+                    0x0A -> "\\n"
+                    in 0x20..0x7E -> code.toChar().toString()
+                    else -> "."
+                }
+            }
+        val hexPreview = previewBytes.joinToString(" ") { value ->
+            (value.toInt() and 0xFF).toString(16).uppercase().padStart(2, '0')
+        }
+        return if (bytes.size > previewBytes.size) {
+            "text=\"$textPreview...\" hex=$hexPreview ... (${bytes.size} bytes)"
+        } else {
+            "text=\"$textPreview\" hex=$hexPreview (${bytes.size} bytes)"
+        }
     }
 
     private fun parseIntelHexImage(
@@ -626,14 +681,17 @@ object ArduconFirmwareUpdate {
     private fun pagesFromImage(
         image: Map<Int, Byte>,
         pageBytes: Int,
+        appStartAddress: Int,
     ): List<SignalSlingerFirmwarePage> {
-        require(image.keys.any { it in 0 until pageBytes }) {
-            "Update image does not contain the reset-vector page at ${0.toHex32()}."
+        val resetVectorPageAddress = appStartAddress - (appStartAddress % pageBytes)
+        require(image.keys.any { it in resetVectorPageAddress until (resetVectorPageAddress + pageBytes) }) {
+            "Update image does not contain the reset-vector page at ${resetVectorPageAddress.toHex32()}."
         }
-        return image.keys
+        val pageAddresses = image.keys
             .map { address -> address - (address % pageBytes) }
             .distinct()
             .sorted()
+        return (pageAddresses.filterNot { it == resetVectorPageAddress } + resetVectorPageAddress)
             .map { pageAddress ->
                 val page = ByteArray(pageBytes) { 0xFF.toByte() }
                 for (offset in 0 until pageBytes) {
