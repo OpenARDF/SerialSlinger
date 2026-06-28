@@ -87,29 +87,29 @@
     },
     {
       "id": "tag-pushed",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Annotated tag v2.0.15 pushed to origin at 42d6fee82d5dc60b68cd79f31214318ddc107bd0.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "workflow-published",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions run 28328718038 completed successfully in 3m3s; publish-macos-release passed build, jDeploy publish, canonical tarball upload, macOS branding repair, and GitHub release publish.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "release-verified",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "gh release view v2.0.15 reported published non-draft release at https://github.com/OpenARDF/SerialSlinger/releases/tag/v2.0.15 targeting 42d6fee82d5dc60b68cd79f31214318ddc107bd0 with 2.0.15 desktop installer assets and serialslinger-2.0.15.tgz; tarball asset returned HTTP 200 after redirect.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "final-checklist-audit",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "npm run release:checklist -- --file docs/release-checklist-2.0.15.json --phase final passed after recording final publication evidence.",
       "skipReason": "",
       "skipRequestedBy": ""
     }
