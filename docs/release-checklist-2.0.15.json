@@ -80,8 +80,8 @@
     },
     {
       "id": "merged-to-main",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Release prep committed directly on main as d0301af after confirming main was current with origin/main and Development_Android was behind main; Development_Android will be fast-forwarded to the deployed release state after publication.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
