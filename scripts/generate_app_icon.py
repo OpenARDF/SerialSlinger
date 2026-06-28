@@ -19,6 +19,8 @@ ICO_PATH = PACKAGING_DIR / "SerialSlinger.ico"
 ICNS_PATH = PACKAGING_DIR / "SerialSlinger.icns"
 LINUX_PNG_PATH = PACKAGING_DIR / "SerialSlinger.png"
 MASTER_PNG_PATH = PACKAGING_DIR / "SerialSlinger-master-1024.png"
+LAUNCHER_MASTER_PNG_PATH = PACKAGING_DIR / "SerialSlinger-launcher-master-1024.png"
+ROOT_ICON_PATH = ROOT / "icon.png"
 
 
 def rgba(r: int, g: int, b: int, a: int = 255) -> tuple[int, int, int, int]:
@@ -255,15 +257,16 @@ def draw_connector_pins(
         draw_circle(canvas, center[0], center[1], pin_radius, PIN)
 
 
-def render_icon(size: int) -> bytes:
+def render_icon(size: int, fill_launcher_shape: bool = False) -> bytes:
     supersample = 2 if size <= 256 else 1
     work_size = size * supersample
     canvas = Canvas(work_size)
 
-    left = work_size * 0.06
-    top = work_size * 0.06
-    right = work_size * 0.94
-    bottom = work_size * 0.94
+    inset = 0.0 if fill_launcher_shape else 0.06
+    left = work_size * inset
+    top = work_size * inset
+    right = work_size * (1.0 - inset)
+    bottom = work_size * (1.0 - inset)
     radius = work_size * 0.205
 
     fill_rounded_rect(
@@ -277,7 +280,7 @@ def render_icon(size: int) -> bytes:
         rgba(*SHADOW[:3], 0),
     )
     fill_rounded_rect(canvas, left, top, right, bottom, radius, BG_TOP, BG_BOTTOM)
-    stroke_rounded_rect(canvas, inset=work_size * 0.06, radius=radius, width=work_size * 0.012, color=OUTLINE)
+    stroke_rounded_rect(canvas, inset=work_size * inset, radius=radius, width=work_size * 0.012, color=OUTLINE)
 
     p0 = (work_size * 0.29, work_size * 0.24)
     p1 = (work_size * 0.45, work_size * 0.50)
@@ -353,8 +356,8 @@ def encode_png(canvas: Canvas) -> bytes:
     )
 
 
-def write_png(path: Path, size: int) -> bytes:
-    png_bytes = render_icon(size)
+def write_png(path: Path, size: int, fill_launcher_shape: bool = False) -> bytes:
+    png_bytes = render_icon(size, fill_launcher_shape)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(png_bytes)
     return png_bytes
@@ -411,7 +414,7 @@ def write_icns(path: Path, chunks: list[tuple[str, bytes]]) -> None:
     path.write_bytes(b"icns" + struct.pack(">I", total_size) + body)
 
 
-def build_icns() -> None:
+def build_icns(source: Path) -> None:
     if MAC_ICONSET_DIR.exists():
         shutil.rmtree(MAC_ICONSET_DIR)
     MAC_ICONSET_DIR.mkdir(parents=True, exist_ok=True)
@@ -429,7 +432,7 @@ def build_icns() -> None:
         "icon_512x512@2x.png": 1024,
     }
     for filename, size in iconset_size_map.items():
-        resize_png(MASTER_PNG_PATH, MAC_ICONSET_DIR / filename, size)
+        resize_png(source, MAC_ICONSET_DIR / filename, size)
 
     icns_chunks = [
         ("icp4", (MAC_ICONSET_DIR / "icon_16x16.png").read_bytes()),
@@ -445,8 +448,10 @@ def build_icns() -> None:
 
 def main() -> None:
     master_png = write_png(MASTER_PNG_PATH, 1024)
+    launcher_master_png = write_png(LAUNCHER_MASTER_PNG_PATH, 1024, fill_launcher_shape=True)
     resize_png(MASTER_PNG_PATH, PNG_RUNTIME_PATH, 256)
     resize_png(MASTER_PNG_PATH, LINUX_PNG_PATH, 512)
+    resize_png(LAUNCHER_MASTER_PNG_PATH, ROOT_ICON_PATH, 512)
 
     ico_pngs = []
     for size in (16, 32, 48, 64, 128, 256):
@@ -454,15 +459,18 @@ def main() -> None:
         resize_png(MASTER_PNG_PATH, resized_path, size)
         ico_pngs.append((size, resized_path.read_bytes()))
     write_ico(ICO_PATH, ico_pngs)
-    build_icns()
+    build_icns(LAUNCHER_MASTER_PNG_PATH)
     for size, _ in ico_pngs:
         (PACKAGING_DIR / f".ico-{size}.png").unlink(missing_ok=True)
     MASTER_PNG_PATH.unlink(missing_ok=True)
+    LAUNCHER_MASTER_PNG_PATH.unlink(missing_ok=True)
+    print(f"Wrote {ROOT_ICON_PATH.relative_to(ROOT)}")
     print(f"Wrote {PNG_RUNTIME_PATH.relative_to(ROOT)}")
     print(f"Wrote {LINUX_PNG_PATH.relative_to(ROOT)}")
     print(f"Wrote {ICO_PATH.relative_to(ROOT)}")
     print(f"Wrote {ICNS_PATH.relative_to(ROOT)}")
     print(f"Master PNG bytes: {len(master_png)}")
+    print(f"Launcher master PNG bytes: {len(launcher_master_png)}")
 
 
 if __name__ == "__main__":
