@@ -99,6 +99,17 @@ ensure(packageJson.devDependencies?.jdeploy, "package.json is missing the local 
 ensure(workflowText.includes('tags:\n      - "v*"'), "The jDeploy release workflow is not configured for v* tags.");
 ensure(workflowText.includes("deploy_target: github"), "The jDeploy release workflow is not pinned to the GitHub release target.");
 ensure(workflowText.includes(`jdeploy_version: "${packageJson.devDependencies.jdeploy}"`), "The jDeploy workflow version does not match package.json's jdeploy devDependency.");
+ensure(workflowText.includes("Repair macOS jDeploy branding"), "The jDeploy workflow must repair macOS installer branding.");
+ensure(
+  fs.existsSync(path.join(repoRoot, "scripts", "repair-jdeploy-github-release-macos.sh")),
+  "The macOS jDeploy installer branding repair script is missing.",
+);
+const macosRepairScript = readFile(
+  path.join(repoRoot, "scripts", "repair-jdeploy-github-release-macos.sh"),
+  "The macOS jDeploy installer branding repair script is missing.",
+);
+ensure(macosRepairScript.includes("shared/packaging/icons/SerialSlinger.icns"), "The macOS installer repair script must use SerialSlinger.icns.");
+ensure(macosRepairScript.includes("app.xml"), "The macOS installer repair script must patch installer app.xml icon metadata.");
 
 const existingTag = execFileSync("git", ["ls-remote", "--tags", "origin", `refs/tags/${expectedTag}`], {
   cwd: repoRoot,
