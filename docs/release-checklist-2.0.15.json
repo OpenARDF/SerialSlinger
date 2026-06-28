@@ -1,0 +1,117 @@
+{
+  "version": "2.0.15",
+  "items": [
+    {
+      "id": "version-aligned",
+      "status": "done",
+      "evidence": "build.gradle.kts serialSlingerVersion=2.0.15 with blank suffix; package.json and package-lock.json are 2.0.15; npm run jdeploy:release-preflight confirmed Gradle base/display/package 2.0.15 and package serialslinger@2.0.15.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts versionCode bumped from 22 to 23; versionName still follows root serialSlingerDisplayVersion, so Android reports 2.0.15.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "status": "done",
+      "evidence": "Passed npm run jdeploy:release-preflight, ./gradlew check, ./gradlew prepareDesktopJdeployBundle verifyDesktopJdeployBundle, ./gradlew androidApp:compileDebugKotlin, ./gradlew :androidApp:bundleRelease, local jDeploy prepare/package/install-local/verify-install/local launch, npm run jdeploy:pack-preview, gitleaks detect . --no-banner, and git diff --check.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "status": "done",
+      "evidence": "Reviewed release diff: 2.0.15 carries the macOS launcher icon shape fix and generated desktop icon assets; Android has no corresponding behavior or asset change beyond version alignment.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "status": "done",
+      "evidence": "User confirmed hardware testing already passed before this 2.0.15 jDeploy request.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "desktop-regression",
+      "status": "done",
+      "evidence": "User confirmed hardware testing already passed before this 2.0.15 jDeploy request; local jDeploy install and launch also passed on this Mac.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows Intel x64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows ARM64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux Intel x64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux ARM64 host is available in this Mac release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "android-release-notes",
+      "status": "done",
+      "evidence": "Prepared release notes: SerialSlinger 2.0.15 fixes the macOS launcher icon shape and keeps Android release versioning aligned with the desktop release.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}
