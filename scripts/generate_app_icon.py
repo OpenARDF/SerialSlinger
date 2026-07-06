@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import math
 import struct
 import shutil
@@ -9,11 +10,17 @@ import subprocess
 import zlib
 from pathlib import Path
 
+from PIL import Image
+
 
 ROOT = Path(__file__).resolve().parents[1]
+ANDROID_RES_DIR = ROOT / "androidApp" / "src" / "main" / "res"
+ANDROID_MAIN_PLAY_ICON_PATH = ROOT / "androidApp" / "src" / "main" / "ic_runner-playstore.png"
+PLAY_STORE_ICON_PATH = ROOT / "androidApp" / "play-store" / "app-icon.png"
 RESOURCE_DIR = ROOT / "shared" / "src" / "desktopMain" / "resources" / "icons"
 PACKAGING_DIR = ROOT / "shared" / "packaging" / "icons"
 MAC_ICONSET_DIR = PACKAGING_DIR / "SerialSlinger.iconset"
+PNG_RUNTIME_512_PATH = RESOURCE_DIR / "serialslinger-icon.png"
 PNG_RUNTIME_PATH = RESOURCE_DIR / "serialslinger-icon-256.png"
 ICO_PATH = PACKAGING_DIR / "SerialSlinger.ico"
 ICNS_PATH = PACKAGING_DIR / "SerialSlinger.icns"
@@ -363,6 +370,17 @@ def write_png(path: Path, size: int, fill_launcher_shape: bool = False) -> bytes
     return png_bytes
 
 
+def write_png_bytes(path: Path, png_bytes: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(png_bytes)
+
+
+def write_webp_from_png_bytes(path: Path, png_bytes: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(io.BytesIO(png_bytes)) as image:
+        image.save(path, "WEBP", quality=95, method=6)
+
+
 def resize_png(source: Path, target: Path, size: int) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
@@ -414,6 +432,66 @@ def write_icns(path: Path, chunks: list[tuple[str, bytes]]) -> None:
     path.write_bytes(b"icns" + struct.pack(">I", total_size) + body)
 
 
+def write_android_adaptive_icon_xml(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"""
+        """<adaptive-icon xmlns:android=\"http://schemas.android.com/apk/res/android\">\n"""
+        """    <background android:drawable=\"@color/ic_logo\" />\n"""
+        """    <foreground android:drawable=\"@mipmap/ic_runner_foreground\" />\n"""
+        """</adaptive-icon>\n""",
+        encoding="utf-8",
+    )
+
+
+def write_android_color_resource(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"""
+        """<resources>\n"""
+        """    <color name=\"ic_logo\">#103E4C</color>\n"""
+        """</resources>\n""",
+        encoding="utf-8",
+    )
+
+
+def write_android_icons() -> None:
+    density_sizes = {
+        "mipmap-mdpi": 48,
+        "mipmap-hdpi": 72,
+        "mipmap-xhdpi": 96,
+        "mipmap-xxhdpi": 144,
+        "mipmap-xxxhdpi": 192,
+    }
+    foreground_sizes = {
+        "mipmap-mdpi": 108,
+        "mipmap-hdpi": 162,
+        "mipmap-xhdpi": 216,
+        "mipmap-xxhdpi": 324,
+        "mipmap-xxxhdpi": 432,
+    }
+
+    for folder, size in density_sizes.items():
+        out_dir = ANDROID_RES_DIR / folder
+        full_icon = render_icon(size)
+        round_icon = render_icon(size, fill_launcher_shape=True)
+        write_png_bytes(out_dir / "ic_logo.png", full_icon)
+        write_png_bytes(out_dir / "ic_logo_round.png", round_icon)
+        write_webp_from_png_bytes(out_dir / "ic_launcher.webp", full_icon)
+        write_webp_from_png_bytes(out_dir / "ic_launcher_round.webp", round_icon)
+
+    for folder, size in foreground_sizes.items():
+        write_png_bytes(
+            ANDROID_RES_DIR / folder / "ic_runner_foreground.png",
+            render_icon(size, fill_launcher_shape=True),
+        )
+
+    anydpi_dir = ANDROID_RES_DIR / "mipmap-anydpi-v26"
+    for filename in ("ic_launcher.xml", "ic_launcher_round.xml", "ic_logo.xml", "ic_logo_round.xml"):
+        write_android_adaptive_icon_xml(anydpi_dir / filename)
+    write_android_color_resource(ANDROID_RES_DIR / "values" / "ic_logo.xml")
+
+
 def build_icns(source: Path) -> None:
     if MAC_ICONSET_DIR.exists():
         shutil.rmtree(MAC_ICONSET_DIR)
@@ -449,9 +527,13 @@ def build_icns(source: Path) -> None:
 def main() -> None:
     master_png = write_png(MASTER_PNG_PATH, 1024)
     launcher_master_png = write_png(LAUNCHER_MASTER_PNG_PATH, 1024, fill_launcher_shape=True)
+    write_android_icons()
+    resize_png(MASTER_PNG_PATH, PNG_RUNTIME_512_PATH, 512)
     resize_png(MASTER_PNG_PATH, PNG_RUNTIME_PATH, 256)
     resize_png(MASTER_PNG_PATH, LINUX_PNG_PATH, 512)
     resize_png(LAUNCHER_MASTER_PNG_PATH, ROOT_ICON_PATH, 512)
+    resize_png(LAUNCHER_MASTER_PNG_PATH, ANDROID_MAIN_PLAY_ICON_PATH, 512)
+    resize_png(LAUNCHER_MASTER_PNG_PATH, PLAY_STORE_ICON_PATH, 512)
 
     ico_pngs = []
     for size in (16, 32, 48, 64, 128, 256):
@@ -465,6 +547,9 @@ def main() -> None:
     MASTER_PNG_PATH.unlink(missing_ok=True)
     LAUNCHER_MASTER_PNG_PATH.unlink(missing_ok=True)
     print(f"Wrote {ROOT_ICON_PATH.relative_to(ROOT)}")
+    print(f"Wrote {ANDROID_MAIN_PLAY_ICON_PATH.relative_to(ROOT)}")
+    print(f"Wrote {PLAY_STORE_ICON_PATH.relative_to(ROOT)}")
+    print(f"Wrote {PNG_RUNTIME_512_PATH.relative_to(ROOT)}")
     print(f"Wrote {PNG_RUNTIME_PATH.relative_to(ROOT)}")
     print(f"Wrote {LINUX_PNG_PATH.relative_to(ROOT)}")
     print(f"Wrote {ICO_PATH.relative_to(ROOT)}")
