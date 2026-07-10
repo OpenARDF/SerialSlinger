@@ -107,6 +107,66 @@ class WritePlannerTest {
         )
     }
 
+    @Test
+    fun skipsPatternTextChangesForClassicFixedFoxRolePatterns() {
+        val original = sampleSettings().copy(
+            eventType = EventType.CLASSIC,
+            foxRole = FoxRole.CLASSIC_1,
+            patternText = "MOE",
+        )
+        val edited = original.copy(patternText = "MOI")
+
+        val plan = WritePlanner.create(original, edited)
+
+        assertEquals(emptyList(), plan.changes.map { it.fieldKey })
+    }
+
+    @Test
+    fun skipsPatternTextChangesForSprintFixedFoxRolePatterns() {
+        val original = sampleSettings().copy(
+            eventType = EventType.SPRINT,
+            foxRole = FoxRole.SPRINT_SLOW_1,
+            patternText = "ME",
+        )
+        val edited = original.copy(patternText = "MI")
+
+        val plan = WritePlanner.create(original, edited)
+
+        assertEquals(emptyList(), plan.changes.map { it.fieldKey })
+    }
+
+    @Test
+    fun skipsPatternTextChangesForFoxoringBeaconFixedPattern() {
+        val original = sampleSettings().copy(
+            eventType = EventType.FOXORING,
+            foxRole = FoxRole.BEACON,
+            patternText = "MO",
+        )
+        val edited = original.copy(patternText = "MO5")
+
+        val plan = WritePlanner.create(
+            original,
+            edited,
+            forceWriteKeys = setOf(SettingKey.PATTERN_TEXT),
+        )
+
+        assertEquals(emptyList(), plan.changes.map { it.fieldKey })
+    }
+
+    @Test
+    fun keepsPatternTextChangesForProgrammableFoxoringRoles() {
+        val original = sampleSettings().copy(
+            eventType = EventType.FOXORING,
+            foxRole = FoxRole.FOXORING_1,
+            patternText = "MOE",
+        )
+        val edited = original.copy(patternText = "MOI")
+
+        val plan = WritePlanner.create(original, edited)
+
+        assertEquals(listOf(SettingKey.PATTERN_TEXT), plan.changes.map { it.fieldKey })
+    }
+
     private fun sampleSettings(): DeviceSettings {
         return DeviceSettings(
             stationId = "N0CALL",

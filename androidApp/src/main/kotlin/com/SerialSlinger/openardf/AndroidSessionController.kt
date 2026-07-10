@@ -2423,8 +2423,11 @@ object AndroidSessionController {
             return
         }
 
-        if (!snapshot.capabilities.supportsPatternEditing || snapshot.settings.eventType.name != "FOXORING") {
-            val error = IllegalStateException("Pattern Text editing is only supported for FOXORING snapshots.")
+        if (
+            !snapshot.capabilities.supportsPatternEditing ||
+            !EventProfileSupport.patternTextIsEditable(snapshot.settings.eventType, snapshot.settings.foxRole)
+        ) {
+            val error = IllegalStateException("Pattern Text editing is only supported for editable FOXORING roles.")
             synchronized(this) {
                 latestSubmitSummary = "Submit failed.\n${error.message}"
                 statusText = "Pattern Text update failed."

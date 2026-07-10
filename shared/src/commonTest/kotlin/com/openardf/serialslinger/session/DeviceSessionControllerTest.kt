@@ -589,7 +589,13 @@ class DeviceSessionControllerTest {
             ),
         )
 
-        val connected = DeviceSessionController.connectAndLoad(FakeDeviceTransport(), sampleSettings())
+        val connected = DeviceSessionController.connectAndLoad(
+            FakeDeviceTransport(),
+            sampleSettings().copy(
+                eventType = EventType.FOXORING,
+                foxRole = FoxRole.FOXORING_1,
+            ),
+        )
         val editable = EditableDeviceSettings.fromDeviceSettings(assertNotNull(connected.state.snapshot).settings).copy(
             stationId = SettingsField("stationId", "Station ID", "N0CALL", "w1fox"),
             patternText = SettingsField("patternText", "Pattern Text", "MOE", "moe"),

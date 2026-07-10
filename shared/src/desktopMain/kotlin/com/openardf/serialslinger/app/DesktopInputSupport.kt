@@ -122,8 +122,8 @@ object DesktopInputSupport {
         return EventProfileSupport.patternSpeedBelongsToTimedEventSettings(eventType)
     }
 
-    fun patternTextIsEditable(eventType: EventType): Boolean {
-        return EventProfileSupport.patternTextIsEditable(eventType)
+    fun patternTextIsEditable(eventType: EventType, foxRole: FoxRole? = null): Boolean {
+        return EventProfileSupport.patternTextIsEditable(eventType, foxRole)
     }
 
     fun timedEventFrequencyVisibility(eventType: EventType): TimedEventFrequencyVisibility {

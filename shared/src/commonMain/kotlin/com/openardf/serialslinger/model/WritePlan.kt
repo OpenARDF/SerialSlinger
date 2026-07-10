@@ -51,7 +51,7 @@ object WritePlanner {
             addIfChanged(SettingKey.EVENT_TYPE, 20, original.eventType, edited.eventType, true, forceWriteKeys)
             addIfChanged(SettingKey.FOX_ROLE, 30, original.foxRole, edited.foxRole, true, forceWriteKeys)
             addIfChanged(SettingKey.ARDUCON_FOX_ROLE, 35, original.arduconFoxRoleCode, edited.arduconFoxRoleCode, true, forceWriteKeys)
-            addIfChanged(SettingKey.PATTERN_TEXT, 40, original.patternText, edited.patternText, true, forceWriteKeys)
+            addPatternTextIfProgrammable(original, edited, forceWriteKeys)
             addIfChanged(SettingKey.ID_CODE_SPEED_WPM, 50, original.idCodeSpeedWpm, edited.idCodeSpeedWpm, true, forceWriteKeys)
             addIfChanged(SettingKey.PATTERN_CODE_SPEED_WPM, 60, original.patternCodeSpeedWpm, edited.patternCodeSpeedWpm, true, forceWriteKeys)
             addIfChanged(SettingKey.CURRENT_TIME, 70, original.currentTimeCompact, edited.currentTimeCompact, true, forceWriteKeys)
@@ -95,6 +95,17 @@ object WritePlanner {
                 ),
             )
         }
+    }
+
+    private fun MutableList<SettingChange>.addPatternTextIfProgrammable(
+        original: DeviceSettings,
+        edited: DeviceSettings,
+        forceWriteKeys: Set<SettingKey>,
+    ) {
+        if (!EventProfileSupport.patternTextIsEditable(edited.eventType, edited.foxRole)) {
+            return
+        }
+        addIfChanged(SettingKey.PATTERN_TEXT, 40, original.patternText, edited.patternText, true, forceWriteKeys)
     }
 
     // Firmware auto-adjusts Finish when Start is written, so preserving the same absolute

@@ -615,9 +615,21 @@ class DesktopInputSupportTest {
     }
 
     @Test
-    fun patternTextIsEditableOnlyForFoxoring() {
+    fun displaysBeaconPatternTextFromFoxRoleInsteadOfStoredPatValue() {
+        val text = DesktopInputSupport.displayPatternText(
+            eventType = EventType.FOXORING,
+            foxRole = FoxRole.BEACON,
+            storedPatternText = "MOH",
+        )
+
+        assertEquals("MO", text)
+    }
+
+    @Test
+    fun patternTextIsEditableOnlyForFoxoringRolesWithoutFixedPatternText() {
         assertEquals(false, DesktopInputSupport.patternTextIsEditable(EventType.CLASSIC))
-        assertEquals(true, DesktopInputSupport.patternTextIsEditable(EventType.FOXORING))
+        assertEquals(true, DesktopInputSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.FOXORING_2))
+        assertEquals(false, DesktopInputSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.BEACON))
         assertEquals(false, DesktopInputSupport.patternTextIsEditable(EventType.SPRINT))
     }
 
@@ -750,6 +762,12 @@ class DesktopInputSupportTest {
                     EventProfileSupport.patternTextIsEditable(eventType),
                     DesktopInputSupport.patternTextIsEditable(eventType),
                 )
+                EventProfileSupport.foxRoleOptions(eventType).forEach { foxRole ->
+                    assertEquals(
+                        EventProfileSupport.patternTextIsEditable(eventType, foxRole),
+                        DesktopInputSupport.patternTextIsEditable(eventType, foxRole),
+                    )
+                }
                 assertEquals(
                     EventProfileSupport.patternSpeedBelongsToTimedEventSettings(eventType),
                     DesktopInputSupport.patternSpeedBelongsToTimedEventSettings(eventType),

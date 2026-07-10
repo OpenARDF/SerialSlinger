@@ -4395,7 +4395,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun applyPatternTextChange() {
         val eventType = loadedSnapshot?.settings?.eventType ?: (eventTypeCombo.selectedItem as? EventType ?: EventType.NONE)
-        if (!DesktopInputSupport.patternTextIsEditable(eventType)) {
+        val foxRole = loadedSnapshot?.settings?.foxRole ?: foxRoleCombo.selectedItem as? FoxRole
+        if (!DesktopInputSupport.patternTextIsEditable(eventType, foxRole)) {
             return
         }
         applyImmediateEdit("Pattern Text", updatesTimedEventTemplate = false) { base ->
@@ -6072,7 +6073,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     foxRole = settings.foxRole,
                     storedPatternText = settings.patternText,
                 )
-            updatePatternTextEditability(settings.eventType, !backgroundWorkInProgress)
+            updatePatternTextEditability(settings.eventType, settings.foxRole, !backgroundWorkInProgress)
             idSpeedField.selectedItem = DesktopInputSupport.formatCodeSpeedWpm(timedSettings.idCodeSpeedWpm)
             devicePatternSpeedField.selectedItem = DesktopInputSupport.formatCodeSpeedWpm(settings.patternCodeSpeedWpm)
             timedPatternSpeedField.selectedItem = DesktopInputSupport.formatCodeSpeedWpm(settings.patternCodeSpeedWpm)
@@ -10050,6 +10051,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         pttResetField.isEnabled = writableEnabled && pttResetEditingSupported
         updatePatternTextEditability(
             loadedSnapshot?.settings?.eventType ?: (eventTypeCombo.selectedItem as? EventType ?: EventType.NONE),
+            loadedSnapshot?.settings?.foxRole ?: foxRoleCombo.selectedItem as? FoxRole,
             patternFieldsEditable,
         )
         idSpeedField.isEnabled = writableEnabled && idCodeSpeedEditingSupported
@@ -10168,8 +10170,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun updatePatternTextEditability(eventType: EventType, writableEnabled: Boolean) {
-        val editable = writableEnabled && DesktopInputSupport.patternTextIsEditable(eventType)
+    private fun updatePatternTextEditability(eventType: EventType, foxRole: FoxRole?, writableEnabled: Boolean) {
+        val editable = writableEnabled && DesktopInputSupport.patternTextIsEditable(eventType, foxRole)
         patternTextField.isEnabled = true
         patternTextField.isEditable = editable
         if (editable) {
@@ -10183,6 +10185,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         patternTextField.toolTipText = if (editable) {
             "Editable in Foxoring."
+        } else if (foxRole?.fixedPatternText != null) {
+            "Pattern text is determined by Fox Role."
         } else {
             "For Classic and Sprint, pattern text is determined by Fox Role."
         }

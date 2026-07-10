@@ -25,11 +25,21 @@ class EventProfileSupportTest {
                 storedPatternText = "MO5",
             ),
         )
+        assertEquals(
+            "MO",
+            EventProfileSupport.displayPatternText(
+                eventType = EventType.FOXORING,
+                foxRole = FoxRole.BEACON,
+                storedPatternText = "MO5",
+            ),
+        )
     }
 
     @Test
-    fun patternTextEditingIsLimitedToFoxoring() {
+    fun patternTextEditingIsLimitedToFoxoringRolesWithoutFixedPatternText() {
         assertTrue(EventProfileSupport.patternTextIsEditable(EventType.FOXORING))
+        assertTrue(EventProfileSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.FOXORING_1))
+        assertFalse(EventProfileSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.BEACON))
         assertFalse(EventProfileSupport.patternTextIsEditable(EventType.CLASSIC))
         assertFalse(EventProfileSupport.patternTextIsEditable(EventType.SPRINT))
     }

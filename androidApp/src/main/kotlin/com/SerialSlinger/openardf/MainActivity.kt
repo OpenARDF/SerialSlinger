@@ -969,7 +969,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             )
         }
 
-        val patternTextEditable = EventProfileSupport.patternTextIsEditable(loadedSettings.eventType)
+        val patternTextEditable = EventProfileSupport.patternTextIsEditable(
+            loadedSettings.eventType,
+            loadedSettings.foxRole,
+        )
         if (isArducon) {
             deviceSettingsCard.addView(
                 compactLabeledRow(
