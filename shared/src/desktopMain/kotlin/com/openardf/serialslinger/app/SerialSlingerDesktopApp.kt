@@ -3239,7 +3239,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         if (orderedPorts.isEmpty()) {
             if (connectedPortPath != null) {
-                runInBackground("Reloading the connected device...") {
+                runInBackground(
+                    status = "Reloading the connected device...",
+                    verifyConnectedIdentity = false,
+                ) {
                     val connection = loadPort(connectedPortPath, resetConnectedState = true).copy(
                         loadLogTitle = "Find Device Reload",
                         loadLogLeadEntries = listOf(
@@ -3269,7 +3272,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
-        runInBackground("Looking for attached devices...") {
+        runInBackground(
+            status = "Looking for attached devices...",
+            verifyConnectedIdentity = false,
+        ) {
             val preferredProbeAttempt =
                 if (connectedPortPath == null && shouldTryPreferredPortRecovery(selectedPortPath, lastWorkingPortPath, ports)) {
                     attemptAutoDetectPreferredPortRecovery(
@@ -3902,7 +3908,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             ConnectionIndicatorState.SEARCHING,
             "Reloading $selectedPath as the active device...",
         )
-        runInBackground("Reloading $selectedPath...") {
+        runInBackground(
+            status = "Reloading $selectedPath...",
+            verifyConnectedIdentity = false,
+        ) {
             val reloadedConnection = loadPort(selectedPath)
             val loadResult = reloadedConnection.copy(
                 loadLogTitle = "Auto Detect Reload",
@@ -3966,7 +3975,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
-        runInBackground("Loading settings from ${probe.portInfo.systemPortPath}...") {
+        runInBackground(
+            status = "Loading settings from ${probe.portInfo.systemPortPath}...",
+            verifyConnectedIdentity = false,
+        ) {
             val loadResult = loadPortWithAliasFallback(probe.portInfo.systemPortPath)
             if (!acceptsProduct(loadResult.result.state.snapshot?.info?.productName)) {
                 loadResult.transport.disconnect()
@@ -4350,7 +4362,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         setCloneSessionTemplateLocked(false)
-        runInBackground("Reloading clone template from attached device...") {
+        runInBackground(
+            status = "Reloading clone template from attached device...",
+            verifyConnectedIdentity = false,
+        ) {
             val refreshedConnection = loadPort(portPath).copy(
                 loadLogTitle = "Clone Template Reload",
                 loadLogLeadEntries = listOf(
@@ -7014,6 +7029,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         runInBackground(
             status = "Reading SignalSlinger data before bootloader installation...",
             busyDialogTitle = "Install Bootloader on SignalSlinger",
+            verifyConnectedIdentity = false,
         ) {
             val refreshedConnection = loadPortWithAliasFallback(selectedPath).copy(
                 loadLogTitle = "Install Bootloader",

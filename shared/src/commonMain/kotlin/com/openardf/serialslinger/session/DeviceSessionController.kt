@@ -152,12 +152,28 @@ object DeviceSessionController {
             traceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
             }
-            val infoPatches = responseLines.mapNotNull { line ->
+            val deviceInfoPatches = responseLines.mapNotNull { line ->
                 SignalSlingerProtocolCodec.parseReportLine(line)?.deviceInfoPatch
-            }.filter { it.identityReportReceived == true }
+            }
+            val infoPatches = deviceInfoPatches.filter { it.identityReportReceived == true }
             if (infoPatches.isNotEmpty()) {
                 return DeviceIdentityProbeResult(
                     deviceUniqueId = infoPatches.mapNotNull { it.deviceUniqueId }.lastOrNull(),
+                    recognizedInfoResponse = true,
+                    attemptCount = attemptIndex + 1,
+                    linesReceived = linesReceived,
+                    traceEntries = traceEntries,
+                )
+            }
+            val preIdentityReportFirmwareObserved =
+                deviceInfoPatches.any { patch ->
+                    patch.productName.equals("SignalSlinger", ignoreCase = true) &&
+                        patch.softwareVersion != null &&
+                        !SignalSlingerFirmwareSupport.supportsIdentityReport(patch.softwareVersion)
+                }
+            if (preIdentityReportFirmwareObserved) {
+                return DeviceIdentityProbeResult(
+                    deviceUniqueId = null,
                     recognizedInfoResponse = true,
                     attemptCount = attemptIndex + 1,
                     linesReceived = linesReceived,

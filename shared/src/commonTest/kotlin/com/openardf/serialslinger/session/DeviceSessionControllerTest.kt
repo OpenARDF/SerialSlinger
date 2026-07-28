@@ -137,6 +137,39 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun probeDeviceIdentityRecognizesPreInfFirmwareFromLegacyVersionReport() {
+        val transport =
+            FakeDeviceTransport(
+                scriptedResponses =
+                    mapOf(
+                        "INF" to
+                            listOf(
+                                "> SignalSlinger 80m Radio Orienteering Transmitter",
+                                "* SW Ver: 2.0.1 HW Build: 3.4",
+                                "*   Event: Classic",
+                                "*   Fox: Classic Fox 5 \"MO5\"",
+                            ),
+                    ),
+            )
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+
+        assertEquals(listOf("INF"), transport.sentCommands)
+        assertEquals(null, result.deviceUniqueId)
+        assertTrue(result.recognizedInfoResponse)
+        assertEquals(1, result.attemptCount)
+        assertEquals(
+            DeviceIdentityComparison.CHANGED,
+            result.comparisonWith(
+                DeviceIdentityObservation(
+                    recognizedInfoResponse = true,
+                    deviceUniqueId = "42348279800027200104011100000000",
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun probeDeviceIdentityDoesNotAcceptDelayedVersionResponseAsInf() {
         val transport =
             FakeDeviceTransport(

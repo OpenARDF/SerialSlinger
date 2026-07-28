@@ -42,6 +42,14 @@ class SignalSlingerFirmwareSupportTest {
     }
 
     @Test
+    fun identityReportSupportStartsAtFirmware202() {
+        assertFalse(SignalSlingerFirmwareSupport.supportsIdentityReport("2.0.1"))
+        assertTrue(SignalSlingerFirmwareSupport.supportsIdentityReport("2.0.2"))
+        assertTrue(SignalSlingerFirmwareSupport.supportsIdentityReport("2.0.3"))
+        assertTrue(SignalSlingerFirmwareSupport.supportsIdentityReport(null))
+    }
+
+    @Test
     fun resolvesTmpOnlyTemperatureProfileForFirmware121AndLater() {
         val profile = SignalSlingerFirmwareSupport.resolve("1.2.1")
 
