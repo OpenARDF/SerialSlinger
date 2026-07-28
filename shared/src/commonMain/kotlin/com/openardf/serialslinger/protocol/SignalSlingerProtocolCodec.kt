@@ -21,6 +21,7 @@ import com.openardf.serialslinger.platform.platformUtcDateTimeFields
 
 data class DeviceInfoPatch(
     val productName: String? = null,
+    val deviceUniqueId: String? = null,
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
     val appStartAddress: Int? = null,
@@ -128,6 +129,7 @@ object SignalSlingerProtocolCodec {
     private val versionPattern = Regex("""^\* SW Ver:\s*(.+?)\s+HW Build:\s*(.+)$""")
     private val bootloaderVersionPattern = Regex("""^\* Bootloader:\s*(\S+)\s+protocol\s+(\S+)$""", RegexOption.IGNORE_CASE)
     private val appInfoPattern = Regex("""\*\s+INF\s+(.+)$""")
+    private val deviceUniqueIdPattern = Regex("""[0-9A-Fa-f]{32}""")
     private val stationIdPattern = Regex("""^\* ID:\s*(.*)$""")
     private val eventPattern = Regex("""^\* Event:\s*(.+)$""")
     private val foxPattern = Regex("""^\*\s*Fox:\s*(.+)$""")
@@ -192,6 +194,7 @@ object SignalSlingerProtocolCodec {
         appInfoPattern.find(trimmed)?.let { match ->
             val fields = parseKeyValueFields(match.groupValues[1])
             val productName = fields["product"]
+            val deviceUniqueId = normalizeDeviceUniqueId(fields["uid"])
             val softwareVersion = fields["sw"]
             val hardwareBuild = fields["hw"]
             val appStartAddress = fields["app"]?.let(::parseIntLiteral)
@@ -206,6 +209,7 @@ object SignalSlingerProtocolCodec {
 
             if (
                 productName != null ||
+                deviceUniqueId != null ||
                 softwareVersion != null ||
                 hardwareBuild != null ||
                 appStartAddress != null ||
@@ -219,6 +223,7 @@ object SignalSlingerProtocolCodec {
                 return DeviceReportUpdate(
                     deviceInfoPatch = DeviceInfoPatch(
                         productName = productName,
+                        deviceUniqueId = deviceUniqueId,
                         softwareVersion = softwareVersion,
                         hardwareBuild = hardwareBuild,
                         appStartAddress = appStartAddress,
@@ -757,6 +762,13 @@ object SignalSlingerProtocolCodec {
                 }
             }
             .toMap()
+    }
+
+    private fun normalizeDeviceUniqueId(value: String?): String? {
+        val normalized = value?.trim().orEmpty()
+        return normalized
+            .takeIf(deviceUniqueIdPattern::matches)
+            ?.uppercase()
     }
 
     private fun parseIntLiteral(text: String): Int {

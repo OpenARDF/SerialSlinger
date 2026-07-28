@@ -111,6 +111,7 @@ object DeviceSessionWorkflow {
         val appIdentityObserved = infoPatch?.softwareVersion != null || infoPatch?.hardwareBuild != null || infoPatch?.productName != null
         val nextInfo = info.copy(
             productName = infoPatch?.productName ?: info.productName,
+            deviceUniqueId = infoPatch?.deviceUniqueId ?: info.deviceUniqueId,
             softwareVersion = infoPatch?.softwareVersion ?: info.softwareVersion,
             hardwareBuild = infoPatch?.hardwareBuild ?: info.hardwareBuild,
             appStartAddress = infoPatch?.appStartAddress ?: info.appStartAddress,

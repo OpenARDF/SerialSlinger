@@ -40,6 +40,7 @@ class EventProfileSupportTest {
         assertTrue(EventProfileSupport.patternTextIsEditable(EventType.FOXORING))
         assertTrue(EventProfileSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.FOXORING_1))
         assertFalse(EventProfileSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.BEACON))
+        assertFalse(EventProfileSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.FREQUENCY_TEST_BEACON))
         assertFalse(EventProfileSupport.patternTextIsEditable(EventType.CLASSIC))
         assertFalse(EventProfileSupport.patternTextIsEditable(EventType.SPRINT))
     }

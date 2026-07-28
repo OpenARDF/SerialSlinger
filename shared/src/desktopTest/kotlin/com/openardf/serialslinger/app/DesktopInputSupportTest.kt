@@ -630,6 +630,7 @@ class DesktopInputSupportTest {
         assertEquals(false, DesktopInputSupport.patternTextIsEditable(EventType.CLASSIC))
         assertEquals(true, DesktopInputSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.FOXORING_2))
         assertEquals(false, DesktopInputSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.BEACON))
+        assertEquals(false, DesktopInputSupport.patternTextIsEditable(EventType.FOXORING, FoxRole.FREQUENCY_TEST_BEACON))
         assertEquals(false, DesktopInputSupport.patternTextIsEditable(EventType.SPRINT))
     }
 

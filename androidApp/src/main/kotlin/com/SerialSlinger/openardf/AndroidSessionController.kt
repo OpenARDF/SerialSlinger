@@ -26,6 +26,7 @@ import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.CloneTemplateEligibility
+import com.openardf.serialslinger.model.CloneDeviceIdentitySupport
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
@@ -36,6 +37,8 @@ import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.model.isValidDtmfPassword
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
+import com.openardf.serialslinger.session.DeviceIdentityCheckPurpose
+import com.openardf.serialslinger.session.DeviceIdentityDecision
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSubmitResult
@@ -43,6 +46,7 @@ import com.openardf.serialslinger.session.DeviceSessionWorkflow
 import com.openardf.serialslinger.session.FirmwareCloneSession
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
+import com.openardf.serialslinger.session.decisionFor
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.protocol.ArduconAlreadyCurrentException
 import com.openardf.serialslinger.protocol.ArduconFirmwareUpdate
@@ -117,6 +121,20 @@ data class AndroidFirmwareUpdateProgress(
 )
 
 private class SignalSlingerUpdateCancelledException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+private class ConnectedSignalSlingerIdentityChangedException(
+    val expectedDeviceUniqueId: String,
+    val observedDeviceUniqueId: String?,
+    val target: AndroidConnectionTarget,
+) : IllegalStateException(
+    "A different SignalSlinger was detected on ${target.label}. " +
+        "The requested operation was cancelled while SerialSlinger reloads the attached device.",
+)
+
+private data class LoadedSignalSlingerIdentity(
+    val target: AndroidConnectionTarget,
+    val deviceUniqueId: String,
+)
 
 private data class ScheduleImpactSummary(
     val summaryLines: List<String>,
@@ -202,6 +220,7 @@ data class EventPauseNotice(
 private data class ClonePreflight(
     val sessionState: DeviceSessionState?,
     val templateSettings: DeviceSettings?,
+    val templateSourceDeviceUniqueId: String?,
     val target: AndroidConnectionTarget?,
 )
 
@@ -285,6 +304,7 @@ object AndroidSessionController {
     private var lastClockPhaseErrorMillis: Long? = null
     private var cachedManualWriteDelayMillis: Long? = null
     private var cloneTemplateSettings: DeviceSettings? = null
+    private var cloneTemplateSourceDeviceUniqueId: String? = null
     private var cloneTemplateDaysRemaining: Int? = null
     private var cloneTemplateTimedEventEditsLocked: Boolean = false
     private var pendingTimelyReplyWarning: String? = null
@@ -292,6 +312,8 @@ object AndroidSessionController {
     private var nextEventPauseRequestId: Long = 1L
     private var temperatureLoggingEnabled: Boolean = false
     private var temperatureLoggingThread: Thread? = null
+    private var connectedDeviceIdentityProbeInFlight: Boolean = false
+    private var connectedDeviceIdentityReloadInProgress: Boolean = false
     private val transportLock = Any()
 
     fun initialize(context: Context) {
@@ -477,6 +499,81 @@ object AndroidSessionController {
         notifyListeners()
     }
 
+    fun checkConnectedSignalSlingerIdentity(context: Context) {
+        val expectedIdentity =
+            synchronized(this) {
+                if (
+                    connectedDeviceIdentityProbeInFlight ||
+                    connectedDeviceIdentityReloadInProgress ||
+                    probeInFlight ||
+                    signalSlingerReadInFlight ||
+                    firmwareUpdateProgress != null
+                ) {
+                    null
+                } else {
+                    loadedSignalSlingerIdentityLocked()?.also {
+                        connectedDeviceIdentityProbeInFlight = true
+                    }
+                }
+            } ?: return
+
+        thread(name = "serialslinger-android-device-identity-probe", isDaemon = true) {
+            var identityChange: ConnectedSignalSlingerIdentityChangedException? = null
+            try {
+                val resolvedTransport =
+                    resolveTransport(
+                        context = context,
+                        requestedDeviceName = (expectedIdentity.target as? AndroidConnectionTarget.Usb)?.deviceName,
+                        requestedTarget = expectedIdentity.target,
+                        allowUsbAutoDetect = false,
+                    ) ?: return@thread
+                if (
+                    !androidTargetsShareSignalSlingerSerialLink(
+                        expected = expectedIdentity.target,
+                        observed = resolvedTransport.target,
+                        signalSlingerBaudRate = signalSlingerAppBaudRate,
+                    )
+                ) {
+                    return@thread
+                }
+                synchronized(transportLock) {
+                    try {
+                        resolvedTransport.transport.connect()
+                        val result = DeviceSessionController.probeDeviceIdentity(resolvedTransport.transport)
+                        when (
+                            result
+                                .comparisonWith(expectedIdentity.deviceUniqueId)
+                                .decisionFor(DeviceIdentityCheckPurpose.PASSIVE)
+                        ) {
+                            DeviceIdentityDecision.RELOAD_AND_CANCEL ->
+                                identityChange =
+                                    ConnectedSignalSlingerIdentityChangedException(
+                                        expectedDeviceUniqueId = expectedIdentity.deviceUniqueId,
+                                        observedDeviceUniqueId = result.deviceUniqueId,
+                                        target = resolvedTransport.target,
+                                    )
+                            DeviceIdentityDecision.CONTINUE,
+                            DeviceIdentityDecision.CANCEL,
+                            -> Unit
+                        }
+                    } finally {
+                        resolvedTransport.transport.disconnect()
+                    }
+                }
+            } catch (_: Throwable) {
+                // Passive checks are best-effort. A write still performs a fail-closed
+                // identity verification immediately before sending any commands.
+            } finally {
+                synchronized(this) {
+                    connectedDeviceIdentityProbeInFlight = false
+                }
+            }
+            identityChange?.let { change ->
+                scheduleConnectedSignalSlingerReload(context, change)
+            }
+        }
+    }
+
     fun runCloneTimedEventSettings(
         context: Context,
         requestedDeviceName: String? = null,
@@ -489,6 +586,7 @@ object AndroidSessionController {
                 ClonePreflight(
                     sessionState = latestSessionViewState?.state,
                     templateSettings = cloneTemplateSettings,
+                    templateSourceDeviceUniqueId = cloneTemplateSourceDeviceUniqueId,
                     target = resolveRequestedTargetLocked(
                         requestedTarget = requestedTarget,
                         requestedDeviceName = requestedDeviceName,
@@ -509,6 +607,7 @@ object AndroidSessionController {
         }
         val sessionState = requireNotNull(clonePreflight.sessionState)
         val templateSettings = requireNotNull(clonePreflight.templateSettings)
+        val templateSourceDeviceUniqueId = clonePreflight.templateSourceDeviceUniqueId
 
         synchronized(this) {
             latestSubmitSummary = "Submitting Clone to attached device..."
@@ -528,6 +627,7 @@ object AndroidSessionController {
                 requestedTarget = requestedTarget,
                 allowUsbAutoDetect = false,
                 missingMessage = "Device is no longer connected.",
+                verifyLoadedDeviceIdentity = false,
             ) { target, transport ->
                 resolvedTarget = target
                 val targetIsArduconTransport =
@@ -545,6 +645,10 @@ object AndroidSessionController {
                 require(targetIsArducon || hasSignalSlingerReportLine(targetRefresh.linesReceived)) {
                     "The attached device did not respond. Check the configuration cable and try again."
                 }
+                CloneDeviceIdentitySupport.requireDifferentDevice(
+                    templateSourceDeviceUniqueId = templateSourceDeviceUniqueId,
+                    targetDeviceUniqueId = targetSnapshot.info.deviceUniqueId,
+                )
                 clearFirmwareCloneBufferedFragments(transport)
                 val possibleNewDeviceReasons =
                     possibleNewDeviceReasons(
@@ -1248,6 +1352,7 @@ object AndroidSessionController {
                     requestedTarget = requestedTargetForAttempt,
                     allowUsbAutoDetect = allowUsbAutoDetect,
                     missingMessage = missingMessage,
+                    verifyLoadedDeviceIdentity = false,
                 ) { activeTarget, transport ->
                     resolvedTarget = activeTarget
                     val initialLoad = connectAndLoadAfterUsbStartupWarmup(
@@ -1361,7 +1466,9 @@ object AndroidSessionController {
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
                     cloneTemplateTimedEventEditsLocked = false
-                    displayedLoadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
+                    if (cloneTemplateSettings == null) {
+                        displayedLoadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
+                    }
                     applySnapshotDrafts(displayedLoadResult.state.snapshot, refreshClockDisplayAnchor = false)
                     clockAnchor?.let { anchor ->
                         applyClockDisplayAnchor(
@@ -2814,6 +2921,9 @@ object AndroidSessionController {
         }
 
         synchronized(this) {
+            if (cloneTemplateSettings == null) {
+                cloneTemplateSourceDeviceUniqueId = snapshot?.info?.deviceUniqueId
+            }
             cloneTemplateSettings = FrequencySupport.applyTimedEventDefaultFrequencies(templateToUpdate, sanitizedDefaults)
             cloneTemplateTimedEventEditsLocked = false
             if (cloneTemplateDaysRemaining == null) {
@@ -4783,6 +4893,7 @@ object AndroidSessionController {
     private fun resolveUsbDevice(
         usbManager: UsbManager,
         requestedDeviceName: String?,
+        allowFallback: Boolean = true,
     ): UsbDevice? {
         val devices = usbManager.deviceList.values.sortedBy { it.deviceName }
         val preferredByName =
@@ -4795,6 +4906,9 @@ object AndroidSessionController {
             }
         if (preferredByName != null) {
             return preferredByName
+        }
+        if (requestedDeviceName != null && !allowFallback) {
+            return null
         }
 
         return devices.firstOrNull { device ->
@@ -4843,7 +4957,12 @@ object AndroidSessionController {
                 )
             is AndroidConnectionTarget.Usb -> {
                 val usbManager = context.applicationContext.getSystemService(UsbManager::class.java)
-                val usbDevice = resolveUsbDevice(usbManager, desiredTarget.deviceName) ?: return null
+                val usbDevice =
+                    resolveUsbDevice(
+                        usbManager = usbManager,
+                        requestedDeviceName = desiredTarget.deviceName,
+                        allowFallback = allowUsbAutoDetect,
+                    ) ?: return null
                 ResolvedTransport(
                     target = AndroidConnectionTarget.Usb(usbDevice.deviceName, desiredTarget.baudRate),
                     transport = androidUsbTransport(usbManager, usbDevice, desiredTarget.baudRate),
@@ -4885,12 +5004,115 @@ object AndroidSessionController {
         }
     }
 
-    private inline fun <T> runWithResolvedTransport(
+    private fun loadedSignalSlingerIdentityLocked(): LoadedSignalSlingerIdentity? {
+        val snapshot = latestSessionViewState?.state?.snapshot ?: return null
+        if (!snapshot.info.productName.equals("SignalSlinger", ignoreCase = true)) {
+            return null
+        }
+        val target = latestLoadedTarget ?: return null
+        val deviceUniqueId = snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() } ?: return null
+        return LoadedSignalSlingerIdentity(target, deviceUniqueId)
+    }
+
+    private fun verifyLoadedSignalSlingerIdentity(
+        resolvedTarget: AndroidConnectionTarget,
+        transport: DeviceTransport,
+    ) {
+        val expectedIdentity =
+            synchronized(this) {
+                loadedSignalSlingerIdentityLocked()
+            } ?: return
+        if (
+            !androidTargetsShareSignalSlingerSerialLink(
+                expected = expectedIdentity.target,
+                observed = resolvedTarget,
+                signalSlingerBaudRate = signalSlingerAppBaudRate,
+            )
+        ) {
+            return
+        }
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+        when (
+            result
+                .comparisonWith(expectedIdentity.deviceUniqueId)
+                .decisionFor(DeviceIdentityCheckPurpose.BEFORE_OPERATION)
+        ) {
+            DeviceIdentityDecision.CONTINUE -> return
+            DeviceIdentityDecision.RELOAD_AND_CANCEL ->
+                throw ConnectedSignalSlingerIdentityChangedException(
+                    expectedDeviceUniqueId = expectedIdentity.deviceUniqueId,
+                    observedDeviceUniqueId = result.deviceUniqueId,
+                    target = resolvedTarget,
+                )
+            DeviceIdentityDecision.CANCEL -> Unit
+        }
+        error(
+            "SerialSlinger could not verify that the SignalSlinger on ${resolvedTarget.label} is still " +
+                "unit ${shortDeviceUniqueId(expectedIdentity.deviceUniqueId)}. " +
+                "The requested operation was not performed.",
+        )
+    }
+
+    private fun scheduleConnectedSignalSlingerReload(
+        context: Context,
+        identityChange: ConnectedSignalSlingerIdentityChangedException,
+    ) {
+        val shouldReload =
+            synchronized(this) {
+                val currentIdentity = loadedSignalSlingerIdentityLocked()
+                if (
+                    connectedDeviceIdentityReloadInProgress ||
+                    currentIdentity?.deviceUniqueId != identityChange.expectedDeviceUniqueId ||
+                    currentIdentity.target != identityChange.target
+                ) {
+                    false
+                } else {
+                    connectedDeviceIdentityReloadInProgress = true
+                    statusText = "Different SignalSlinger detected; reloading settings..."
+                    statusIsError = false
+                    true
+                }
+            }
+        if (!shouldReload) {
+            return
+        }
+
+        val previousLabel = shortDeviceUniqueId(identityChange.expectedDeviceUniqueId)
+        val nextLabel = identityChange.observedDeviceUniqueId?.let(::shortDeviceUniqueId) ?: "legacy firmware"
+        logAppEvent(
+            title = "device-change",
+            lines = listOf(
+                "Different SignalSlinger detected on ${identityChange.target.label}: unit $previousLabel was replaced by $nextLabel.",
+                "Discarding cached settings, reloading the attached device, and checking its firmware.",
+            ),
+        )
+        notifyListeners()
+        mainHandler.post {
+            runProbe(
+                context = context.applicationContext,
+                requestedTarget = identityChange.target,
+                source = "identity-change",
+                failureStatusText = "Different SignalSlinger detected, but its settings could not be reloaded.",
+                failureStatusIsError = true,
+            ) {
+                synchronized(this) {
+                    connectedDeviceIdentityReloadInProgress = false
+                }
+                notifyListeners()
+            }
+        }
+    }
+
+    private fun shortDeviceUniqueId(deviceUniqueId: String): String = deviceUniqueId.takeLast(8)
+
+    private fun <T> runWithResolvedTransport(
         context: Context,
         requestedDeviceName: String?,
         requestedTarget: AndroidConnectionTarget?,
         allowUsbAutoDetect: Boolean,
         missingMessage: String,
+        verifyLoadedDeviceIdentity: Boolean = true,
         block: (AndroidConnectionTarget, DeviceTransport) -> T,
     ): Result<T> {
         val resolvedTransport =
@@ -4901,9 +5123,15 @@ object AndroidSessionController {
                 allowUsbAutoDetect = allowUsbAutoDetect,
             ) ?: return Result.failure(IllegalStateException(missingMessage))
 
-        return synchronized(transportLock) {
+        val result = synchronized(transportLock) {
             try {
                 resolvedTransport.transport.connect()
+                if (verifyLoadedDeviceIdentity) {
+                    verifyLoadedSignalSlingerIdentity(
+                        resolvedTarget = resolvedTransport.target,
+                        transport = resolvedTransport.transport,
+                    )
+                }
                 Result.success(block(resolvedTransport.target, resolvedTransport.transport))
             } catch (error: Throwable) {
                 Result.failure(error)
@@ -4911,6 +5139,10 @@ object AndroidSessionController {
                 resolvedTransport.transport.disconnect()
             }
         }
+        (result.exceptionOrNull() as? ConnectedSignalSlingerIdentityChangedException)?.let { identityChange ->
+            scheduleConnectedSignalSlingerReload(context, identityChange)
+        }
+        return result
     }
 
     private fun buildSyncTraceEntries(result: TimeSyncOperationResult): List<SerialTraceEntry> {
@@ -5517,6 +5749,7 @@ object AndroidSessionController {
 
     private fun rememberCloneTemplateFrom(sourceSnapshot: DeviceSnapshot) {
         rememberCloneTemplateFrom(sourceSnapshot.settings)
+        cloneTemplateSourceDeviceUniqueId = sourceSnapshot.info.deviceUniqueId
         cloneTemplateDaysRemaining = sourceSnapshot.status.daysRemaining
         cloneTemplateTimedEventEditsLocked = false
     }
@@ -5613,6 +5846,7 @@ object AndroidSessionController {
                 beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
                 amToneFrequency = sourceSettings.amToneFrequency,
             )
+        cloneTemplateSourceDeviceUniqueId = sourceSnapshot.info.deviceUniqueId
         cloneTemplateDaysRemaining = sourceSnapshot.status.daysRemaining
     }
 
@@ -6174,6 +6408,15 @@ object AndroidSessionController {
                     val hexFile = manifestDirectory.resolve(updateFile.fileName)
                     val hexBytes = hexFile.readBytes()
                     SignalSlingerFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
+                    if (!start.recoverAlreadyWaiting) {
+                        runWithResolvedTransport(
+                            context = context,
+                            requestedDeviceName = start.deviceName,
+                            requestedTarget = AndroidConnectionTarget.Usb(start.deviceName, signalSlingerAppBaudRate),
+                            allowUsbAutoDetect = false,
+                            missingMessage = "SignalSlinger is no longer connected.",
+                        ) { _, _ -> Unit }.getOrThrow()
+                    }
                     val usbDevice = resolveUsbDevice(usbManager, start.deviceName)
                         ?: error("SignalSlinger is no longer connected.")
                     updateLog += AndroidLogEntry(selection.message, AndroidLogCategory.APP)
@@ -6665,6 +6908,7 @@ object AndroidSessionController {
             requestedTarget = AndroidConnectionTarget.Usb(deviceName, appBaudRate),
             allowUsbAutoDetect = true,
             missingMessage = "$productLabel is no longer connected.",
+            verifyLoadedDeviceIdentity = false,
         ) { _, transport ->
             val initialLoad = connectAndLoadAfterUsbStartupWarmup(
                 transport = transport,

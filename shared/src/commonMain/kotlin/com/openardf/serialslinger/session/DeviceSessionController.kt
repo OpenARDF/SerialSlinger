@@ -27,6 +27,51 @@ data class DeviceLoadInterventionResult(
     val traceEntries: List<SerialTraceEntry>,
 )
 
+data class DeviceIdentityProbeResult(
+    val deviceUniqueId: String?,
+    val recognizedInfoResponse: Boolean,
+    val linesReceived: List<String>,
+    val traceEntries: List<SerialTraceEntry>,
+) {
+    fun comparisonWith(expectedDeviceUniqueId: String): DeviceIdentityComparison {
+        return when {
+            deviceUniqueId == expectedDeviceUniqueId -> DeviceIdentityComparison.MATCH
+            deviceUniqueId != null || recognizedInfoResponse -> DeviceIdentityComparison.CHANGED
+            else -> DeviceIdentityComparison.UNAVAILABLE
+        }
+    }
+}
+
+enum class DeviceIdentityComparison {
+    MATCH,
+    CHANGED,
+    UNAVAILABLE,
+}
+
+enum class DeviceIdentityCheckPurpose {
+    PASSIVE,
+    BEFORE_OPERATION,
+}
+
+enum class DeviceIdentityDecision {
+    CONTINUE,
+    CANCEL,
+    RELOAD_AND_CANCEL,
+}
+
+fun DeviceIdentityComparison.decisionFor(purpose: DeviceIdentityCheckPurpose): DeviceIdentityDecision {
+    return when (this) {
+        DeviceIdentityComparison.MATCH -> DeviceIdentityDecision.CONTINUE
+        DeviceIdentityComparison.CHANGED -> DeviceIdentityDecision.RELOAD_AND_CANCEL
+        DeviceIdentityComparison.UNAVAILABLE ->
+            if (purpose == DeviceIdentityCheckPurpose.PASSIVE) {
+                DeviceIdentityDecision.CONTINUE
+            } else {
+                DeviceIdentityDecision.CANCEL
+            }
+    }
+}
+
 enum class SerialTraceDirection {
     TX,
     RX;
@@ -61,6 +106,28 @@ data class DeviceSubmitResult(
 )
 
 object DeviceSessionController {
+    fun probeDeviceIdentity(transport: DeviceTransport): DeviceIdentityProbeResult {
+        val command = "INF"
+        val sentAtMs = platformCurrentTimeMillis()
+        transport.sendCommands(listOf(command))
+        val responseLines = transport.readAvailableLines()
+        val receivedAtMs = platformCurrentTimeMillis()
+        val infoPatches = responseLines.mapNotNull { line ->
+            SignalSlingerProtocolCodec.parseReportLine(line)?.deviceInfoPatch
+        }
+
+        return DeviceIdentityProbeResult(
+            deviceUniqueId = infoPatches.mapNotNull { it.deviceUniqueId }.lastOrNull(),
+            recognizedInfoResponse = infoPatches.isNotEmpty(),
+            linesReceived = responseLines,
+            traceEntries =
+                listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)) +
+                    responseLines.map { line ->
+                        SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+                    },
+        )
+    }
+
     fun connectAndLoad(
         transport: DeviceTransport,
         baseSettings: DeviceSettings = DeviceSettings.empty(),

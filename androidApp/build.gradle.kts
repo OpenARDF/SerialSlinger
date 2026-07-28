@@ -37,7 +37,7 @@ android {
         applicationId = "com.SerialSlinger.openardf"
         minSdk = 24
         targetSdk = 37
-        versionCode = 23
+        versionCode = 24
         versionName = rootProject.extra["serialSlingerDisplayVersion"].toString()
         buildConfigField("String", "PROJECT_URL", "\"${rootProject.extra["serialSlingerProjectUrl"]}\"")
         buildConfigField("String", "LICENSE_LABEL", "\"${rootProject.extra["serialSlingerLicenseLabel"]}\"")
@@ -79,6 +79,7 @@ dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
     implementation(libs.androidx.core)
     implementation(project(":shared"))
+    testImplementation(kotlin("test-junit"))
 }
 
 tasks.register("printAndroidReleaseSigningStatus") {

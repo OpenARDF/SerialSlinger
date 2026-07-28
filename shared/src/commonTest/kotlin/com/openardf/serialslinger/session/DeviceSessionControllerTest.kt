@@ -18,6 +18,87 @@ import kotlin.test.assertTrue
 
 class DeviceSessionControllerTest {
     @Test
+    fun probeDeviceIdentityReadsFactorySerialFromInf() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "INF" to listOf(
+                    "* INF product=SignalSlinger update=UPD",
+                    "* INF sw=2.0.3 hw=3.5 app=0x2000 baud=115200",
+                    "* INF uid=314A323536384E171D00321700000000",
+                ),
+            ),
+        )
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+
+        assertEquals(listOf("INF"), transport.sentCommands)
+        assertEquals("314A323536384E171D00321700000000", result.deviceUniqueId)
+        assertTrue(result.recognizedInfoResponse)
+        assertEquals(4, result.traceEntries.size)
+        assertEquals(
+            DeviceIdentityComparison.MATCH,
+            result.comparisonWith("314A323536384E171D00321700000000"),
+        )
+        assertEquals(
+            DeviceIdentityComparison.CHANGED,
+            result.comparisonWith("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"),
+        )
+    }
+
+    @Test
+    fun probeDeviceIdentityRecognizesLegacyInfWithoutFactorySerial() {
+        val transport = FakeDeviceTransport(
+            scriptedResponses = mapOf(
+                "INF" to listOf(
+                    "* INF product=SignalSlinger update=UPD",
+                    "* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200",
+                ),
+            ),
+        )
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+
+        assertEquals(null, result.deviceUniqueId)
+        assertTrue(result.recognizedInfoResponse)
+        assertEquals(
+            DeviceIdentityComparison.CHANGED,
+            result.comparisonWith("314A323536384E171D00321700000000"),
+        )
+    }
+
+    @Test
+    fun probeDeviceIdentityTreatsNoInfoReplyAsUnavailable() {
+        val result = DeviceSessionController.probeDeviceIdentity(FakeDeviceTransport())
+
+        assertEquals(null, result.deviceUniqueId)
+        assertFalse(result.recognizedInfoResponse)
+        assertEquals(
+            DeviceIdentityComparison.UNAVAILABLE,
+            result.comparisonWith("314A323536384E171D00321700000000"),
+        )
+    }
+
+    @Test
+    fun deviceIdentityDecisionIsPassiveForUnavailableReadsAndFailClosedForOperations() {
+        assertEquals(
+            DeviceIdentityDecision.CONTINUE,
+            DeviceIdentityComparison.MATCH.decisionFor(DeviceIdentityCheckPurpose.BEFORE_OPERATION),
+        )
+        assertEquals(
+            DeviceIdentityDecision.RELOAD_AND_CANCEL,
+            DeviceIdentityComparison.CHANGED.decisionFor(DeviceIdentityCheckPurpose.PASSIVE),
+        )
+        assertEquals(
+            DeviceIdentityDecision.CONTINUE,
+            DeviceIdentityComparison.UNAVAILABLE.decisionFor(DeviceIdentityCheckPurpose.PASSIVE),
+        )
+        assertEquals(
+            DeviceIdentityDecision.CANCEL,
+            DeviceIdentityComparison.UNAVAILABLE.decisionFor(DeviceIdentityCheckPurpose.BEFORE_OPERATION),
+        )
+    }
+
+    @Test
     fun connectAndLoadSendsReadPlanAndBuildsEditableState() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(

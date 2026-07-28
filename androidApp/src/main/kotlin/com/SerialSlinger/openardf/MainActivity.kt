@@ -228,6 +228,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var previewUnlockStep: Int = 0
     private var previewUnlockStartedAtMillis: Long = 0L
     private var lastAutomaticDeviceTimeSyncAtMillis: Long = 0L
+    private var lastConnectedDeviceIdentityCheckAtMillis: Long = 0L
+    private var lastAutomaticFirmwareOfferSnapshotKey: String? = null
     private var lastConnectedProductName: String? = null
     private val loggedWindows = WeakHashMap<Window, Boolean>()
 
@@ -241,12 +243,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             showOrUpdateFirmwareUpdateModal()
             showPendingTimelyReplyWarning()
             maybeTriggerAutomaticDeviceTimeSync()
+            maybeOfferAutomaticFirmwareUpdateForLoadedSnapshot()
         }
     }
     private val clockTickRunnable =
         object : Runnable {
             override fun run() {
                 updateDisplayedClockFields()
+                maybeCheckConnectedSignalSlingerIdentity()
                 scheduleClockDisplayTick()
             }
         }
@@ -5274,6 +5278,47 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         renderContent()
     }
 
+    private fun maybeCheckConnectedSignalSlingerIdentity() {
+        val snapshot = AndroidSessionController.snapshotUiState().sessionViewState?.state?.snapshot ?: return
+        if (
+            !snapshot.info.productName.equals(PRODUCT_SIGNALSLINGER, ignoreCase = true) ||
+            snapshot.info.deviceUniqueId.isNullOrBlank() ||
+            firmwareUpdateActive()
+        ) {
+            return
+        }
+        val nowMillis = System.currentTimeMillis()
+        if ((nowMillis - lastConnectedDeviceIdentityCheckAtMillis) < CONNECTED_DEVICE_IDENTITY_CHECK_INTERVAL_MS) {
+            return
+        }
+        lastConnectedDeviceIdentityCheckAtMillis = nowMillis
+        AndroidSessionController.checkConnectedSignalSlingerIdentity(applicationContext)
+    }
+
+    private fun maybeOfferAutomaticFirmwareUpdateForLoadedSnapshot() {
+        if (
+            !automaticFirmwareUpdatesEnabled ||
+            automaticFirmwareUpdateCheckInProgress ||
+            automaticFirmwareUpdatePromptVisible ||
+            firmwareUpdateActive()
+        ) {
+            return
+        }
+        val snapshot = AndroidSessionController.snapshotUiState().sessionViewState?.state?.snapshot ?: return
+        val snapshotKey =
+            listOf(
+                snapshot.info.productName,
+                snapshot.info.deviceUniqueId ?: "legacy",
+                snapshot.info.hardwareBuild,
+                snapshot.info.softwareVersion,
+            ).joinToString("|")
+        if (snapshotKey == lastAutomaticFirmwareOfferSnapshotKey) {
+            return
+        }
+        lastAutomaticFirmwareOfferSnapshotKey = snapshotKey
+        maybeOfferAutomaticFirmwareUpdate()
+    }
+
     private fun maybeOfferAutomaticFirmwareUpdate() {
         val snapshot = AndroidSessionController.snapshotUiState().sessionViewState?.state?.snapshot ?: return
         if (snapshot.info.productName.equals("Arducon", ignoreCase = true)) {
@@ -8077,6 +8122,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         private const val AUTO_DETECT_ATTACH_DELAY_MS = 180L
         private const val AUTO_DETECT_RETRY_DELAY_MS = 350L
         private const val AUTO_DETECT_MAX_RETRIES = 4
+        private const val CONNECTED_DEVICE_IDENTITY_CHECK_INTERVAL_MS = 6_000L
         private const val AUTOMATIC_DEVICE_TIME_SYNC_RETRY_INTERVAL_MS = 30_000L
         private const val PRODUCT_ARDUCON = "Arducon"
         private const val PRODUCT_SIGNALSLINGER = "SignalSlinger"

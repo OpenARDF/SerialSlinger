@@ -22,6 +22,7 @@ class DeviceSessionWorkflowTest {
             state,
             listOf(
                 "* SW Ver: 1.2.3 HW Build: 3.5",
+                "* INF uid=314A323536384E171D00321700000000",
                 "* ID: W1FOX",
                 "* Event:Classic",
                 """* Fox:Classic Fox 1 "MOE"""",
@@ -50,6 +51,7 @@ class DeviceSessionWorkflowTest {
         assertEquals(ConnectionState.CONNECTED, updated.connectionState)
         assertEquals("1.2.3", snapshot.info.softwareVersion)
         assertEquals("3.5", snapshot.info.hardwareBuild)
+        assertEquals("314A323536384E171D00321700000000", snapshot.info.deviceUniqueId)
         assertTrue(snapshot.capabilities.supportsScheduling)
         assertTrue(snapshot.capabilities.supportsTemperatureReadback)
         assertEquals("W1FOX", snapshot.settings.stationId)

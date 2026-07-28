@@ -1,0 +1,117 @@
+{
+  "version": "2.0.16",
+  "items": [
+    {
+      "id": "version-aligned",
+      "status": "done",
+      "evidence": "build.gradle.kts serialSlingerVersion=2.0.16 with blank suffix; package.json and package-lock.json version=2.0.16; androidApp versionName follows root display version.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts versionCode incremented from 23 in v2.0.15 to 24 for v2.0.16.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "status": "done",
+      "evidence": "2026-07-28 npm run jdeploy:release-preflight passed for serialslinger@2.0.16, Gradle display/package version 2.0.16, target tag v2.0.16, GitHub releases workflow, and verified desktop jDeploy bundle.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "status": "done",
+      "evidence": "Release candidate changes were reviewed across shared, Android, and desktop surfaces: shared UID parsing/clone policy feeds both UIs; Android and desktop both verify SignalSlinger identity before operations; Pattern Text Frequency Test role gating is shared and covered by Android/desktop callers.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "status": "done",
+      "evidence": "Charles Scharlau reported before deployment on 2026-07-28 that hardware testing has already passed.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "desktop-regression",
+      "status": "done",
+      "evidence": "Charles Scharlau reported before deployment on 2026-07-28 that hardware testing has already passed.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows Intel x64 host is available in this macOS release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows ARM64 host is available in this macOS release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux Intel x64 host is available in this macOS release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux ARM64 host is available in this macOS release session.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "android-release-notes",
+      "status": "done",
+      "evidence": "Generated Play Console notes: SerialSlinger 2.0.16 improves SignalSlinger clone safety by detecting connected unit identity changes, blocking same-unit clone attempts, and reloading settings when a different unit is attached. It also prevents Frequency Test beacon Pattern Text writes.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}

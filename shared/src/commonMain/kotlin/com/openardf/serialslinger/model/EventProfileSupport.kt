@@ -186,7 +186,9 @@ object EventProfileSupport {
     }
 
     fun patternTextIsEditable(eventType: EventType, foxRole: FoxRole? = null): Boolean {
-        return eventType == EventType.FOXORING && foxRole?.fixedPatternText == null
+        return eventType == EventType.FOXORING &&
+            foxRole?.fixedPatternText == null &&
+            foxRole != FoxRole.FREQUENCY_TEST_BEACON
     }
 
     fun timedEventFrequencyVisibility(eventType: EventType): TimedEventFrequencyVisibility {

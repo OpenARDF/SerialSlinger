@@ -3,6 +3,7 @@ package com.openardf.serialslinger.app
 import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.ArduconFoxRole
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
+import com.openardf.serialslinger.model.CloneDeviceIdentitySupport
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.EditableDeviceSettings
@@ -51,6 +52,8 @@ import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelection
 import com.openardf.serialslinger.protocol.SignalSlingerReleaseSelectionSource
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
+import com.openardf.serialslinger.session.DeviceIdentityCheckPurpose
+import com.openardf.serialslinger.session.DeviceIdentityDecision
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
@@ -59,6 +62,7 @@ import com.openardf.serialslinger.session.FirmwareCloneSession
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.session.SettingVerification
+import com.openardf.serialslinger.session.decisionFor
 import com.openardf.serialslinger.transport.DesktopFirmwareUpdateTransport
 import com.openardf.serialslinger.transport.DesktopSerialPortInfo
 import com.openardf.serialslinger.transport.DesktopSerialStopBits
@@ -267,6 +271,12 @@ private data class DesktopControlCommandResult(
     val accepted: Boolean,
     val message: String,
 )
+
+private class ConnectedDeviceIdentityChangedException(
+    val portPath: String,
+    val expectedDeviceUniqueId: String,
+    val observedDeviceUniqueId: String?,
+) : IllegalStateException("A different SignalSlinger was detected on $portPath.")
 
 private class DesktopControlServer private constructor(
     private val frame: SerialSlingerDesktopFrame,
@@ -835,6 +845,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var lastDeviceTimeCheckAtMs: Long = 0L
     private var consecutiveDeviceTimeCheckNoResponseCount: Int = 0
     private var cloneTemplateSettings: DeviceSettings? = null
+    private var cloneTemplateSourceDeviceUniqueId: String? = null
     private var clockDisplayTimer: Timer? = null
     private var automaticDeviceTimeSyncTimer: Timer? = null
     private var clockPhaseWarningActive: Boolean = false
@@ -852,6 +863,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var lastsDurationDialogOpen: Boolean = false
     private var automaticFirmwareUpdateCheckInProgress: Boolean = false
     private var automaticFirmwareUpdatePromptVisible: Boolean = false
+    private var connectedDeviceIdentityReloadInProgress: Boolean = false
+    private var lastConnectedDeviceIdentityProbeAtMs: Long = 0L
     private var displayPreferences: DesktopDisplayPreferences = PreferencesDesktopDisplayPreferencesStore.load()
     private val knownProbeResults = linkedMapOf<String, SignalSlingerPortProbe>()
     private val portMemory: DesktopPortMemory = PreferencesDesktopPortMemory
@@ -884,6 +897,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var temperatureResetCommandsSupported: Boolean? = null
     private var temperatureLogTimer: Timer? = null
     private val temperatureLogSampleInProgress = AtomicBoolean(false)
+    private val connectedDeviceIdentityProbeInProgress = AtomicBoolean(false)
     private var advancedDeviceDataTimer: Timer? = null
     private val headerLogStyle = SimpleAttributeSet().apply {
         StyleConstants.setForeground(this, Color(0x11, 0x18, 0x27))
@@ -910,7 +924,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             handleDesktopUserActionMouseEvent(event as? MouseEvent ?: return@AWTEventListener)
         }
     private val editableTextFieldBackground = patternTextField.background
+    private val editableTextFieldForeground = patternTextField.foreground
     private val readOnlyTextFieldBackground = UIManager.getColor("TextField.inactiveBackground") ?: editableTextFieldBackground
+    private val readOnlyTextFieldForeground = UIManager.getColor("TextField.inactiveForeground") ?: Color.GRAY
     private val editableTextFieldBorder: Border = patternTextField.border
     private val informationalTextFieldBorder: Border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
     private val defaultInformationalFieldForeground = currentTimeField.foreground
@@ -1808,6 +1824,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
+        if (cloneTemplateSettings == null) {
+            cloneTemplateSourceDeviceUniqueId = loadedSnapshot?.info?.deviceUniqueId
+        }
         cloneTemplateSettings = FrequencySupport.applyTimedEventDefaultFrequencies(existingTemplate, defaults)
         setCloneSessionTemplateLocked(false)
         updateCloneTemplateLabel(
@@ -2091,8 +2110,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun connectedDeviceLogEntry(snapshot: DeviceSnapshot?, portPath: String? = currentConnectedPortPath): DesktopLogEntry {
         val port = portPath?.takeIf { it.isNotBlank() } ?: "unknown port"
+        val unit = snapshot?.info?.deviceUniqueId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { " unit ${shortDeviceUniqueId(it)}" }
+            .orEmpty()
         return DesktopLogEntry(
-            "Connected device type: ${productLabel(snapshot)} on $port.",
+            "Connected device type: ${productLabel(snapshot)}$unit on $port.",
             DesktopLogCategory.DEVICE,
         )
     }
@@ -2771,8 +2794,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentConnectedPortPath = null
         currentState = null
         loadedSnapshot = null
+        lastConnectedDeviceIdentityProbeAtMs = 0L
         temperatureResetCommandsSupported = null
         cloneTemplateSettings = null
+        cloneTemplateSourceDeviceUniqueId = null
         setCloneSessionTemplateLocked(false)
         updateCloneTemplateLabel("Clone template not set")
     }
@@ -2783,8 +2808,144 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
         val freshPorts = SignalSlingerPortDiscovery.listAvailablePorts()
         refreshAvailablePorts(freshPorts, silent = true)
+        maybeScheduleConnectedDeviceIdentityProbe()
         maybeSchedulePassiveProbe(freshPorts.map { it.portInfo })
     }
+
+    private fun maybeScheduleConnectedDeviceIdentityProbe() {
+        if (
+            backgroundWorkInProgress ||
+            connectedDeviceIdentityReloadInProgress ||
+            automaticFirmwareUpdatePromptVisible ||
+            temperatureLogSampleInProgress.get()
+        ) {
+            return
+        }
+        val expectedDeviceUniqueId = loadedSnapshot?.info?.deviceUniqueId?.takeIf { it.isNotBlank() } ?: return
+        if (!loadedSnapshot?.info?.productName.equals(DeviceMode.SIGNALSLINGER.productName, ignoreCase = true)) {
+            return
+        }
+        val nowMs = System.currentTimeMillis()
+        if ((nowMs - lastConnectedDeviceIdentityProbeAtMs) < CONNECTED_DEVICE_IDENTITY_PROBE_INTERVAL_MS) {
+            return
+        }
+        val probeTransport = currentTransport ?: return
+        val probeState = currentState ?: return
+        val portPath = currentConnectedPortPath ?: return
+        if (probeState.connectionState != ConnectionState.CONNECTED) {
+            return
+        }
+        if (!connectedDeviceIdentityProbeInProgress.compareAndSet(false, true)) {
+            return
+        }
+        lastConnectedDeviceIdentityProbeAtMs = nowMs
+
+        Thread {
+            try {
+                val result = DeviceSessionController.probeDeviceIdentity(probeTransport)
+                val observedDeviceUniqueId = result.deviceUniqueId
+                if (
+                    result
+                        .comparisonWith(expectedDeviceUniqueId)
+                        .decisionFor(DeviceIdentityCheckPurpose.PASSIVE) != DeviceIdentityDecision.RELOAD_AND_CANCEL
+                ) {
+                    return@Thread
+                }
+
+                SwingUtilities.invokeLater {
+                    if (
+                        currentTransport !== probeTransport ||
+                        currentState !== probeState ||
+                        currentConnectedPortPath != portPath ||
+                        loadedSnapshot?.info?.deviceUniqueId != expectedDeviceUniqueId
+                    ) {
+                        return@invokeLater
+                    }
+                    handleConnectedDeviceIdentityChanged(
+                        portPath = portPath,
+                        expectedDeviceUniqueId = expectedDeviceUniqueId,
+                        observedDeviceUniqueId = observedDeviceUniqueId,
+                    )
+                }
+            } catch (_: Exception) {
+                // A transient failed identity probe must not replace the normal
+                // connected-port communication-failure handling.
+            } finally {
+                connectedDeviceIdentityProbeInProgress.set(false)
+            }
+        }.apply {
+            name = "serialslinger-connected-device-identity-probe"
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun handleConnectedDeviceIdentityChanged(
+        portPath: String,
+        expectedDeviceUniqueId: String,
+        observedDeviceUniqueId: String?,
+    ) {
+        if (
+            currentConnectedPortPath != portPath ||
+            loadedSnapshot?.info?.deviceUniqueId != expectedDeviceUniqueId ||
+            connectedDeviceIdentityReloadInProgress
+        ) {
+            return
+        }
+        if (backgroundWorkInProgress) {
+            Timer(250) {
+                handleConnectedDeviceIdentityChanged(portPath, expectedDeviceUniqueId, observedDeviceUniqueId)
+            }.apply {
+                isRepeats = false
+                start()
+            }
+            return
+        }
+
+        connectedDeviceIdentityReloadInProgress = true
+        val previousLabel = shortDeviceUniqueId(expectedDeviceUniqueId)
+        val nextLabel = observedDeviceUniqueId?.let(::shortDeviceUniqueId) ?: "legacy firmware"
+        appendLog(
+            "Device Change",
+            listOf(
+                DesktopLogEntry(
+                    "Different SignalSlinger detected on $portPath: unit $previousLabel was replaced by $nextLabel.",
+                    DesktopLogCategory.DEVICE,
+                ),
+                DesktopLogEntry(
+                    "Discarding cached settings, reloading the attached device, and checking its firmware.",
+                    DesktopLogCategory.APP,
+                ),
+            ),
+        )
+        showConnectionIndicator(ConnectionIndicatorState.SEARCHING, "Different SignalSlinger detected; reloading settings...")
+        runInBackground(
+            status = "Different SignalSlinger detected. Reloading settings...",
+            verifyConnectedIdentity = false,
+        ) {
+            try {
+                val connection = loadPort(portPath, resetConnectedState = true).copy(
+                    loadLogTitle = "Device Change Reload",
+                    loadLogLeadEntries = listOf(
+                        DesktopLogEntry(
+                            "Reloaded after the connected device identity changed from $previousLabel to $nextLabel.",
+                            DesktopLogCategory.DEVICE,
+                        ),
+                    ),
+                )
+                SwingUtilities.invokeLater {
+                    applyLoadedConnection(connection)
+                    setStatus("Different SignalSlinger detected and loaded from $portPath.")
+                }
+            } finally {
+                SwingUtilities.invokeLater {
+                    connectedDeviceIdentityReloadInProgress = false
+                }
+            }
+        }
+    }
+
+    private fun shortDeviceUniqueId(deviceUniqueId: String): String = deviceUniqueId.takeLast(8)
 
     private fun refreshAvailablePorts(
         freshPorts: List<SignalSlingerPortProbe> = SignalSlingerPortDiscovery.listAvailablePorts(),
@@ -3041,6 +3202,24 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
 
         if (orderedPorts.isEmpty()) {
+            if (connectedPortPath != null) {
+                runInBackground("Reloading the connected device...") {
+                    val connection = loadPort(connectedPortPath, resetConnectedState = true).copy(
+                        loadLogTitle = "Find Device Reload",
+                        loadLogLeadEntries = listOf(
+                            DesktopLogEntry(
+                                "No additional serial ports were available; reloaded the connected device.",
+                                DesktopLogCategory.APP,
+                            ),
+                        ),
+                    )
+                    SwingUtilities.invokeLater {
+                        applyLoadedConnection(connection)
+                        setStatus("Reloaded the connected device on $connectedPortPath.")
+                    }
+                }
+                return
+            }
             val fallbackPath = DesktopAutoDetectPolicy.defaultSelectionPath(
                 availablePorts = ports,
                 currentSelectionPath = connectedPortPath,
@@ -3150,6 +3329,22 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     val preferredPath = DesktopSmartPollingPolicy.preferredPortPath(finalPorts, path) ?: path
                     SignalSlingerPortDiscovery.probePort(resolvePortInfoFor(preferredPath), probeOrder = acceptedProbeOrder())
                 }
+            val connectedPortStillAvailable = currentConnectionStillOpen ||
+                connectedPortVerification?.state == PortProbeState.DETECTED
+            val connectedPortReload =
+                if (detected == null && connectedPortStillAvailable) {
+                    loadPort(requireNotNull(connectedPortPath), resetConnectedState = true).copy(
+                        loadLogTitle = "Find Device Reload",
+                        loadLogLeadEntries = listOf(
+                            DesktopLogEntry(
+                                "No additional device was found; reloaded the device on the existing serial port.",
+                                DesktopLogCategory.APP,
+                            ),
+                        ),
+                    )
+                } else {
+                    null
+                }
 
             SwingUtilities.invokeLater {
                 preferredProbeResult?.let { result ->
@@ -3206,8 +3401,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     return@invokeLater
                 }
 
-                val connectedPortStillAvailable = currentConnectionStillOpen ||
-                    connectedPortVerification?.state == PortProbeState.DETECTED
+                if (connectedPortReload != null) {
+                    autoDetectNoDeviceFound = false
+                    selectPort(connectedPortReload.portPath)
+                    applyLoadedConnection(connectedPortReload)
+                    setStatus("No additional device found. Reloaded ${connectedPortReload.portPath}.")
+                    return@invokeLater
+                }
+
                 val fallbackPath = DesktopAutoDetectPolicy.defaultSelectionPath(
                     availablePorts = finalPorts,
                     currentSelectionPath = connectedPortPath,
@@ -3751,6 +3952,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val state = currentState
         val snapshot = loadedSnapshot
         val templateSettings = cloneTemplateSettings
+        val templateSourceDeviceUniqueId = cloneTemplateSourceDeviceUniqueId
         if (transport == null || state == null || snapshot == null || templateSettings == null) {
             JOptionPane.showMessageDialog(this, "Connect and load a supported device first.")
             return
@@ -3800,7 +4002,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
         setCloneSessionTemplateLocked(true)
 
-        runInBackground("Cloning Timed Event Settings...") {
+        runInBackground(
+            status = "Cloning Timed Event Settings...",
+            // Clone intentionally targets a possibly swapped device. Its first
+            // operation refreshes that target before calculating any writes.
+            verifyConnectedIdentity = false,
+        ) {
             val targetRefresh = DeviceSessionController.refreshFromDevice(
                 state,
                 transport,
@@ -3812,6 +4019,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 resumeArduconTransmissions = false,
             )
             val targetSnapshot = requireNotNull(targetRefresh.state.snapshot)
+            CloneDeviceIdentitySupport.requireDifferentDevice(
+                templateSourceDeviceUniqueId = templateSourceDeviceUniqueId,
+                targetDeviceUniqueId = targetSnapshot.info.deviceUniqueId,
+            )
             val editable = DesktopCloneSupport.buildEditableSettings(targetSnapshot.settings, templateSettings, targetSnapshot.capabilities)
             val validated = editable.toValidatedDeviceSettings()
             val writePlan = WritePlanner.create(targetSnapshot.settings, validated)
@@ -6434,6 +6645,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
             )
         }
+        cloneTemplateSourceDeviceUniqueId = loadedSnapshot?.info?.deviceUniqueId
     }
 
     private fun updateCloneTemplateLabel(
@@ -9916,6 +10128,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         showBusyDialog: Boolean = true,
         busyDialogTitle: String = "Please Wait",
         busyDialogPrimaryMessage: String? = null,
+        verifyConnectedIdentity: Boolean = true,
         task: () -> Unit,
     ) {
         if (backgroundWorkInProgress) {
@@ -9935,6 +10148,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             var failure: Exception? = null
             try {
                 waitForDeviceDataSampleToFinish()
+                if (verifyConnectedIdentity) {
+                    verifyConnectedDeviceIdentity()
+                }
                 task()
             } catch (exception: Exception) {
                 failure = exception
@@ -9949,6 +10165,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     setBusy(false)
                     updateAdvancedDeviceDataRefreshTimer()
                     val exception = failure ?: return@invokeLater
+                    if (exception is ConnectedDeviceIdentityChangedException) {
+                        handleConnectedDeviceIdentityChanged(
+                            portPath = exception.portPath,
+                            expectedDeviceUniqueId = exception.expectedDeviceUniqueId,
+                            observedDeviceUniqueId = exception.observedDeviceUniqueId,
+                        )
+                        return@invokeLater
+                    }
                     if (isTransportCommunicationFailure(exception)) {
                         handleTransportCommunicationFailure(
                             message = exception.message ?: exception.toString(),
@@ -9979,9 +10203,43 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun waitForDeviceDataSampleToFinish() {
-        while (temperatureLogSampleInProgress.get()) {
+        while (temperatureLogSampleInProgress.get() || connectedDeviceIdentityProbeInProgress.get()) {
             Thread.sleep(25L)
         }
+    }
+
+    private fun verifyConnectedDeviceIdentity() {
+        val snapshot = loadedSnapshot ?: return
+        if (!snapshot.info.productName.equals(DeviceMode.SIGNALSLINGER.productName, ignoreCase = true)) {
+            return
+        }
+        val expectedDeviceUniqueId = snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() } ?: return
+        val transport = currentTransport ?: return
+        val portPath = currentConnectedPortPath ?: return
+        if (currentState?.connectionState != ConnectionState.CONNECTED) {
+            return
+        }
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+        val observedDeviceUniqueId = result.deviceUniqueId
+        when (
+            result
+                .comparisonWith(expectedDeviceUniqueId)
+                .decisionFor(DeviceIdentityCheckPurpose.BEFORE_OPERATION)
+        ) {
+            DeviceIdentityDecision.CONTINUE -> return
+            DeviceIdentityDecision.RELOAD_AND_CANCEL ->
+                throw ConnectedDeviceIdentityChangedException(
+                    portPath = portPath,
+                    expectedDeviceUniqueId = expectedDeviceUniqueId,
+                    observedDeviceUniqueId = observedDeviceUniqueId,
+                )
+            DeviceIdentityDecision.CANCEL -> Unit
+        }
+        error(
+            "SerialSlinger could not verify that the SignalSlinger on $portPath is still " +
+                "unit ${shortDeviceUniqueId(expectedDeviceUniqueId)}. The requested operation was not performed.",
+        )
     }
 
     private fun setBusy(isBusy: Boolean) {
@@ -10177,15 +10435,17 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (editable) {
             patternTextField.border = editableTextFieldBorder
             patternTextField.background = editableTextFieldBackground
+            patternTextField.foreground = editableTextFieldForeground
             patternTextField.isOpaque = true
         } else {
             patternTextField.border = editableTextFieldBorder
             patternTextField.background = readOnlyTextFieldBackground
+            patternTextField.foreground = readOnlyTextFieldForeground
             patternTextField.isOpaque = true
         }
         patternTextField.toolTipText = if (editable) {
             "Editable in Foxoring."
-        } else if (foxRole?.fixedPatternText != null) {
+        } else if (foxRole?.fixedPatternText != null || foxRole == FoxRole.FREQUENCY_TEST_BEACON) {
             "Pattern text is determined by Fox Role."
         } else {
             "For Classic and Sprint, pattern text is determined by Fox Role."
@@ -11261,7 +11521,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun captureDeviceDataSample(writeTemperatureLog: Boolean) {
-        if (backgroundWorkInProgress) {
+        if (backgroundWorkInProgress || connectedDeviceIdentityProbeInProgress.get()) {
             return
         }
         if (!temperatureLogSampleInProgress.compareAndSet(false, true)) {
@@ -11457,15 +11717,24 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun loadPort(portPath: String): LoadedConnection {
+    private fun loadPort(
+        portPath: String,
+        resetConnectedState: Boolean = false,
+    ): LoadedConnection {
         if (
             currentConnectedPortPath == portPath &&
             currentTransport != null &&
             currentState != null &&
             currentState?.connectionState == ConnectionState.CONNECTED
         ) {
+            val refreshState =
+                if (resetConnectedState) {
+                    DeviceSessionWorkflow.connected()
+                } else {
+                    requireNotNull(currentState)
+                }
             val initialRefresh = DeviceSessionController.refreshFromDevice(
-                state = requireNotNull(currentState),
+                state = refreshState,
                 transport = requireNotNull(currentTransport),
                 startEditing = true,
                 progress = { completed, total ->
@@ -11860,6 +12129,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentState = connection.result.state
         currentConnectedPortPath = connection.portPath
         loadedSnapshot = connection.result.state.snapshot
+        lastConnectedDeviceIdentityProbeAtMs = 0L
         updateProductSectionTitles(loadedSnapshot)
         temperatureResetCommandsSupported = connection.temperatureResetCommandsSupported
         consecutiveDeviceTimeCheckNoResponseCount = 0
@@ -14232,6 +14502,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         const val SETTING_TOGGLE_FEEDBACK_MS = 220
         const val SETTING_TOGGLE_ANIMATION_MS = 260
         const val SCHEDULE_MODE_TOGGLE_SUPPRESSION_MS = 750L
+        const val CONNECTED_DEVICE_IDENTITY_PROBE_INTERVAL_MS = 6_000L
         const val PERIODIC_DEVICE_TIME_CHECK_INTERVAL_MS = 1_800_000L
         const val FIRMWARE_CLONE_COMMAND_SETTLE_MS = 100L
         const val FIRMWARE_CLONE_PRE_CLONE_STOP_MAX_WAIT_MS = 1_500L

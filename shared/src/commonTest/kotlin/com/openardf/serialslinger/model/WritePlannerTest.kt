@@ -154,6 +154,24 @@ class WritePlannerTest {
     }
 
     @Test
+    fun skipsPatternTextChangesForFrequencyTestRole() {
+        val original = sampleSettings().copy(
+            eventType = EventType.FOXORING,
+            foxRole = FoxRole.FREQUENCY_TEST_BEACON,
+            patternText = "TEST",
+        )
+        val edited = original.copy(patternText = "MOI")
+
+        val plan = WritePlanner.create(
+            original,
+            edited,
+            forceWriteKeys = setOf(SettingKey.PATTERN_TEXT),
+        )
+
+        assertEquals(emptyList(), plan.changes.map { it.fieldKey })
+    }
+
+    @Test
     fun keepsPatternTextChangesForProgrammableFoxoringRoles() {
         val original = sampleSettings().copy(
             eventType = EventType.FOXORING,

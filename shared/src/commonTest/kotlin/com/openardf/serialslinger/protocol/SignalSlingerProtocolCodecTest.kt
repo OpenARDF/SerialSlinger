@@ -55,6 +55,24 @@ class SignalSlingerProtocolCodecTest {
     }
 
     @Test
+    fun parsesAndNormalizesDeviceUniqueId() {
+        val update = SignalSlingerProtocolCodec.parseReportLine(
+            "* INF uid=314a323536384e171d00321700000000",
+        )
+
+        assertNotNull(update)
+        assertEquals(
+            "314A323536384E171D00321700000000",
+            update.deviceInfoPatch?.deviceUniqueId,
+        )
+    }
+
+    @Test
+    fun ignoresMalformedDeviceUniqueId() {
+        assertNull(SignalSlingerProtocolCodec.parseReportLine("* INF uid=not-a-factory-serial"))
+    }
+
+    @Test
     fun parsesArduconAppInfoReplyIntoDeviceInfoPatch() {
         val update = SignalSlingerProtocolCodec.parseReportLine(
             "* INF product=Arducon update=UPD sw=2.0.0 hw=ATmega328P-16 app=0x0000 appbaud=57600 baud=115200 bl=unknown proto=stk500v1",
