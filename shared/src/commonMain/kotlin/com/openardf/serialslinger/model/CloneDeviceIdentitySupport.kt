@@ -14,7 +14,7 @@ object CloneDeviceIdentitySupport {
         val sourceId = templateSourceDeviceUniqueId.normalizedDeviceUniqueId()
         val targetId = targetDeviceUniqueId.normalizedDeviceUniqueId()
         return when {
-            sourceId == null || targetId == null -> CloneDeviceIdentityComparison.UNAVAILABLE
+            sourceId == null && targetId == null -> CloneDeviceIdentityComparison.UNAVAILABLE
             sourceId == targetId -> CloneDeviceIdentityComparison.SAME
             else -> CloneDeviceIdentityComparison.DIFFERENT
         }

@@ -39,6 +39,7 @@ import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceIdentityCheckPurpose
 import com.openardf.serialslinger.session.DeviceIdentityDecision
+import com.openardf.serialslinger.session.DeviceIdentityObservation
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSubmitResult
@@ -47,6 +48,8 @@ import com.openardf.serialslinger.session.FirmwareCloneSession
 import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.session.decisionFor
+import com.openardf.serialslinger.session.deviceIdentityLabel
+import com.openardf.serialslinger.session.deviceIdentityObservation
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import com.openardf.serialslinger.protocol.ArduconAlreadyCurrentException
 import com.openardf.serialslinger.protocol.ArduconFirmwareUpdate
@@ -123,8 +126,8 @@ data class AndroidFirmwareUpdateProgress(
 private class SignalSlingerUpdateCancelledException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 private class ConnectedSignalSlingerIdentityChangedException(
-    val expectedDeviceUniqueId: String,
-    val observedDeviceUniqueId: String?,
+    val expectedIdentity: DeviceIdentityObservation,
+    val observedIdentity: DeviceIdentityObservation,
     val target: AndroidConnectionTarget,
 ) : IllegalStateException(
     "A different SignalSlinger was detected on ${target.label}. " +
@@ -133,7 +136,7 @@ private class ConnectedSignalSlingerIdentityChangedException(
 
 private data class LoadedSignalSlingerIdentity(
     val target: AndroidConnectionTarget,
-    val deviceUniqueId: String,
+    val observation: DeviceIdentityObservation,
 )
 
 private data class ScheduleImpactSummary(
@@ -542,14 +545,14 @@ object AndroidSessionController {
                         val result = DeviceSessionController.probeDeviceIdentity(resolvedTransport.transport)
                         when (
                             result
-                                .comparisonWith(expectedIdentity.deviceUniqueId)
+                                .comparisonWith(expectedIdentity.observation)
                                 .decisionFor(DeviceIdentityCheckPurpose.PASSIVE)
                         ) {
                             DeviceIdentityDecision.RELOAD_AND_CANCEL ->
                                 identityChange =
                                     ConnectedSignalSlingerIdentityChangedException(
-                                        expectedDeviceUniqueId = expectedIdentity.deviceUniqueId,
-                                        observedDeviceUniqueId = result.deviceUniqueId,
+                                        expectedIdentity = expectedIdentity.observation,
+                                        observedIdentity = result.observation,
                                         target = resolvedTransport.target,
                                     )
                             DeviceIdentityDecision.CONTINUE,
@@ -5010,8 +5013,7 @@ object AndroidSessionController {
             return null
         }
         val target = latestLoadedTarget ?: return null
-        val deviceUniqueId = snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() } ?: return null
-        return LoadedSignalSlingerIdentity(target, deviceUniqueId)
+        return LoadedSignalSlingerIdentity(target, snapshot.info.deviceIdentityObservation())
     }
 
     private fun verifyLoadedSignalSlingerIdentity(
@@ -5035,21 +5037,21 @@ object AndroidSessionController {
         val result = DeviceSessionController.probeDeviceIdentity(transport)
         when (
             result
-                .comparisonWith(expectedIdentity.deviceUniqueId)
+                .comparisonWith(expectedIdentity.observation)
                 .decisionFor(DeviceIdentityCheckPurpose.BEFORE_OPERATION)
         ) {
             DeviceIdentityDecision.CONTINUE -> return
             DeviceIdentityDecision.RELOAD_AND_CANCEL ->
                 throw ConnectedSignalSlingerIdentityChangedException(
-                    expectedDeviceUniqueId = expectedIdentity.deviceUniqueId,
-                    observedDeviceUniqueId = result.deviceUniqueId,
+                    expectedIdentity = expectedIdentity.observation,
+                    observedIdentity = result.observation,
                     target = resolvedTarget,
                 )
             DeviceIdentityDecision.CANCEL -> Unit
         }
         error(
             "SerialSlinger could not verify that the SignalSlinger on ${resolvedTarget.label} is still " +
-                "unit ${shortDeviceUniqueId(expectedIdentity.deviceUniqueId)}. " +
+                "${expectedIdentity.observation.deviceIdentityLabel()}. " +
                 "The requested operation was not performed.",
         )
     }
@@ -5063,7 +5065,7 @@ object AndroidSessionController {
                 val currentIdentity = loadedSignalSlingerIdentityLocked()
                 if (
                     connectedDeviceIdentityReloadInProgress ||
-                    currentIdentity?.deviceUniqueId != identityChange.expectedDeviceUniqueId ||
+                    currentIdentity?.observation != identityChange.expectedIdentity ||
                     currentIdentity.target != identityChange.target
                 ) {
                     false
@@ -5078,12 +5080,12 @@ object AndroidSessionController {
             return
         }
 
-        val previousLabel = shortDeviceUniqueId(identityChange.expectedDeviceUniqueId)
-        val nextLabel = identityChange.observedDeviceUniqueId?.let(::shortDeviceUniqueId) ?: "legacy firmware"
+        val previousLabel = identityChange.expectedIdentity.deviceIdentityLabel()
+        val nextLabel = identityChange.observedIdentity.deviceIdentityLabel()
         logAppEvent(
             title = "device-change",
             lines = listOf(
-                "Different SignalSlinger detected on ${identityChange.target.label}: unit $previousLabel was replaced by $nextLabel.",
+                "Different SignalSlinger detected on ${identityChange.target.label}: $previousLabel was replaced by $nextLabel.",
                 "Discarding cached settings, reloading the attached device, and checking its firmware.",
             ),
         )
@@ -5103,8 +5105,6 @@ object AndroidSessionController {
             }
         }
     }
-
-    private fun shortDeviceUniqueId(deviceUniqueId: String): String = deviceUniqueId.takeLast(8)
 
     private fun <T> runWithResolvedTransport(
         context: Context,

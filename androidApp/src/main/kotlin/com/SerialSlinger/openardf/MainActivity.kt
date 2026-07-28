@@ -77,6 +77,7 @@ import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FrequencyBankId
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FirmwareUpdateUiText
+import com.openardf.serialslinger.model.FirmwareUpdateOfferSupport
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
@@ -5282,7 +5283,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val snapshot = AndroidSessionController.snapshotUiState().sessionViewState?.state?.snapshot ?: return
         if (
             !snapshot.info.productName.equals(PRODUCT_SIGNALSLINGER, ignoreCase = true) ||
-            snapshot.info.deviceUniqueId.isNullOrBlank() ||
             firmwareUpdateActive()
         ) {
             return
@@ -5296,22 +5296,18 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun maybeOfferAutomaticFirmwareUpdateForLoadedSnapshot() {
-        if (
-            !automaticFirmwareUpdatesEnabled ||
-            automaticFirmwareUpdateCheckInProgress ||
-            automaticFirmwareUpdatePromptVisible ||
-            firmwareUpdateActive()
-        ) {
+        if (!automaticFirmwareUpdatesEnabled || firmwareUpdateActive()) {
+            return
+        }
+        if (automaticFirmwareUpdateCheckInProgress || automaticFirmwareUpdatePromptVisible) {
+            autoDetectHandler.postDelayed(
+                { maybeOfferAutomaticFirmwareUpdateForLoadedSnapshot() },
+                350L,
+            )
             return
         }
         val snapshot = AndroidSessionController.snapshotUiState().sessionViewState?.state?.snapshot ?: return
-        val snapshotKey =
-            listOf(
-                snapshot.info.productName,
-                snapshot.info.deviceUniqueId ?: "legacy",
-                snapshot.info.hardwareBuild,
-                snapshot.info.softwareVersion,
-            ).joinToString("|")
+        val snapshotKey = FirmwareUpdateOfferSupport.snapshotKey(snapshot)
         if (snapshotKey == lastAutomaticFirmwareOfferSnapshotKey) {
             return
         }

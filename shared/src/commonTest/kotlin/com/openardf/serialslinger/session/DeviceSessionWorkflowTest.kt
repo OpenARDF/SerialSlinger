@@ -51,6 +51,7 @@ class DeviceSessionWorkflowTest {
         assertEquals(ConnectionState.CONNECTED, updated.connectionState)
         assertEquals("1.2.3", snapshot.info.softwareVersion)
         assertEquals("3.5", snapshot.info.hardwareBuild)
+        assertTrue(snapshot.info.identityReportReceived)
         assertEquals("314A323536384E171D00321700000000", snapshot.info.deviceUniqueId)
         assertTrue(snapshot.capabilities.supportsScheduling)
         assertTrue(snapshot.capabilities.supportsTemperatureReadback)

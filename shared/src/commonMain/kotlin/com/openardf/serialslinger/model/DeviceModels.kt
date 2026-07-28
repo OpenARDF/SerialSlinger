@@ -80,6 +80,7 @@ data class DeviceCapabilities(
 
 data class DeviceInfo(
     val productName: String? = null,
+    val identityReportReceived: Boolean = false,
     val deviceUniqueId: String? = null,
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,

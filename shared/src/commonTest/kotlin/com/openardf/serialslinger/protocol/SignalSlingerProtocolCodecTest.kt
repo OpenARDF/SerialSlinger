@@ -48,6 +48,7 @@ class SignalSlingerProtocolCodecTest {
         val update = SignalSlingerProtocolCodec.parseReportLine("* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200")
 
         assertNotNull(update)
+        assertEquals(true, update.deviceInfoPatch?.identityReportReceived)
         assertEquals("2.0.2", update.deviceInfoPatch?.softwareVersion)
         assertEquals("3.5", update.deviceInfoPatch?.hardwareBuild)
         assertEquals(0x2000, update.deviceInfoPatch?.appStartAddress)

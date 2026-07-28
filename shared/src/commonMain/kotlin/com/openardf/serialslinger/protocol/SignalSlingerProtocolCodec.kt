@@ -21,6 +21,7 @@ import com.openardf.serialslinger.platform.platformUtcDateTimeFields
 
 data class DeviceInfoPatch(
     val productName: String? = null,
+    val identityReportReceived: Boolean? = null,
     val deviceUniqueId: String? = null,
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
@@ -223,6 +224,7 @@ object SignalSlingerProtocolCodec {
                 return DeviceReportUpdate(
                     deviceInfoPatch = DeviceInfoPatch(
                         productName = productName,
+                        identityReportReceived = true,
                         deviceUniqueId = deviceUniqueId,
                         softwareVersion = softwareVersion,
                         hardwareBuild = hardwareBuild,

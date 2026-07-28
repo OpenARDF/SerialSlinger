@@ -1,6 +1,7 @@
 package com.openardf.serialslinger.session
 
 import com.openardf.serialslinger.model.ConnectionState
+import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.EditableDeviceSettings
@@ -33,18 +34,44 @@ data class DeviceIdentityProbeResult(
     val linesReceived: List<String>,
     val traceEntries: List<SerialTraceEntry>,
 ) {
-    fun comparisonWith(expectedDeviceUniqueId: String): DeviceIdentityComparison {
-        return when {
-            deviceUniqueId == expectedDeviceUniqueId -> DeviceIdentityComparison.MATCH
-            deviceUniqueId != null || recognizedInfoResponse -> DeviceIdentityComparison.CHANGED
-            else -> DeviceIdentityComparison.UNAVAILABLE
-        }
-    }
+    val observation: DeviceIdentityObservation
+        get() = DeviceIdentityObservation(recognizedInfoResponse, deviceUniqueId)
+
+    fun comparisonWith(expected: DeviceIdentityObservation): DeviceIdentityComparison =
+        observation.comparisonWith(expected)
 }
+
+data class DeviceIdentityObservation(
+    val recognizedInfoResponse: Boolean,
+    val deviceUniqueId: String?,
+)
+
+fun DeviceIdentityObservation.comparisonWith(expected: DeviceIdentityObservation): DeviceIdentityComparison =
+    when {
+        !expected.recognizedInfoResponse || !recognizedInfoResponse ->
+            DeviceIdentityComparison.UNAVAILABLE
+        expected.deviceUniqueId == null && deviceUniqueId == null ->
+            DeviceIdentityComparison.INDISTINGUISHABLE
+        expected.deviceUniqueId == deviceUniqueId ->
+            DeviceIdentityComparison.MATCH
+        else ->
+            DeviceIdentityComparison.CHANGED
+    }
+
+fun DeviceInfo.deviceIdentityObservation(): DeviceIdentityObservation =
+    DeviceIdentityObservation(
+        recognizedInfoResponse = identityReportReceived,
+        deviceUniqueId = deviceUniqueId,
+    )
+
+fun DeviceIdentityObservation.deviceIdentityLabel(): String =
+    deviceUniqueId?.let { "unit ${it.takeLast(8)}" }
+        ?: if (recognizedInfoResponse) "a legacy firmware unit" else "an unverified device"
 
 enum class DeviceIdentityComparison {
     MATCH,
     CHANGED,
+    INDISTINGUISHABLE,
     UNAVAILABLE,
 }
 
@@ -63,6 +90,7 @@ fun DeviceIdentityComparison.decisionFor(purpose: DeviceIdentityCheckPurpose): D
     return when (this) {
         DeviceIdentityComparison.MATCH -> DeviceIdentityDecision.CONTINUE
         DeviceIdentityComparison.CHANGED -> DeviceIdentityDecision.RELOAD_AND_CANCEL
+        DeviceIdentityComparison.INDISTINGUISHABLE -> DeviceIdentityDecision.CONTINUE
         DeviceIdentityComparison.UNAVAILABLE ->
             if (purpose == DeviceIdentityCheckPurpose.PASSIVE) {
                 DeviceIdentityDecision.CONTINUE
@@ -173,6 +201,7 @@ object DeviceSessionController {
         val lines = mutableListOf<String>()
         val traceEntries = mutableListOf<SerialTraceEntry>()
         var updatedState = state.copy(connectionState = ConnectionState.CONNECTED)
+        var infoCommandSent = false
         val bootstrapCommands = SignalSlingerFirmwareSupport.bootstrapLoadCommands()
         var reportReceived = false
         fun notifyReportReceived(responseLines: List<String>) {
@@ -214,6 +243,7 @@ object DeviceSessionController {
 
         if (updatedState.snapshot?.info?.softwareVersion.isNullOrBlank() && updatedState.snapshot?.info?.productName.isNullOrBlank()) {
             val command = "INF"
+            updatedState = updatedState.preparingForIdentityReport()
             updatedState = sendCommandAndIngest(
                 command = command,
                 state = updatedState,
@@ -230,6 +260,7 @@ object DeviceSessionController {
                 notifyReportReceived(intervention.linesReceived)
                 updatedState = intervention.state
             }
+            infoCommandSent = true
         }
 
         val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
@@ -265,8 +296,14 @@ object DeviceSessionController {
             progress?.invoke(commands.size, totalCommands.coerceAtLeast(1))
         }
 
-        if (updatedState.snapshot?.info?.bootloaderVersion.isNullOrBlank()) {
+        val signalSlingerLoaded =
+            updatedState.snapshot?.info?.productName.equals("SignalSlinger", ignoreCase = true)
+        if (
+            (signalSlingerLoaded && !infoCommandSent) ||
+            (!signalSlingerLoaded && updatedState.snapshot?.info?.bootloaderVersion.isNullOrBlank())
+        ) {
             val command = "INF"
+            updatedState = updatedState.preparingForIdentityReport()
             updatedState = sendCommandAndIngest(
                 command = command,
                 state = updatedState,
@@ -315,6 +352,18 @@ object DeviceSessionController {
             traceEntries = traceEntries,
         )
     }
+
+    private fun DeviceSessionState.preparingForIdentityReport(): DeviceSessionState =
+        copy(
+            snapshot =
+                snapshot?.copy(
+                    info =
+                        snapshot.info.copy(
+                            identityReportReceived = false,
+                            deviceUniqueId = null,
+                        ),
+                ),
+        )
 
     private fun normalizeMissingEventType(
         state: DeviceSessionState,

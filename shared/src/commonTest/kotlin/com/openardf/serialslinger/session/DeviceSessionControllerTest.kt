@@ -37,11 +37,21 @@ class DeviceSessionControllerTest {
         assertEquals(4, result.traceEntries.size)
         assertEquals(
             DeviceIdentityComparison.MATCH,
-            result.comparisonWith("314A323536384E171D00321700000000"),
+            result.comparisonWith(
+                DeviceIdentityObservation(
+                    recognizedInfoResponse = true,
+                    deviceUniqueId = "314A323536384E171D00321700000000",
+                ),
+            ),
         )
         assertEquals(
             DeviceIdentityComparison.CHANGED,
-            result.comparisonWith("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"),
+            result.comparisonWith(
+                DeviceIdentityObservation(
+                    recognizedInfoResponse = true,
+                    deviceUniqueId = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+                ),
+            ),
         )
     }
 
@@ -62,7 +72,12 @@ class DeviceSessionControllerTest {
         assertTrue(result.recognizedInfoResponse)
         assertEquals(
             DeviceIdentityComparison.CHANGED,
-            result.comparisonWith("314A323536384E171D00321700000000"),
+            result.comparisonWith(
+                DeviceIdentityObservation(
+                    recognizedInfoResponse = true,
+                    deviceUniqueId = "314A323536384E171D00321700000000",
+                ),
+            ),
         )
     }
 
@@ -74,12 +89,41 @@ class DeviceSessionControllerTest {
         assertFalse(result.recognizedInfoResponse)
         assertEquals(
             DeviceIdentityComparison.UNAVAILABLE,
-            result.comparisonWith("314A323536384E171D00321700000000"),
+            result.comparisonWith(
+                DeviceIdentityObservation(
+                    recognizedInfoResponse = true,
+                    deviceUniqueId = "314A323536384E171D00321700000000",
+                ),
+            ),
         )
     }
 
     @Test
-    fun deviceIdentityDecisionIsPassiveForUnavailableReadsAndFailClosedForOperations() {
+    fun deviceIdentityComparisonHandlesUidAndLegacyTransitionsSymmetrically() {
+        val uidA =
+            DeviceIdentityObservation(
+                recognizedInfoResponse = true,
+                deviceUniqueId = "314A323536384E171D00321700000000",
+            )
+        val uidB =
+            DeviceIdentityObservation(
+                recognizedInfoResponse = true,
+                deviceUniqueId = "314A323536384E171D00321700000001",
+            )
+        val legacy = DeviceIdentityObservation(recognizedInfoResponse = true, deviceUniqueId = null)
+        val noResponse = DeviceIdentityObservation(recognizedInfoResponse = false, deviceUniqueId = null)
+
+        assertEquals(DeviceIdentityComparison.MATCH, uidA.comparisonWith(uidA))
+        assertEquals(DeviceIdentityComparison.CHANGED, uidB.comparisonWith(uidA))
+        assertEquals(DeviceIdentityComparison.CHANGED, legacy.comparisonWith(uidA))
+        assertEquals(DeviceIdentityComparison.CHANGED, uidA.comparisonWith(legacy))
+        assertEquals(DeviceIdentityComparison.INDISTINGUISHABLE, legacy.comparisonWith(legacy))
+        assertEquals(DeviceIdentityComparison.UNAVAILABLE, noResponse.comparisonWith(uidA))
+        assertEquals(DeviceIdentityComparison.UNAVAILABLE, uidA.comparisonWith(noResponse))
+    }
+
+    @Test
+    fun deviceIdentityDecisionAllowsTwoLegacyReportsAndFailsClosedForMissingResponses() {
         assertEquals(
             DeviceIdentityDecision.CONTINUE,
             DeviceIdentityComparison.MATCH.decisionFor(DeviceIdentityCheckPurpose.BEFORE_OPERATION),
@@ -87,6 +131,10 @@ class DeviceSessionControllerTest {
         assertEquals(
             DeviceIdentityDecision.RELOAD_AND_CANCEL,
             DeviceIdentityComparison.CHANGED.decisionFor(DeviceIdentityCheckPurpose.PASSIVE),
+        )
+        assertEquals(
+            DeviceIdentityDecision.CONTINUE,
+            DeviceIdentityComparison.INDISTINGUISHABLE.decisionFor(DeviceIdentityCheckPurpose.BEFORE_OPERATION),
         )
         assertEquals(
             DeviceIdentityDecision.CONTINUE,
@@ -432,21 +480,80 @@ class DeviceSessionControllerTest {
     }
 
     @Test
-    fun connectAndLoadDoesNotQueryAppInfoWhenBootloaderVersionWasAlreadySupplied() {
+    fun connectAndLoadAlwaysQueriesAppInfoAndStoresUidWhenBootloaderVersionWasAlreadySupplied() {
         val transport = FakeDeviceTransport(
             scriptedResponses = mapOf(
                 "VER" to listOf(
-                    "* SW Ver: 2.0.2 HW Build: 3.5",
+                    "* SW Ver: 2.0.3 HW Build: 3.5",
                     "* Bootloader: BL0.13 protocol 1",
+                ),
+                "INF" to listOf(
+                    "* INF product=SignalSlinger update=UPD",
+                    "* INF sw=2.0.3 hw=3.5 app=0x2000 baud=115200",
+                    "* INF bl=BL0.13 proto=1",
+                    "* INF uid=314A323536384E171D00321700000000",
                 ),
             ),
         )
 
         val result = DeviceSessionController.connectAndLoad(transport)
+        val snapshot = assertNotNull(result.state.snapshot)
 
-        assertFalse("INF" in result.commandsSent)
-        assertEquals("BL0.13", result.state.snapshot?.info?.bootloaderVersion)
-        assertEquals(1, result.state.snapshot?.info?.bootloaderProtocolVersion)
+        assertEquals("INF", result.commandsSent.last())
+        assertTrue(snapshot.info.identityReportReceived)
+        assertEquals(
+            "314A323536384E171D00321700000000",
+            snapshot.info.deviceUniqueId,
+        )
+        assertEquals("BL0.13", snapshot.info.bootloaderVersion)
+        assertEquals(1, snapshot.info.bootloaderProtocolVersion)
+    }
+
+    @Test
+    fun refreshClearsPreviousUidWhenRecognizedLegacyInfHasNoUid() {
+        val previousState =
+            DeviceSessionWorkflow.connected().let { connected ->
+                connected.copy(
+                    snapshot =
+                        assertNotNull(connected.snapshot).copy(
+                            info =
+                                DeviceInfo(
+                                    productName = "SignalSlinger",
+                                    identityReportReceived = true,
+                                    deviceUniqueId = "314A323536384E171D00321700000000",
+                                    softwareVersion = "2.0.3",
+                                    hardwareBuild = "3.5",
+                                    bootloaderVersion = "BL0.13",
+                                    bootloaderProtocolVersion = 1,
+                                ),
+                        ),
+                )
+            }
+        val transport =
+            FakeDeviceTransport(
+                scriptedResponses =
+                    mapOf(
+                        "VER" to
+                            listOf(
+                                "* SW Ver: 2.0.2 HW Build: 3.5",
+                                "* Bootloader: BL0.13 protocol 1",
+                            ),
+                        "INF" to
+                            listOf(
+                                "* INF product=SignalSlinger update=UPD",
+                                "* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200",
+                                "* INF bl=BL0.13 proto=1",
+                            ),
+                    ),
+            )
+
+        val result = DeviceSessionController.refreshFromDevice(previousState, transport)
+        val snapshot = assertNotNull(result.state.snapshot)
+
+        assertEquals("INF", result.commandsSent.last())
+        assertTrue(snapshot.info.identityReportReceived)
+        assertEquals(null, snapshot.info.deviceUniqueId)
+        assertEquals("2.0.2", snapshot.info.softwareVersion)
     }
 
     @Test

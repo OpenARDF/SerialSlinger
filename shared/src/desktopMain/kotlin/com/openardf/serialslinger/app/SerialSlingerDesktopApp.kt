@@ -12,6 +12,7 @@ import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
+import com.openardf.serialslinger.model.FirmwareUpdateOfferSupport
 import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
 import com.openardf.serialslinger.model.MultiDayDurationGuardOption
 import com.openardf.serialslinger.model.MultiDayDurationGuardPlanner
@@ -54,6 +55,7 @@ import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceIdentityCheckPurpose
 import com.openardf.serialslinger.session.DeviceIdentityDecision
+import com.openardf.serialslinger.session.DeviceIdentityObservation
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
@@ -63,6 +65,8 @@ import com.openardf.serialslinger.session.SerialTraceDirection
 import com.openardf.serialslinger.session.SerialTraceEntry
 import com.openardf.serialslinger.session.SettingVerification
 import com.openardf.serialslinger.session.decisionFor
+import com.openardf.serialslinger.session.deviceIdentityLabel
+import com.openardf.serialslinger.session.deviceIdentityObservation
 import com.openardf.serialslinger.transport.DesktopFirmwareUpdateTransport
 import com.openardf.serialslinger.transport.DesktopSerialPortInfo
 import com.openardf.serialslinger.transport.DesktopSerialStopBits
@@ -274,8 +278,8 @@ private data class DesktopControlCommandResult(
 
 private class ConnectedDeviceIdentityChangedException(
     val portPath: String,
-    val expectedDeviceUniqueId: String,
-    val observedDeviceUniqueId: String?,
+    val expectedIdentity: DeviceIdentityObservation,
+    val observedIdentity: DeviceIdentityObservation,
 ) : IllegalStateException("A different SignalSlinger was detected on $portPath.")
 
 private class DesktopControlServer private constructor(
@@ -863,6 +867,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var lastsDurationDialogOpen: Boolean = false
     private var automaticFirmwareUpdateCheckInProgress: Boolean = false
     private var automaticFirmwareUpdatePromptVisible: Boolean = false
+    private var lastAutomaticFirmwareOfferSnapshotKey: String? = null
     private var connectedDeviceIdentityReloadInProgress: Boolean = false
     private var lastConnectedDeviceIdentityProbeAtMs: Long = 0L
     private var displayPreferences: DesktopDisplayPreferences = PreferencesDesktopDisplayPreferencesStore.load()
@@ -2112,7 +2117,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val port = portPath?.takeIf { it.isNotBlank() } ?: "unknown port"
         val unit = snapshot?.info?.deviceUniqueId
             ?.takeIf { it.isNotBlank() }
-            ?.let { " unit ${shortDeviceUniqueId(it)}" }
+            ?.let { " unit ${it.takeLast(8)}" }
             .orEmpty()
         return DesktopLogEntry(
             "Connected device type: ${productLabel(snapshot)}$unit on $port.",
@@ -2821,10 +2826,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         ) {
             return
         }
-        val expectedDeviceUniqueId = loadedSnapshot?.info?.deviceUniqueId?.takeIf { it.isNotBlank() } ?: return
-        if (!loadedSnapshot?.info?.productName.equals(DeviceMode.SIGNALSLINGER.productName, ignoreCase = true)) {
+        val snapshot = loadedSnapshot ?: return
+        if (!snapshot.info.productName.equals(DeviceMode.SIGNALSLINGER.productName, ignoreCase = true)) {
             return
         }
+        val expectedIdentity = snapshot.info.deviceIdentityObservation()
         val nowMs = System.currentTimeMillis()
         if ((nowMs - lastConnectedDeviceIdentityProbeAtMs) < CONNECTED_DEVICE_IDENTITY_PROBE_INTERVAL_MS) {
             return
@@ -2843,10 +2849,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         Thread {
             try {
                 val result = DeviceSessionController.probeDeviceIdentity(probeTransport)
-                val observedDeviceUniqueId = result.deviceUniqueId
                 if (
                     result
-                        .comparisonWith(expectedDeviceUniqueId)
+                        .comparisonWith(expectedIdentity)
                         .decisionFor(DeviceIdentityCheckPurpose.PASSIVE) != DeviceIdentityDecision.RELOAD_AND_CANCEL
                 ) {
                     return@Thread
@@ -2857,14 +2862,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         currentTransport !== probeTransport ||
                         currentState !== probeState ||
                         currentConnectedPortPath != portPath ||
-                        loadedSnapshot?.info?.deviceUniqueId != expectedDeviceUniqueId
+                        loadedSnapshot?.info?.deviceIdentityObservation() != expectedIdentity
                     ) {
                         return@invokeLater
                     }
                     handleConnectedDeviceIdentityChanged(
                         portPath = portPath,
-                        expectedDeviceUniqueId = expectedDeviceUniqueId,
-                        observedDeviceUniqueId = observedDeviceUniqueId,
+                        expectedIdentity = expectedIdentity,
+                        observedIdentity = result.observation,
                     )
                 }
             } catch (_: Exception) {
@@ -2882,19 +2887,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun handleConnectedDeviceIdentityChanged(
         portPath: String,
-        expectedDeviceUniqueId: String,
-        observedDeviceUniqueId: String?,
+        expectedIdentity: DeviceIdentityObservation,
+        observedIdentity: DeviceIdentityObservation,
     ) {
         if (
             currentConnectedPortPath != portPath ||
-            loadedSnapshot?.info?.deviceUniqueId != expectedDeviceUniqueId ||
+            loadedSnapshot?.info?.deviceIdentityObservation() != expectedIdentity ||
             connectedDeviceIdentityReloadInProgress
         ) {
             return
         }
         if (backgroundWorkInProgress) {
             Timer(250) {
-                handleConnectedDeviceIdentityChanged(portPath, expectedDeviceUniqueId, observedDeviceUniqueId)
+                handleConnectedDeviceIdentityChanged(portPath, expectedIdentity, observedIdentity)
             }.apply {
                 isRepeats = false
                 start()
@@ -2903,13 +2908,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         connectedDeviceIdentityReloadInProgress = true
-        val previousLabel = shortDeviceUniqueId(expectedDeviceUniqueId)
-        val nextLabel = observedDeviceUniqueId?.let(::shortDeviceUniqueId) ?: "legacy firmware"
+        val previousLabel = expectedIdentity.deviceIdentityLabel()
+        val nextLabel = observedIdentity.deviceIdentityLabel()
         appendLog(
             "Device Change",
             listOf(
                 DesktopLogEntry(
-                    "Different SignalSlinger detected on $portPath: unit $previousLabel was replaced by $nextLabel.",
+                    "Different SignalSlinger detected on $portPath: $previousLabel was replaced by $nextLabel.",
                     DesktopLogCategory.DEVICE,
                 ),
                 DesktopLogEntry(
@@ -2944,8 +2949,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
         }
     }
-
-    private fun shortDeviceUniqueId(deviceUniqueId: String): String = deviceUniqueId.takeLast(8)
 
     private fun refreshAvailablePorts(
         freshPorts: List<SignalSlingerPortProbe> = SignalSlingerPortDiscovery.listAvailablePorts(),
@@ -6394,6 +6397,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         } finally {
             updatingForm = false
         }
+        currentConnectedPortPath?.let(::maybeOfferAutomaticFirmwareUpdate)
     }
 
     private fun refreshLiveDeviceDataFields(snapshot: DeviceSnapshot?) {
@@ -10168,8 +10172,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     if (exception is ConnectedDeviceIdentityChangedException) {
                         handleConnectedDeviceIdentityChanged(
                             portPath = exception.portPath,
-                            expectedDeviceUniqueId = exception.expectedDeviceUniqueId,
-                            observedDeviceUniqueId = exception.observedDeviceUniqueId,
+                            expectedIdentity = exception.expectedIdentity,
+                            observedIdentity = exception.observedIdentity,
                         )
                         return@invokeLater
                     }
@@ -10213,7 +10217,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (!snapshot.info.productName.equals(DeviceMode.SIGNALSLINGER.productName, ignoreCase = true)) {
             return
         }
-        val expectedDeviceUniqueId = snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() } ?: return
+        val expectedIdentity = snapshot.info.deviceIdentityObservation()
         val transport = currentTransport ?: return
         val portPath = currentConnectedPortPath ?: return
         if (currentState?.connectionState != ConnectionState.CONNECTED) {
@@ -10221,24 +10225,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
 
         val result = DeviceSessionController.probeDeviceIdentity(transport)
-        val observedDeviceUniqueId = result.deviceUniqueId
         when (
             result
-                .comparisonWith(expectedDeviceUniqueId)
+                .comparisonWith(expectedIdentity)
                 .decisionFor(DeviceIdentityCheckPurpose.BEFORE_OPERATION)
         ) {
             DeviceIdentityDecision.CONTINUE -> return
             DeviceIdentityDecision.RELOAD_AND_CANCEL ->
                 throw ConnectedDeviceIdentityChangedException(
                     portPath = portPath,
-                    expectedDeviceUniqueId = expectedDeviceUniqueId,
-                    observedDeviceUniqueId = observedDeviceUniqueId,
+                    expectedIdentity = expectedIdentity,
+                    observedIdentity = result.observation,
                 )
             DeviceIdentityDecision.CANCEL -> Unit
         }
         error(
             "SerialSlinger could not verify that the SignalSlinger on $portPath is still " +
-                "unit ${shortDeviceUniqueId(expectedDeviceUniqueId)}. The requested operation was not performed.",
+                "${expectedIdentity.deviceIdentityLabel()}. The requested operation was not performed.",
         )
     }
 
@@ -12190,18 +12193,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun maybeOfferAutomaticFirmwareUpdate(portPath: String) {
-        if (!displayPreferences.automaticFirmwareUpdatesEnabled ||
+        if (!displayPreferences.automaticFirmwareUpdatesEnabled) {
+            return
+        }
+        if (
             automaticFirmwareUpdateCheckInProgress ||
             automaticFirmwareUpdatePromptVisible ||
             backgroundWorkInProgress
         ) {
-            if (backgroundWorkInProgress) {
-                Timer(350) {
-                    maybeOfferAutomaticFirmwareUpdate(portPath)
-                }.apply {
-                    isRepeats = false
-                    start()
-                }
+            Timer(350) {
+                maybeOfferAutomaticFirmwareUpdate(portPath)
+            }.apply {
+                isRepeats = false
+                start()
             }
             return
         }
@@ -12209,6 +12213,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val productName = snapshot.info.productName.orEmpty().trim()
         val firmwareVersion = snapshot.info.softwareVersion.orEmpty().trim()
         val hardwareBuild = snapshot.info.hardwareBuild.orEmpty().trim()
+        val snapshotKey = FirmwareUpdateOfferSupport.snapshotKey(snapshot)
+        if (snapshotKey == lastAutomaticFirmwareOfferSnapshotKey) {
+            return
+        }
+        lastAutomaticFirmwareOfferSnapshotKey = snapshotKey
 
         automaticFirmwareUpdateCheckInProgress = true
         Thread {

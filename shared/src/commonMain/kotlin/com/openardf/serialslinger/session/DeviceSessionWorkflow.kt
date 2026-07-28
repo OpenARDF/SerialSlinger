@@ -109,9 +109,16 @@ object DeviceSessionWorkflow {
     ): DeviceSnapshot {
         val infoPatch = update.deviceInfoPatch
         val appIdentityObserved = infoPatch?.softwareVersion != null || infoPatch?.hardwareBuild != null || infoPatch?.productName != null
+        val firstIdentityReportLine =
+            infoPatch?.identityReportReceived == true && !info.identityReportReceived
         val nextInfo = info.copy(
             productName = infoPatch?.productName ?: info.productName,
-            deviceUniqueId = infoPatch?.deviceUniqueId ?: info.deviceUniqueId,
+            identityReportReceived = infoPatch?.identityReportReceived ?: info.identityReportReceived,
+            deviceUniqueId = when {
+                infoPatch?.deviceUniqueId != null -> infoPatch.deviceUniqueId
+                firstIdentityReportLine -> null
+                else -> info.deviceUniqueId
+            },
             softwareVersion = infoPatch?.softwareVersion ?: info.softwareVersion,
             hardwareBuild = infoPatch?.hardwareBuild ?: info.hardwareBuild,
             appStartAddress = infoPatch?.appStartAddress ?: info.appStartAddress,

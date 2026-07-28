@@ -43,17 +43,44 @@ class CloneDeviceIdentitySupportTest {
     }
 
     @Test
-    fun missingLegacyUidDoesNotBlockClone() {
+    fun uidOnOnlyOneSideProvesCloneTargetIsDifferent() {
         assertEquals(
-            CloneDeviceIdentityComparison.UNAVAILABLE,
+            CloneDeviceIdentityComparison.DIFFERENT,
             CloneDeviceIdentitySupport.compare(
                 templateSourceDeviceUniqueId = "314A323536384E171D00321700000000",
                 targetDeviceUniqueId = null,
             ),
         )
+        assertEquals(
+            CloneDeviceIdentityComparison.DIFFERENT,
+            CloneDeviceIdentitySupport.compare(
+                templateSourceDeviceUniqueId = null,
+                targetDeviceUniqueId = "314A323536384E171D00321700000000",
+            ),
+        )
 
         CloneDeviceIdentitySupport.requireDifferentDevice(
             templateSourceDeviceUniqueId = "314A323536384E171D00321700000000",
+            targetDeviceUniqueId = null,
+        )
+        CloneDeviceIdentitySupport.requireDifferentDevice(
+            templateSourceDeviceUniqueId = null,
+            targetDeviceUniqueId = "314A323536384E171D00321700000000",
+        )
+    }
+
+    @Test
+    fun missingUidOnBothLegacyDevicesDoesNotBlockClone() {
+        assertEquals(
+            CloneDeviceIdentityComparison.UNAVAILABLE,
+            CloneDeviceIdentitySupport.compare(
+                templateSourceDeviceUniqueId = null,
+                targetDeviceUniqueId = null,
+            ),
+        )
+
+        CloneDeviceIdentitySupport.requireDifferentDevice(
+            templateSourceDeviceUniqueId = null,
             targetDeviceUniqueId = null,
         )
     }
