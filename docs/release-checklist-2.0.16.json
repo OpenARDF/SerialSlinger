@@ -87,29 +87,29 @@
     },
     {
       "id": "tag-pushed",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "2026-07-28 pushed annotated tag v2.0.16 to origin with tag target 71c115837ba27ba204fc78e24b5d91a06fd0a861.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "workflow-published",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions jDeploy Release run 30389090184 completed successfully in 3m23s and published release assets.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "release-verified",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "gh release view v2.0.16 reported isDraft=false, isPrerelease=false, publishedAt=2026-07-28T18:51:18Z, targetCommitish=71c115837ba27ba204fc78e24b5d91a06fd0a861; direct HEAD for serialslinger-2.0.16.tgz returned HTTP 200 and content-length 3744823.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "final-checklist-audit",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Final audit confirmed docs/packaging-and-release.md steps addressed: preflight, checklist pre-tag, version alignment, Android versionCode, hardware pass evidence, platform skips, release notes, local package gates, tag push, workflow watch, release verification, and branch resync follow-through.",
       "skipReason": "",
       "skipRequestedBy": ""
     }
