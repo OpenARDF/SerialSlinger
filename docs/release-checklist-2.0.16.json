@@ -80,8 +80,8 @@
     },
     {
       "id": "merged-to-main",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "2026-07-28 main was fast-forwarded from bf36717 to 90e9fb2 with git merge --ff-only Development_Android before tagging v2.0.16.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
