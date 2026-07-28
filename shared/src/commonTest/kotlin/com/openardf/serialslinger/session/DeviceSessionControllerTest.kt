@@ -83,8 +83,11 @@ class DeviceSessionControllerTest {
 
     @Test
     fun probeDeviceIdentityTreatsNoInfoReplyAsUnavailable() {
-        val result = DeviceSessionController.probeDeviceIdentity(FakeDeviceTransport())
+        val transport = FakeDeviceTransport()
 
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+
+        assertEquals(listOf("INF", "INF"), transport.sentCommands)
         assertEquals(null, result.deviceUniqueId)
         assertFalse(result.recognizedInfoResponse)
         assertEquals(
@@ -96,6 +99,61 @@ class DeviceSessionControllerTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun probeDeviceIdentityRetriesAfterMalformedInfResponse() {
+        val transport =
+            FakeDeviceTransport(
+                scriptedResponseSequences =
+                    mapOf(
+                        "INF" to
+                            listOf(
+                                listOf("I\uFFFD\uFFFDINF"),
+                                listOf(
+                                    "* INF product=SignalSlinger update=UPD",
+                                    "* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200",
+                                ),
+                            ),
+                    ),
+            )
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+
+        assertEquals(listOf("INF", "INF"), transport.sentCommands)
+        assertEquals(null, result.deviceUniqueId)
+        assertTrue(result.recognizedInfoResponse)
+        assertEquals(
+            listOf(
+                "I\uFFFD\uFFFDINF",
+                "* INF product=SignalSlinger update=UPD",
+                "* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200",
+            ),
+            result.linesReceived,
+        )
+    }
+
+    @Test
+    fun probeDeviceIdentityDoesNotAcceptDelayedVersionResponseAsInf() {
+        val transport =
+            FakeDeviceTransport(
+                scriptedResponseSequences =
+                    mapOf(
+                        "INF" to
+                            listOf(
+                                listOf("* SW Ver: 2.0.2 HW Build: 3.5"),
+                                listOf(
+                                    "* INF product=SignalSlinger update=UPD",
+                                    "* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200",
+                                ),
+                            ),
+                    ),
+            )
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+
+        assertEquals(listOf("INF", "INF"), transport.sentCommands)
+        assertTrue(result.recognizedInfoResponse)
     }
 
     @Test
@@ -507,6 +565,38 @@ class DeviceSessionControllerTest {
         )
         assertEquals("BL0.13", snapshot.info.bootloaderVersion)
         assertEquals(1, snapshot.info.bootloaderProtocolVersion)
+    }
+
+    @Test
+    fun connectAndLoadRetriesInfAfterMalformedEarlyResponse() {
+        val transport =
+            FakeDeviceTransport(
+                scriptedResponses =
+                    mapOf(
+                        "FUN" to listOf("* SW Ver: 2.0.2 HW Build: 3.4"),
+                    ),
+                scriptedResponseSequences =
+                    mapOf(
+                        "INF" to
+                            listOf(
+                                listOf("I\uFFFD\uFFFDINF"),
+                                listOf(
+                                    "* INF product=SignalSlinger update=UPD",
+                                    "* INF sw=2.0.2 hw=3.4 app=0x2000 baud=115200",
+                                    "* INF bl=BL0.13 proto=1",
+                                ),
+                            ),
+                    ),
+            )
+
+        val result = DeviceSessionController.connectAndLoad(transport)
+        val snapshot = assertNotNull(result.state.snapshot)
+
+        assertEquals(listOf("INF", "INF"), transport.sentCommands.filter { it == "INF" })
+        assertTrue(snapshot.info.identityReportReceived)
+        assertEquals(null, snapshot.info.deviceUniqueId)
+        assertEquals("2.0.2", snapshot.info.softwareVersion)
+        assertEquals("BL0.13", snapshot.info.bootloaderVersion)
     }
 
     @Test

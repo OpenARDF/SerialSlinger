@@ -136,23 +136,38 @@ data class DeviceSubmitResult(
 object DeviceSessionController {
     fun probeDeviceIdentity(transport: DeviceTransport): DeviceIdentityProbeResult {
         val command = "INF"
-        val sentAtMs = platformCurrentTimeMillis()
-        transport.sendCommands(listOf(command))
-        val responseLines = transport.readAvailableLines()
-        val receivedAtMs = platformCurrentTimeMillis()
-        val infoPatches = responseLines.mapNotNull { line ->
-            SignalSlingerProtocolCodec.parseReportLine(line)?.deviceInfoPatch
+        val linesReceived = mutableListOf<String>()
+        val traceEntries = mutableListOf<SerialTraceEntry>()
+
+        repeat(DEVICE_IDENTITY_PROBE_ATTEMPTS) {
+            val sentAtMs = platformCurrentTimeMillis()
+            transport.sendCommands(listOf(command))
+            traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
+
+            val responseLines = transport.readAvailableLines()
+            val receivedAtMs = platformCurrentTimeMillis()
+            linesReceived += responseLines
+            traceEntries += responseLines.map { line ->
+                SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
+            }
+            val infoPatches = responseLines.mapNotNull { line ->
+                SignalSlingerProtocolCodec.parseReportLine(line)?.deviceInfoPatch
+            }.filter { it.identityReportReceived == true }
+            if (infoPatches.isNotEmpty()) {
+                return DeviceIdentityProbeResult(
+                    deviceUniqueId = infoPatches.mapNotNull { it.deviceUniqueId }.lastOrNull(),
+                    recognizedInfoResponse = true,
+                    linesReceived = linesReceived,
+                    traceEntries = traceEntries,
+                )
+            }
         }
 
         return DeviceIdentityProbeResult(
-            deviceUniqueId = infoPatches.mapNotNull { it.deviceUniqueId }.lastOrNull(),
-            recognizedInfoResponse = infoPatches.isNotEmpty(),
-            linesReceived = responseLines,
-            traceEntries =
-                listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)) +
-                    responseLines.map { line ->
-                        SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
-                    },
+            deviceUniqueId = null,
+            recognizedInfoResponse = false,
+            linesReceived = linesReceived,
+            traceEntries = traceEntries,
         )
     }
 
@@ -201,7 +216,7 @@ object DeviceSessionController {
         val lines = mutableListOf<String>()
         val traceEntries = mutableListOf<SerialTraceEntry>()
         var updatedState = state.copy(connectionState = ConnectionState.CONNECTED)
-        var infoCommandSent = false
+        var identityReportReceivedDuringLoad = false
         val bootstrapCommands = SignalSlingerFirmwareSupport.bootstrapLoadCommands()
         var reportReceived = false
         fun notifyReportReceived(responseLines: List<String>) {
@@ -260,7 +275,8 @@ object DeviceSessionController {
                 notifyReportReceived(intervention.linesReceived)
                 updatedState = intervention.state
             }
-            infoCommandSent = true
+            identityReportReceivedDuringLoad =
+                updatedState.snapshot?.info?.identityReportReceived == true
         }
 
         val firmwareProfile = SignalSlingerFirmwareSupport.resolve(
@@ -299,7 +315,7 @@ object DeviceSessionController {
         val signalSlingerLoaded =
             updatedState.snapshot?.info?.productName.equals("SignalSlinger", ignoreCase = true)
         if (
-            (signalSlingerLoaded && !infoCommandSent) ||
+            (signalSlingerLoaded && !identityReportReceivedDuringLoad) ||
             (!signalSlingerLoaded && updatedState.snapshot?.info?.bootloaderVersion.isNullOrBlank())
         ) {
             val command = "INF"
@@ -352,6 +368,8 @@ object DeviceSessionController {
             traceEntries = traceEntries,
         )
     }
+
+    private const val DEVICE_IDENTITY_PROBE_ATTEMPTS = 2
 
     private fun DeviceSessionState.preparingForIdentityReport(): DeviceSessionState =
         copy(
