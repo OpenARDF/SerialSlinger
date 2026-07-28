@@ -40,6 +40,7 @@ import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceIdentityCheckPurpose
 import com.openardf.serialslinger.session.DeviceIdentityDecision
 import com.openardf.serialslinger.session.DeviceIdentityObservation
+import com.openardf.serialslinger.session.DeviceIdentityProbeResult
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSubmitResult
@@ -132,6 +133,15 @@ private class ConnectedSignalSlingerIdentityChangedException(
 ) : IllegalStateException(
     "A different SignalSlinger was detected on ${target.label}. " +
         "The requested operation was cancelled while SerialSlinger reloads the attached device.",
+)
+
+private class ConnectedSignalSlingerIdentityUnavailableException(
+    val expectedIdentity: DeviceIdentityObservation,
+    val target: AndroidConnectionTarget,
+    val probeResult: DeviceIdentityProbeResult,
+) : IllegalStateException(
+    "SerialSlinger could not verify that the SignalSlinger on ${target.label} is still " +
+        "${expectedIdentity.deviceIdentityLabel()}. The requested operation was not performed.",
 )
 
 private data class LoadedSignalSlingerIdentity(
@@ -5049,10 +5059,42 @@ object AndroidSessionController {
                 )
             DeviceIdentityDecision.CANCEL -> Unit
         }
-        error(
-            "SerialSlinger could not verify that the SignalSlinger on ${resolvedTarget.label} is still " +
-                "${expectedIdentity.observation.deviceIdentityLabel()}. " +
-                "The requested operation was not performed.",
+        throw ConnectedSignalSlingerIdentityUnavailableException(
+            expectedIdentity = expectedIdentity.observation,
+            target = resolvedTarget,
+            probeResult = result,
+        )
+    }
+
+    private fun logIdentityProbeFailure(failure: ConnectedSignalSlingerIdentityUnavailableException) {
+        appendSessionLogEntries(
+            title = "Device Identity Check",
+            entries =
+                buildList {
+                    add(
+                        AndroidLogEntry(
+                            failure.message ?: failure.toString(),
+                            AndroidLogCategory.APP,
+                        ),
+                    )
+                    add(
+                        AndroidLogEntry(
+                            "No recognizable INF identity report was received after " +
+                                "${failure.probeResult.attemptCount} attempts; " +
+                                "${failure.probeResult.linesReceived.size} response lines were captured.",
+                            AndroidLogCategory.APP,
+                        ),
+                    )
+                    addAll(
+                        failure.probeResult.traceEntries.map { trace ->
+                            AndroidLogEntry(
+                                "${trace.direction.label}(identity check) ${trace.payload}",
+                                AndroidLogCategory.SERIAL,
+                                trace.timestampMs,
+                            )
+                        },
+                    )
+                },
         )
     }
 
@@ -5139,8 +5181,11 @@ object AndroidSessionController {
                 resolvedTransport.transport.disconnect()
             }
         }
-        (result.exceptionOrNull() as? ConnectedSignalSlingerIdentityChangedException)?.let { identityChange ->
-            scheduleConnectedSignalSlingerReload(context, identityChange)
+        when (val failure = result.exceptionOrNull()) {
+            is ConnectedSignalSlingerIdentityChangedException ->
+                scheduleConnectedSignalSlingerReload(context, failure)
+            is ConnectedSignalSlingerIdentityUnavailableException ->
+                logIdentityProbeFailure(failure)
         }
         return result
     }

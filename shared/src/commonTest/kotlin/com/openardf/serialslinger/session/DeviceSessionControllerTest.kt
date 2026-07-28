@@ -34,6 +34,7 @@ class DeviceSessionControllerTest {
         assertEquals(listOf("INF"), transport.sentCommands)
         assertEquals("314A323536384E171D00321700000000", result.deviceUniqueId)
         assertTrue(result.recognizedInfoResponse)
+        assertEquals(1, result.attemptCount)
         assertEquals(4, result.traceEntries.size)
         assertEquals(
             DeviceIdentityComparison.MATCH,
@@ -87,9 +88,10 @@ class DeviceSessionControllerTest {
 
         val result = DeviceSessionController.probeDeviceIdentity(transport)
 
-        assertEquals(listOf("INF", "INF"), transport.sentCommands)
+        assertEquals(listOf("INF", "INF", "INF"), transport.sentCommands)
         assertEquals(null, result.deviceUniqueId)
         assertFalse(result.recognizedInfoResponse)
+        assertEquals(3, result.attemptCount)
         assertEquals(
             DeviceIdentityComparison.UNAVAILABLE,
             result.comparisonWith(
@@ -123,6 +125,7 @@ class DeviceSessionControllerTest {
         assertEquals(listOf("INF", "INF"), transport.sentCommands)
         assertEquals(null, result.deviceUniqueId)
         assertTrue(result.recognizedInfoResponse)
+        assertEquals(2, result.attemptCount)
         assertEquals(
             listOf(
                 "I\uFFFD\uFFFDINF",

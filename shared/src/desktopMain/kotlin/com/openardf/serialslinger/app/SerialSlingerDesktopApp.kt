@@ -56,6 +56,7 @@ import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceIdentityCheckPurpose
 import com.openardf.serialslinger.session.DeviceIdentityDecision
 import com.openardf.serialslinger.session.DeviceIdentityObservation
+import com.openardf.serialslinger.session.DeviceIdentityProbeResult
 import com.openardf.serialslinger.session.DeviceSessionController
 import com.openardf.serialslinger.session.DeviceSessionState
 import com.openardf.serialslinger.session.DeviceSessionWorkflow
@@ -281,6 +282,15 @@ private class ConnectedDeviceIdentityChangedException(
     val expectedIdentity: DeviceIdentityObservation,
     val observedIdentity: DeviceIdentityObservation,
 ) : IllegalStateException("A different SignalSlinger was detected on $portPath.")
+
+private class ConnectedDeviceIdentityUnavailableException(
+    val portPath: String,
+    val expectedIdentity: DeviceIdentityObservation,
+    val probeResult: DeviceIdentityProbeResult,
+) : IllegalStateException(
+    "SerialSlinger could not verify that the SignalSlinger on $portPath is still " +
+        "${expectedIdentity.deviceIdentityLabel()}. The requested operation was not performed.",
+)
 
 private class DesktopControlServer private constructor(
     private val frame: SerialSlingerDesktopFrame,
@@ -867,6 +877,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var lastsDurationDialogOpen: Boolean = false
     private var automaticFirmwareUpdateCheckInProgress: Boolean = false
     private var automaticFirmwareUpdatePromptVisible: Boolean = false
+    private var appMessageDialogDepth: Int = 0
     private var lastAutomaticFirmwareOfferSnapshotKey: String? = null
     private var connectedDeviceIdentityReloadInProgress: Boolean = false
     private var lastConnectedDeviceIdentityProbeAtMs: Long = 0L
@@ -1570,40 +1581,47 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         messageType: Int = JOptionPane.INFORMATION_MESSAGE,
     ) {
         val displayMessage = plainTextDialogMessage(message)
-        if (!messageContainsSelectableCommandSuggestions(message)) {
-            val component =
-                if (messageNeedsWrappedDialog(displayMessage)) {
-                    val rows = wrappedDialogRows(displayMessage)
-                    JScrollPane(
-                        wrappedDialogTextArea(
-                            message = displayMessage,
-                            rows = rows,
-                            columns = 54,
-                            monospaced = false,
-                        ),
-                    ).apply {
-                        preferredSize = wrappedDialogPreferredSize(rows)
-                        border = BorderFactory.createEmptyBorder()
+        appMessageDialogDepth += 1
+        try {
+            if (!messageContainsSelectableCommandSuggestions(message)) {
+                val component =
+                    if (messageNeedsWrappedDialog(displayMessage)) {
+                        val rows = wrappedDialogRows(displayMessage)
+                        JScrollPane(
+                            wrappedDialogTextArea(
+                                message = displayMessage,
+                                rows = rows,
+                                columns = 54,
+                                monospaced = false,
+                            ),
+                        ).apply {
+                            preferredSize = wrappedDialogPreferredSize(rows)
+                            border = BorderFactory.createEmptyBorder()
+                        }
+                    } else {
+                        displayMessage
                     }
-                } else {
-                    displayMessage
-                }
-            JOptionPane.showMessageDialog(this, component, title, messageType)
-            return
-        }
-
-        val textArea = wrappedDialogTextArea(
-            message = displayMessage,
-            rows = 14,
-            columns = 76,
-            monospaced = true,
-        )
-        val scrollPane =
-            JScrollPane(textArea).apply {
-                preferredSize = Dimension(760, 320)
+                JOptionPane.showMessageDialog(this, component, title, messageType)
+            } else {
+                val textArea = wrappedDialogTextArea(
+                    message = displayMessage,
+                    rows = 14,
+                    columns = 76,
+                    monospaced = true,
+                )
+                val scrollPane =
+                    JScrollPane(textArea).apply {
+                        preferredSize = Dimension(760, 320)
+                    }
+                JOptionPane.showMessageDialog(this, scrollPane, title, messageType)
             }
-        JOptionPane.showMessageDialog(this, scrollPane, title, messageType)
+        } finally {
+            appMessageDialogDepth = (appMessageDialogDepth - 1).coerceAtLeast(0)
+        }
     }
+
+    private val appMessageDialogVisible: Boolean
+        get() = appMessageDialogDepth > 0
 
     private fun plainTextDialogMessage(message: String): String {
         if (!message.trimStart().startsWith("<html", ignoreCase = true)) {
@@ -2819,10 +2837,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun maybeScheduleConnectedDeviceIdentityProbe() {
         if (
-            backgroundWorkInProgress ||
-            connectedDeviceIdentityReloadInProgress ||
-            automaticFirmwareUpdatePromptVisible ||
-            temperatureLogSampleInProgress.get()
+            DesktopAutomaticWorkPolicy.shouldDeferIdentityProbe(
+                backgroundWorkInProgress = backgroundWorkInProgress,
+                identityReloadInProgress = connectedDeviceIdentityReloadInProgress,
+                firmwarePromptVisible = automaticFirmwareUpdatePromptVisible,
+                appMessageDialogVisible = appMessageDialogVisible,
+                deviceDataSampleInProgress = temperatureLogSampleInProgress.get(),
+            )
         ) {
             return
         }
@@ -2842,6 +2863,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
         if (!connectedDeviceIdentityProbeInProgress.compareAndSet(false, true)) {
+            return
+        }
+        if (
+            DesktopAutomaticWorkPolicy.shouldDeferIdentityProbe(
+                backgroundWorkInProgress = backgroundWorkInProgress,
+                identityReloadInProgress = connectedDeviceIdentityReloadInProgress,
+                firmwarePromptVisible = automaticFirmwareUpdatePromptVisible,
+                appMessageDialogVisible = appMessageDialogVisible,
+                deviceDataSampleInProgress = temperatureLogSampleInProgress.get(),
+            )
+        ) {
+            connectedDeviceIdentityProbeInProgress.set(false)
             return
         }
         lastConnectedDeviceIdentityProbeAtMs = nowMs
@@ -7612,7 +7645,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             playCompletionBeep()
             showAppMessageDialog(message)
-            promptProgramAnother(serialVerification = serialVerification)
         }
     }
 
@@ -8785,27 +8817,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }.getOrDefault(false)
     }
 
-    private fun promptProgramAnother(serialVerification: Boolean) {
-        val choice = JOptionPane.showOptionDialog(
-            this,
-            "Program another?",
-            "Program Another",
-            JOptionPane.DEFAULT_OPTION,
-            JOptionPane.PLAIN_MESSAGE,
-            null,
-            arrayOf("Yes", "Exit"),
-            "Yes",
-        )
-        if (choice == 0) {
-            Timer(1) {
-                chooseSignalSlingerWorkshopSetupPackage(serialVerification = serialVerification)
-            }.apply {
-                isRepeats = false
-                start()
-            }
-        }
-    }
-
     private fun setAutomaticFirmwareUpdatesEnabled(enabled: Boolean) {
         if (displayPreferences.automaticFirmwareUpdatesEnabled == enabled) {
             return
@@ -9343,8 +9354,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 "SignalSlinger update completed.\n\nSerialSlinger could not refresh the displayed device information. Use Reload SignalSlinger Data to refresh it."
             }
             playCompletionBeep()
-            JOptionPane.showMessageDialog(this, message)
-            promptProgramAnother(serialVerification = true)
+            showAppMessageDialog(message)
         }
     }
 
@@ -10135,7 +10145,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         verifyConnectedIdentity: Boolean = true,
         task: () -> Unit,
     ) {
-        if (backgroundWorkInProgress) {
+        if (backgroundWorkInProgress || appMessageDialogVisible) {
             return
         }
         backgroundWorkInProgress = true
@@ -10160,16 +10170,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 failure = exception
             } finally {
                 SwingUtilities.invokeLater {
-                    backgroundWorkInProgress = false
                     val errorDialogTitle = busyDialogTitleText
                     hideBusyDialog()
                     clearBusyProgress()
                     busyDialogTitleText = "Please Wait"
                     busyDialogPrimaryText = null
                     setBusy(false)
-                    updateAdvancedDeviceDataRefreshTimer()
-                    val exception = failure ?: return@invokeLater
+                    val exception = failure
+                    if (exception == null) {
+                        backgroundWorkInProgress = false
+                        updateAdvancedDeviceDataRefreshTimer()
+                        return@invokeLater
+                    }
                     if (exception is ConnectedDeviceIdentityChangedException) {
+                        backgroundWorkInProgress = false
+                        updateAdvancedDeviceDataRefreshTimer()
                         handleConnectedDeviceIdentityChanged(
                             portPath = exception.portPath,
                             expectedIdentity = exception.expectedIdentity,
@@ -10177,29 +10192,37 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         )
                         return@invokeLater
                     }
-                    if (isTransportCommunicationFailure(exception)) {
-                        handleTransportCommunicationFailure(
-                            message = exception.message ?: exception.toString(),
-                            showDialog = showErrorDialog,
-                        )
-                    } else {
-                        if (showErrorDialog) {
-                            showAppMessageDialog(
-                                exception.message ?: exception.toString(),
-                                title = errorDialogTitle,
-                                messageType = JOptionPane.WARNING_MESSAGE,
+                    try {
+                        if (isTransportCommunicationFailure(exception)) {
+                            handleTransportCommunicationFailure(
+                                message = exception.message ?: exception.toString(),
+                                showDialog = showErrorDialog,
                             )
+                        } else {
+                            val message = exception.message ?: exception.toString()
+                            val identityFailure = exception as? ConnectedDeviceIdentityUnavailableException
+                            appendLog(
+                                if (identityFailure != null) "Device Identity Check" else "Error",
+                                identityFailure?.let(::identityProbeFailureLogEntries)
+                                    ?: listOf(
+                                        DesktopLogEntry(
+                                            message,
+                                            DesktopLogCategory.APP,
+                                        ),
+                                    ),
+                            )
+                            setStatus("Error: ${exception.message ?: exception::class.simpleName}")
+                            if (showErrorDialog) {
+                                showAppMessageDialog(
+                                    message,
+                                    title = errorDialogTitle,
+                                    messageType = JOptionPane.WARNING_MESSAGE,
+                                )
+                            }
                         }
-                        appendLog(
-                            "Error",
-                            listOf(
-                                DesktopLogEntry(
-                                    exception.message ?: exception.toString(),
-                                    DesktopLogCategory.APP,
-                                ),
-                            ),
-                        )
-                        setStatus("Error: ${exception.message ?: exception::class.simpleName}")
+                    } finally {
+                        backgroundWorkInProgress = false
+                        updateAdvancedDeviceDataRefreshTimer()
                     }
                 }
             }
@@ -10239,11 +10262,33 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 )
             DeviceIdentityDecision.CANCEL -> Unit
         }
-        error(
-            "SerialSlinger could not verify that the SignalSlinger on $portPath is still " +
-                "${expectedIdentity.deviceIdentityLabel()}. The requested operation was not performed.",
+        throw ConnectedDeviceIdentityUnavailableException(
+            portPath = portPath,
+            expectedIdentity = expectedIdentity,
+            probeResult = result,
         )
     }
+
+    private fun identityProbeFailureLogEntries(
+        failure: ConnectedDeviceIdentityUnavailableException,
+    ): List<DesktopLogEntry> =
+        buildList {
+            add(
+                DesktopLogEntry(
+                    failure.message ?: failure.toString(),
+                    DesktopLogCategory.APP,
+                ),
+            )
+            add(
+                DesktopLogEntry(
+                    "No recognizable INF identity report was received after " +
+                        "${failure.probeResult.attemptCount} attempts; " +
+                        "${failure.probeResult.linesReceived.size} response lines were captured.",
+                    DesktopLogCategory.APP,
+                ),
+            )
+            addAll(traceEntriesToLogEntries(failure.probeResult.traceEntries, suffix = "(identity check)"))
+        }
 
     private fun setBusy(isBusy: Boolean) {
         autoDetectButton.isEnabled = !isBusy
@@ -11524,10 +11569,26 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun captureDeviceDataSample(writeTemperatureLog: Boolean) {
-        if (backgroundWorkInProgress || connectedDeviceIdentityProbeInProgress.get()) {
+        if (
+            DesktopAutomaticWorkPolicy.shouldDeferDeviceDataSample(
+                backgroundWorkInProgress = backgroundWorkInProgress,
+                appMessageDialogVisible = appMessageDialogVisible,
+                identityProbeInProgress = connectedDeviceIdentityProbeInProgress.get(),
+            )
+        ) {
             return
         }
         if (!temperatureLogSampleInProgress.compareAndSet(false, true)) {
+            return
+        }
+        if (
+            DesktopAutomaticWorkPolicy.shouldDeferDeviceDataSample(
+                backgroundWorkInProgress = backgroundWorkInProgress,
+                appMessageDialogVisible = appMessageDialogVisible,
+                identityProbeInProgress = connectedDeviceIdentityProbeInProgress.get(),
+            )
+        ) {
+            temperatureLogSampleInProgress.set(false)
             return
         }
         fun abortMissingConnection() {
@@ -12197,9 +12258,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
         if (
-            automaticFirmwareUpdateCheckInProgress ||
-            automaticFirmwareUpdatePromptVisible ||
-            backgroundWorkInProgress
+            DesktopAutomaticWorkPolicy.shouldDeferFirmwareOffer(
+                firmwareCheckInProgress = automaticFirmwareUpdateCheckInProgress,
+                firmwarePromptVisible = automaticFirmwareUpdatePromptVisible,
+                backgroundWorkInProgress = backgroundWorkInProgress,
+                appMessageDialogVisible = appMessageDialogVisible,
+            )
         ) {
             Timer(350) {
                 maybeOfferAutomaticFirmwareUpdate(portPath)
@@ -12251,9 +12315,27 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     currentConnectedPortPath != portPath ||
                     !loadedSnapshot?.info?.productName.orEmpty().trim().equals(productName, ignoreCase = true) ||
                     loadedSnapshot?.info?.hardwareBuild.orEmpty().trim() != hardwareBuild ||
-                    loadedSnapshot?.info?.softwareVersion.orEmpty().trim() != firmwareVersion ||
-                    backgroundWorkInProgress
+                    loadedSnapshot?.info?.softwareVersion.orEmpty().trim() != firmwareVersion
                 ) {
+                    return@invokeLater
+                }
+                if (
+                    DesktopAutomaticWorkPolicy.shouldDeferFirmwareOffer(
+                        firmwareCheckInProgress = false,
+                        firmwarePromptVisible = automaticFirmwareUpdatePromptVisible,
+                        backgroundWorkInProgress = backgroundWorkInProgress,
+                        appMessageDialogVisible = appMessageDialogVisible,
+                    )
+                ) {
+                    if (lastAutomaticFirmwareOfferSnapshotKey == snapshotKey) {
+                        lastAutomaticFirmwareOfferSnapshotKey = null
+                    }
+                    Timer(350) {
+                        maybeOfferAutomaticFirmwareUpdate(portPath)
+                    }.apply {
+                        isRepeats = false
+                        start()
+                    }
                     return@invokeLater
                 }
                 automaticFirmwareUpdatePromptVisible = true
@@ -13386,8 +13468,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             setStatus("Communication error: $message")
         }
         if (showDialog) {
-            JOptionPane.showMessageDialog(
-                this,
+            showAppMessageDialog(
                 "$message\n\nThe connection has been marked disconnected. You can reconnect or click Find Device again.",
             )
         }
@@ -13436,7 +13517,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 automaticDeviceTimeSyncTimer = null
                 return@Timer
             }
-            if (!backgroundWorkInProgress) {
+            if (!backgroundWorkInProgress && !appMessageDialogVisible) {
                 automaticDeviceTimeSyncTimer?.stop()
                 automaticDeviceTimeSyncTimer = null
                 syncDeviceTimeToSystem()

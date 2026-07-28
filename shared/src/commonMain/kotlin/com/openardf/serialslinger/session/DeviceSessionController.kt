@@ -9,6 +9,7 @@ import com.openardf.serialslinger.model.EventType
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.WritePlan
 import com.openardf.serialslinger.platform.platformCurrentTimeMillis
+import com.openardf.serialslinger.platform.platformSleep
 import com.openardf.serialslinger.protocol.DeviceReportUpdate
 import com.openardf.serialslinger.protocol.SignalSlingerFirmwareSupport
 import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
@@ -31,6 +32,7 @@ data class DeviceLoadInterventionResult(
 data class DeviceIdentityProbeResult(
     val deviceUniqueId: String?,
     val recognizedInfoResponse: Boolean,
+    val attemptCount: Int,
     val linesReceived: List<String>,
     val traceEntries: List<SerialTraceEntry>,
 ) {
@@ -139,7 +141,7 @@ object DeviceSessionController {
         val linesReceived = mutableListOf<String>()
         val traceEntries = mutableListOf<SerialTraceEntry>()
 
-        repeat(DEVICE_IDENTITY_PROBE_ATTEMPTS) {
+        repeat(DEVICE_IDENTITY_PROBE_ATTEMPTS) { attemptIndex ->
             val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
@@ -157,15 +159,20 @@ object DeviceSessionController {
                 return DeviceIdentityProbeResult(
                     deviceUniqueId = infoPatches.mapNotNull { it.deviceUniqueId }.lastOrNull(),
                     recognizedInfoResponse = true,
+                    attemptCount = attemptIndex + 1,
                     linesReceived = linesReceived,
                     traceEntries = traceEntries,
                 )
+            }
+            if (attemptIndex < DEVICE_IDENTITY_PROBE_ATTEMPTS - 1) {
+                platformSleep(DEVICE_IDENTITY_PROBE_RETRY_SETTLE_MS)
             }
         }
 
         return DeviceIdentityProbeResult(
             deviceUniqueId = null,
             recognizedInfoResponse = false,
+            attemptCount = DEVICE_IDENTITY_PROBE_ATTEMPTS,
             linesReceived = linesReceived,
             traceEntries = traceEntries,
         )
@@ -369,7 +376,8 @@ object DeviceSessionController {
         )
     }
 
-    private const val DEVICE_IDENTITY_PROBE_ATTEMPTS = 2
+    private const val DEVICE_IDENTITY_PROBE_ATTEMPTS = 3
+    private const val DEVICE_IDENTITY_PROBE_RETRY_SETTLE_MS = 150L
 
     private fun DeviceSessionState.preparingForIdentityReport(): DeviceSessionState =
         copy(
