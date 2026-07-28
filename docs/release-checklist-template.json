@@ -1,8 +1,16 @@
 {
+  "release": "vX.Y.Z",
+  "previousRelease": "vX.Y.Z",
+  "repository": "OpenARDF/SerialSlinger",
+  "channel": "stable",
+  "sourceCommit": "",
   "version": "x.y.z",
+  "androidVersionCode": "",
+  "releaseNotesFile": "docs/release-notes/vX.Y.Z.md",
   "items": [
     {
       "id": "version-aligned",
+      "description": "Confirm the shared desktop/jDeploy version, npm package version, package-lock version, and Android versionName all resolve to the same plain x.y.z release label.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -10,6 +18,7 @@
     },
     {
       "id": "android-version-code",
+      "description": "Increment androidApp/build.gradle.kts versionCode from the previously deployed Android build.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -17,6 +26,7 @@
     },
     {
       "id": "release-preflight",
+      "description": "Run the jDeploy release preflight and record the package version, target tag, workflow target, and desktop bundle verification evidence.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -24,6 +34,7 @@
     },
     {
       "id": "platform-parity-review",
+      "description": "Review Android, desktop, and shared changes for parity; either carry behavior across platforms or record why a platform-specific difference is intentional.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -31,6 +42,7 @@
     },
     {
       "id": "android-regression",
+      "description": "Run the Android tablet regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -38,6 +50,7 @@
     },
     {
       "id": "desktop-regression",
+      "description": "Run the macOS desktop UI regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -45,6 +58,7 @@
     },
     {
       "id": "windows-intel-x64-smoke",
+      "description": "Install and launch the packaged Windows Intel x64 app, or record an explicit skipped-check waiver with requester.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -52,6 +66,7 @@
     },
     {
       "id": "windows-arm64-smoke",
+      "description": "Install and launch the packaged Windows ARM64 app, or record an explicit skipped-check waiver with requester.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -59,6 +74,7 @@
     },
     {
       "id": "linux-intel-x64-smoke",
+      "description": "Install and launch the packaged Linux Intel x64 app, or record an explicit skipped-check waiver with requester.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -66,6 +82,7 @@
     },
     {
       "id": "linux-arm64-smoke",
+      "description": "Install and launch the packaged Linux ARM64 app, or record an explicit skipped-check waiver with requester.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -73,6 +90,7 @@
     },
     {
       "id": "android-release-notes",
+      "description": "Create and validate checked release notes, then provide terse Play Console Android notes from the Android release notes section.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -80,6 +98,7 @@
     },
     {
       "id": "merged-to-main",
+      "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -87,6 +106,7 @@
     },
     {
       "id": "tag-pushed",
+      "description": "Create and push the annotated vX.Y.Z release tag at the verified main release commit.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -94,6 +114,7 @@
     },
     {
       "id": "workflow-published",
+      "description": "Watch the jDeploy Release GitHub Actions workflow through publication and record the run ID, conclusion, and duration.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -101,6 +122,7 @@
     },
     {
       "id": "release-verified",
+      "description": "Verify the GitHub release is published, non-draft, non-prerelease unless requested, targets the intended commit, and exposes downloadable assets.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -108,6 +130,7 @@
     },
     {
       "id": "final-checklist-audit",
+      "description": "Run the final checklist guard, commit the post-tag evidence update, and synchronize main and Development_Android without moving the tag.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",

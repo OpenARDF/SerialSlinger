@@ -100,9 +100,15 @@ ensure(workflowText.includes('tags:\n      - "v*"'), "The jDeploy release workfl
 ensure(workflowText.includes("deploy_target: github"), "The jDeploy release workflow is not pinned to the GitHub release target.");
 ensure(workflowText.includes(`jdeploy_version: "${packageJson.devDependencies.jdeploy}"`), "The jDeploy workflow version does not match package.json's jdeploy devDependency.");
 ensure(workflowText.includes("Repair macOS jDeploy branding"), "The jDeploy workflow must repair macOS installer branding.");
+ensure(workflowText.includes("docs/release-notes/"), "The jDeploy workflow must use checked release notes when present.");
+ensure(workflowText.includes("--notes-file"), "The jDeploy workflow must publish checked release notes with gh release edit --notes-file when present.");
 ensure(
   fs.existsSync(path.join(repoRoot, "scripts", "repair-jdeploy-github-release-macos.sh")),
   "The macOS jDeploy installer branding repair script is missing.",
+);
+ensure(
+  fs.existsSync(path.join(repoRoot, "scripts", "check-release-notes.mjs")),
+  "The release-notes validation script is missing.",
 );
 const macosRepairScript = readFile(
   path.join(repoRoot, "scripts", "repair-jdeploy-github-release-macos.sh"),

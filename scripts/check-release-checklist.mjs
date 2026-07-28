@@ -2,6 +2,24 @@ import fs from "node:fs";
 import process from "node:process";
 
 const phases = {
+  template: [
+    "version-aligned",
+    "android-version-code",
+    "release-preflight",
+    "platform-parity-review",
+    "android-regression",
+    "desktop-regression",
+    "windows-intel-x64-smoke",
+    "windows-arm64-smoke",
+    "linux-intel-x64-smoke",
+    "linux-arm64-smoke",
+    "android-release-notes",
+    "merged-to-main",
+    "tag-pushed",
+    "workflow-published",
+    "release-verified",
+    "final-checklist-audit",
+  ],
   "pre-tag": [
     "version-aligned",
     "android-version-code",
@@ -39,7 +57,7 @@ const phases = {
 function usage() {
   console.error([
     "Usage:",
-    "  node ./scripts/check-release-checklist.mjs --file <checklist.json> [--phase pre-tag|final]",
+    "  node ./scripts/check-release-checklist.mjs --file <checklist.json> [--phase template|pre-tag|final]",
     "",
     "Each required checklist item must have status \"done\" with evidence, or status",
     "\"skipped\" with skipReason and skipRequestedBy.",
@@ -105,10 +123,41 @@ if (!Array.isArray(checklist.items)) {
 const itemById = new Map(checklist.items.map((item) => [item.id, item]));
 const failures = [];
 
+if (args.phase === "template") {
+  if (checklist.version !== "x.y.z") {
+    failures.push("template: version must be x.y.z.");
+  }
+  if (checklist.release && checklist.release !== "vX.Y.Z") {
+    failures.push("template: release must be vX.Y.Z when present.");
+  }
+  if (checklist.previousRelease && checklist.previousRelease !== "vX.Y.Z") {
+    failures.push("template: previousRelease must be vX.Y.Z when present.");
+  }
+  if (checklist.releaseNotesFile && checklist.releaseNotesFile !== "docs/release-notes/vX.Y.Z.md") {
+    failures.push("template: releaseNotesFile must be docs/release-notes/vX.Y.Z.md when present.");
+  }
+}
+
 for (const id of phases[args.phase]) {
   const item = itemById.get(id);
   if (!item) {
     failures.push(`Missing checklist item: ${id}`);
+    continue;
+  }
+
+  if (args.phase === "template") {
+    if (item.status !== "pending") {
+      failures.push(`${id}: template items must have status "pending".`);
+    }
+    if (nonBlank(item.evidence)) {
+      failures.push(`${id}: template items must not include evidence.`);
+    }
+    if (nonBlank(item.skipReason) || nonBlank(item.skipRequestedBy)) {
+      failures.push(`${id}: template items must not include skip metadata.`);
+    }
+    if (!nonBlank(item.description)) {
+      failures.push(`${id}: template items must include a description.`);
+    }
     continue;
   }
 

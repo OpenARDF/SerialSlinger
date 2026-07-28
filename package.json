@@ -28,6 +28,8 @@
     "jdeploy:pack-preview": "npm run jdeploy:package && npm pack --dry-run --ignore-scripts",
     "jdeploy:release-preflight": "node ./scripts/check-jdeploy-release-ready.mjs",
     "release:checklist": "node ./scripts/check-release-checklist.mjs",
+    "release:checklist:update": "node ./scripts/update-release-checklist.mjs",
+    "release:notes": "node ./scripts/check-release-notes.mjs",
     "prepublishOnly": "node ./scripts/check-jdeploy-publish.mjs"
   },
   "dependencies": {

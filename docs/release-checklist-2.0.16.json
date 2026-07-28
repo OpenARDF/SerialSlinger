@@ -1,5 +1,12 @@
 {
+  "release": "v2.0.16",
+  "previousRelease": "v2.0.15",
+  "repository": "OpenARDF/SerialSlinger",
+  "channel": "stable",
+  "sourceCommit": "71c115837ba27ba204fc78e24b5d91a06fd0a861",
   "version": "2.0.16",
+  "androidVersionCode": "24",
+  "releaseNotesFile": "docs/release-notes/v2.0.16.md",
   "items": [
     {
       "id": "version-aligned",

@@ -1,6 +1,6 @@
 # Packaging And Release
 
-This document collects the build, packaging, and release details that are useful for maintainers and contributors, while keeping the repository `README.md` focused on end users.
+This document collects packaging details that are useful for maintainers and contributors, while keeping the repository `README.md` focused on end users. The end-to-end release procedure is documented in [release-workflow.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-workflow.md).
 
 ## jDeploy Workflow
 
@@ -16,6 +16,7 @@ From the repository root:
 - `npm run jdeploy:pack-preview`
 - `npm run jdeploy:release-preflight`
 - `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
+- `npm run release:notes -- --checklist <checklist.json>`
 - `npm run release:checklist -- --file <checklist.json> --phase final`
 
 On macOS, local desktop scripts resolve JDK 17 through `/usr/libexec/java_home`.
@@ -43,6 +44,8 @@ Notes:
 - `npm run jdeploy:pack-preview` shows the exact npm and jDeploy package payload without publishing anything.
 - `npm run jdeploy:release-preflight` checks that the Gradle version, npm version, jDeploy workflow, intended `v*` release tag, and generated desktop jDeploy bundle are aligned before a public release tag is pushed.
 - `npm run release:checklist` verifies that every required release checklist item for a phase is either completed with evidence or explicitly skipped with a skip reason and requester.
+- `npm run release:checklist:update` records checklist evidence without hand-editing JSON.
+- `npm run release:notes` validates the checked release-notes file named by the checklist.
 
 ## Versioning Rules
 
@@ -91,7 +94,7 @@ The intended release flow is:
 5. run the automated Android tablet regression: `./scripts/android-regression.sh --serial <adb-serial>`
 6. run the desktop app regression series on macOS with a real attached SignalSlinger
 7. run packaged desktop smoke checks on Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64 when hosts are available, recording concrete evidence for each architecture or an explicit skip reason and requester
-8. generate terse Android release notes in plain language and provide them in a copyable text block for Play Console use
+8. create `docs/release-notes/vX.Y.Z.md` from [release-notes-template.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-notes-template.md), validate it with `npm run release:notes -- --checklist <checklist.json>`, and provide the Android release-notes section as copyable Play Console text
 9. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
 10. merge the desired release state to `main`
 11. create and push a tag like `v1.0.93`
@@ -109,7 +112,7 @@ Do not push a normal public release tag until both real-device regression passes
 
 Do not treat cross-platform desktop support as covered by the macOS regression alone. The release checklist must include packaged-app smoke items for Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64. If one of those architectures cannot be tested for a specific release, record it as a skipped checklist item with the concrete reason and the requester who accepted the risk. Linux install/run has been demonstrated, so a skipped Linux smoke item is an evidence gap for that release, not a statement that Linux is unsupported or only aspirational.
 
-The chosen public package identity is `serialslinger`, and the shared public and app version line is `1.0.93`.
+The chosen public package identity is `serialslinger`. The shared public and app version line is the current plain `x.y.z` value in `build.gradle.kts`.
 
 The publish guard is still enforced by [scripts/check-jdeploy-publish.mjs](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/scripts/check-jdeploy-publish.mjs) through `package.json`'s `prepublishOnly` hook. A real publish will stop until `SERIALSLINGER_ALLOW_JDEPLOY_PUBLISH=1` is intentionally set.
 

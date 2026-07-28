@@ -79,6 +79,18 @@ jdeploy-preflight:
 release-checklist file phase="pre-tag":
     npm run release:checklist -- --file "{{file}}" --phase "{{phase}}"
 
+# Mark one release-checklist item done with concrete evidence.
+release-checklist-done file item evidence:
+    npm run release:checklist:update -- --file "{{file}}" --id "{{item}}" --done-evidence "{{evidence}}"
+
+# Mark one release-checklist item skipped with the user's explicit waiver.
+release-checklist-skip file item requested_by reason:
+    npm run release:checklist:update -- --file "{{file}}" --id "{{item}}" --skip-requested-by "{{requested_by}}" --skip-reason "{{reason}}"
+
+# Validate the checked release-notes file named by a release checklist.
+release-notes-check checklist:
+    npm run release:notes -- --checklist "{{checklist}}"
+
 # Build the macOS app image.
 macos-app-image: local-version-bump
     {{gradle}} verifyDesktopPackagingEnvironment desktopAppImage
