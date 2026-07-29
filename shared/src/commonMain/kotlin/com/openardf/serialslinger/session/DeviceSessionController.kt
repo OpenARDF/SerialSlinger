@@ -165,13 +165,13 @@ object DeviceSessionController {
                     traceEntries = traceEntries,
                 )
             }
-            val preIdentityReportFirmwareObserved =
+            val preUidFirmwareObserved =
                 deviceInfoPatches.any { patch ->
                     patch.productName.equals("SignalSlinger", ignoreCase = true) &&
                         patch.softwareVersion != null &&
-                        !SignalSlingerFirmwareSupport.supportsIdentityReport(patch.softwareVersion)
+                        !SignalSlingerFirmwareSupport.supportsDeviceUniqueId(patch.softwareVersion)
                 }
-            if (preIdentityReportFirmwareObserved) {
+            if (preUidFirmwareObserved) {
                 return DeviceIdentityProbeResult(
                     deviceUniqueId = null,
                     recognizedInfoResponse = true,

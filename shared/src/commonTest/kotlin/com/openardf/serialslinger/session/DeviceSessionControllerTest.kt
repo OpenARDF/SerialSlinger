@@ -137,7 +137,7 @@ class DeviceSessionControllerTest {
     }
 
     @Test
-    fun probeDeviceIdentityRecognizesPreInfFirmwareFromLegacyVersionReport() {
+    fun probeDeviceIdentityRecognizesPreUidFirmwareFromLegacyVersionReport() {
         val transport =
             FakeDeviceTransport(
                 scriptedResponses =
@@ -170,17 +170,35 @@ class DeviceSessionControllerTest {
     }
 
     @Test
-    fun probeDeviceIdentityDoesNotAcceptDelayedVersionResponseAsInf() {
+    fun probeDeviceIdentityRecognizesFirmware202VersionReportAsNoUidIdentity() {
+        val transport =
+            FakeDeviceTransport(
+                scriptedResponses =
+                    mapOf(
+                        "INF" to listOf("* SW Ver: 2.0.2 HW Build: 3.5"),
+                    ),
+            )
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+
+        assertEquals(listOf("INF"), transport.sentCommands)
+        assertTrue(result.recognizedInfoResponse)
+        assertEquals(null, result.deviceUniqueId)
+    }
+
+    @Test
+    fun probeDeviceIdentityDoesNotTreatUidCapableVersionReportAsLegacyIdentity() {
         val transport =
             FakeDeviceTransport(
                 scriptedResponseSequences =
                     mapOf(
                         "INF" to
                             listOf(
-                                listOf("* SW Ver: 2.0.2 HW Build: 3.5"),
+                                listOf("* SW Ver: 2.0.3 HW Build: 3.5"),
                                 listOf(
                                     "* INF product=SignalSlinger update=UPD",
-                                    "* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200",
+                                    "* INF sw=2.0.3 hw=3.5 app=0x2000 baud=115200",
+                                    "* INF uid=42348279800058200110014400000000",
                                 ),
                             ),
                     ),

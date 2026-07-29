@@ -46,7 +46,7 @@ data class SignalSlingerFirmwareProfile(
 }
 
 object SignalSlingerFirmwareSupport {
-    private val identityReportMinimumVersion = SignalSlingerFirmwareVersion(2, 0, 2)
+    private val deviceUniqueIdMinimumVersion = SignalSlingerFirmwareVersion(2, 0, 3)
     private val versionBootstrapCommands = listOf("VER")
     private val sharedVerificationReadbackCommands: Map<SettingKey, List<String>> = mapOf(
         SettingKey.STATION_ID to listOf("ID"),
@@ -253,8 +253,8 @@ object SignalSlingerFirmwareSupport {
 
     fun bootstrapLoadCommands(): List<String> = versionBootstrapCommands
 
-    fun supportsIdentityReport(softwareVersion: String?): Boolean {
+    fun supportsDeviceUniqueId(softwareVersion: String?): Boolean {
         val parsedVersion = SignalSlingerFirmwareVersion.parse(softwareVersion) ?: return true
-        return parsedVersion >= identityReportMinimumVersion
+        return parsedVersion >= deviceUniqueIdMinimumVersion
     }
 }
