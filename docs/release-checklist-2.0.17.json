@@ -1,0 +1,124 @@
+{
+  "release": "v2.0.17",
+  "previousRelease": "v2.0.16",
+  "repository": "OpenARDF/SerialSlinger",
+  "channel": "stable",
+  "sourceCommit": "",
+  "version": "2.0.17",
+  "androidVersionCode": "25",
+  "releaseNotesFile": "docs/release-notes/v2.0.17.md",
+  "items": [
+    {
+      "id": "version-aligned",
+      "status": "done",
+      "evidence": "build.gradle.kts serialSlingerVersion=2.0.17 with blank suffix; package.json and package-lock.json version=2.0.17; Android versionName follows the shared root display version.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts versionCode incremented from 24 in v2.0.16 to 25 for v2.0.17.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "status": "done",
+      "evidence": "2026-07-28 npm run jdeploy:release-preflight passed for serialslinger@2.0.17, Gradle base/display/package version 2.0.17, target tag v2.0.17 absent on origin, GitHub releases workflow, and verified desktop jDeploy bundle.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "status": "done",
+      "evidence": "Reviewed changes since v2.0.16: shared DeviceIdentityObservation, clone comparison, and firmware-offer identity keys are consumed by Android and desktop; Android already uses the shared SignalSlinger firmware updater for forced-hardware recovery, while desktop termination interception and incremental file logging are intentionally JVM-only.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "status": "done",
+      "evidence": "Charles Scharlau reported on 2026-07-28 after the recovery and identity hardening tests that all testing was successful and explicitly requested no additional hardware tests for this deployment.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "desktop-regression",
+      "status": "done",
+      "evidence": "Charles Scharlau reported on 2026-07-28 after the real Mac and SignalSlinger recovery, reload, cold-start, identity, and setting tests that all testing was successful and explicitly requested no additional hardware tests for this deployment.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows Intel x64 host is available in this macOS release session; Charles Scharlau explicitly requested omission of additional hardware tests.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows ARM64 host is available in this macOS release session; Charles Scharlau explicitly requested omission of additional hardware tests.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux Intel x64 host is available in this macOS release session; Charles Scharlau explicitly requested omission of additional hardware tests.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux ARM64 host is available in this macOS release session; Charles Scharlau explicitly requested omission of additional hardware tests.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "android-release-notes",
+      "status": "done",
+      "evidence": "Validated Play Console notes: SerialSlinger 2.0.17 improves connected-device identity checks, reloads settings when modern and legacy SignalSlinger units are swapped, makes automatic firmware update offers more reliable, and preserves shared clone safeguards.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}

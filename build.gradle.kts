@@ -4,10 +4,10 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform) apply false
 }
 
-val serialSlingerVersion = "2.0.16"
+val serialSlingerVersion = "2.0.17"
 // Bump this suffix for every new testable change set so desktop and Android builds expose
 // an unmistakable version string during iterative testing. Clear it before a full release.
-val serialSlingerVersionSuffix = "g"
+val serialSlingerVersionSuffix = ""
 val serialSlingerDisplayVersion = serialSlingerVersion + serialSlingerVersionSuffix
 val serialSlingerPackageVersion =
     if (serialSlingerVersionSuffix.isBlank()) {
