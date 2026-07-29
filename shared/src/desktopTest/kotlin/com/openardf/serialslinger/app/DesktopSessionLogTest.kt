@@ -126,6 +126,36 @@ class DesktopSessionLogTest {
     }
 
     @Test
+    fun streamsFirmwareEntriesToDiskBeforeSectionFinishes() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val log = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC")),
+            appVersion = "1.2.3-test",
+            platformLabel = "TestOS 1.0",
+        )
+
+        val section = log.beginStreamingSection("Update SignalSlinger")
+        val firstRendered = section.append(
+            DesktopLogEntry(
+                message = "TX E frame addr=0x00002000 bytes=7",
+                category = DesktopLogCategory.SERIAL,
+                timestampMs = Instant.parse("2026-04-10T14:22:34Z").toEpochMilli(),
+            ),
+        )
+
+        val textBeforeFinish = Files.readString(log.currentLogFile())
+        assertTrue(textBeforeFinish.contains("[14:22:33] == Update SignalSlinger =="))
+        assertTrue(textBeforeFinish.contains("[14:22:34] [SERIAL] TX E frame addr=0x00002000 bytes=7"))
+        assertFalse(textBeforeFinish.endsWith("\n\n"))
+        assertEquals("[14:22:34] [SERIAL] TX E frame addr=0x00002000 bytes=7\n", firstRendered)
+
+        assertEquals("\n", section.finish())
+        assertEquals("", section.finish())
+        assertTrue(Files.readString(log.currentLogFile()).endsWith("\n\n"))
+    }
+
+    @Test
     fun archivesCurrentLogToNextIndexedSuffix() {
         val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
         val clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC"))

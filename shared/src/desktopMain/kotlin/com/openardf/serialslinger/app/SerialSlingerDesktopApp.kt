@@ -95,6 +95,7 @@ import java.awt.Taskbar
 import java.awt.Toolkit
 import java.awt.Window
 import java.awt.datatransfer.StringSelection
+import java.awt.desktop.QuitResponse
 import java.awt.event.AWTEventListener
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
@@ -248,7 +249,10 @@ fun main() {
     System.setProperty("apple.awt.application.name", "SerialSlinger")
     System.setProperty("com.apple.mrj.application.apple.menu.about.name", "SerialSlinger")
     SwingUtilities.invokeLater {
-        SerialSlingerDesktopFrame().isVisible = true
+        SerialSlingerDesktopFrame().apply {
+            installExternalTerminationProtection()
+            isVisible = true
+        }
     }
 }
 
@@ -256,6 +260,8 @@ private data class DesktopControlSnapshot(
     val version: String,
     val deviceMode: String,
     val busy: Boolean,
+    val exitProtected: Boolean,
+    val protectedOperation: String?,
     val connectionState: String,
     val connectionIndicator: String,
     val status: String,
@@ -384,6 +390,9 @@ private class DesktopControlServer private constructor(
             append(",")
             appendJsonField("deviceMode", snapshot.deviceMode)
             append(",\"busy\":").append(snapshot.busy)
+            append(",\"exitProtected\":").append(snapshot.exitProtected)
+            append(",")
+            appendJsonField("protectedOperation", snapshot.protectedOperation)
             append(",")
             appendJsonField("connectionState", snapshot.connectionState)
             append(",")
@@ -849,6 +858,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var loadedSnapshot: DeviceSnapshot? = null
     private var updatingForm: Boolean = false
     private var backgroundWorkInProgress: Boolean = false
+    @Volatile
+    private var exitProtectedOperation: String? = null
+    private var exitBlockedDialogVisible: Boolean = false
     private var passiveProbeInProgress: Boolean = false
     private var logVisible: Boolean = false
     private var logAutoScroll: Boolean = true
@@ -890,6 +902,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private lateinit var showLogMenuItem: JCheckBoxMenuItem
     private lateinit var showRawSerialMenuItem: JCheckBoxMenuItem
     private lateinit var updateFirmwareMenuItem: JMenuItem
+    private lateinit var recoveryUpdateFirmwareMenuItem: JMenuItem
     private lateinit var automaticFirmwareUpdatesMenuItem: JCheckBoxMenuItem
     private lateinit var serialSlingerUpdateChecksMenuItem: JCheckBoxMenuItem
     private lateinit var frequencyKhzMenuItem: JRadioButtonMenuItem
@@ -948,11 +961,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val defaultInformationalFieldForeground = currentTimeField.foreground
 
     init {
-        defaultCloseOperation = WindowConstants.EXIT_ON_CLOSE
+        defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
         minimumSize = Dimension(1200, 780)
         layout = BorderLayout(12, 12)
         jMenuBar = buildMenuBar()
         SerialSlingerAppIcon.install(this)
+        installDesktopQuitHandler()
         addWindowListener(
             object : WindowAdapter() {
                 override fun windowOpened(event: WindowEvent) {
@@ -960,8 +974,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 }
 
                 override fun windowClosing(event: WindowEvent) {
-                    stopTemperatureLoggingForShutdown()
-                    desktopControlServer?.stop()
+                    requestApplicationExit("window close")
                 }
             },
         )
@@ -1225,6 +1238,78 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         SwingUtilities.invokeLater { maybeShowSerialSlingerUpdateNotice() }
     }
 
+    private fun installDesktopQuitHandler() {
+        runCatching {
+            if (Desktop.isDesktopSupported()) {
+                val desktop = Desktop.getDesktop()
+                if (desktop.isSupported(Desktop.Action.APP_QUIT_HANDLER)) {
+                    desktop.setQuitHandler { _, response ->
+                        requestApplicationExit("application quit", response)
+                    }
+                }
+            }
+        }
+    }
+
+    fun installExternalTerminationProtection() {
+        DesktopTerminationSignalSupport.install {
+            SwingUtilities.invokeLater {
+                requestApplicationExit("external termination request")
+            }
+        }
+    }
+
+    private fun requestApplicationExit(
+        source: String,
+        quitResponse: QuitResponse? = null,
+    ) {
+        if (!SwingUtilities.isEventDispatchThread()) {
+            SwingUtilities.invokeLater {
+                requestApplicationExit(source, quitResponse)
+            }
+            return
+        }
+        val decision = DesktopExitProtection.decision(exitProtectedOperation)
+        if (!decision.mayExit) {
+            quitResponse?.cancelQuit()
+            appendLog(
+                "Exit Blocked",
+                listOf(
+                    DesktopLogEntry(
+                        "Ignored $source while ${exitProtectedOperation.orEmpty()} was in progress.",
+                        DesktopLogCategory.APP,
+                    ),
+                ),
+            )
+            toFront()
+            requestFocus()
+            if (!exitBlockedDialogVisible) {
+                exitBlockedDialogVisible = true
+                try {
+                    JOptionPane.showMessageDialog(
+                        this,
+                        decision.message,
+                        "Operation Still in Progress",
+                        JOptionPane.WARNING_MESSAGE,
+                    )
+                } finally {
+                    exitBlockedDialogVisible = false
+                }
+            }
+            return
+        }
+
+        stopTemperatureLoggingForShutdown()
+        desktopControlServer?.stop()
+        desktopControlServer = null
+        if (quitResponse != null) {
+            quitResponse.performQuit()
+        } else {
+            dispose()
+            System.exit(0)
+        }
+    }
+
     private fun buildHeader(): JPanel {
         return JPanel(BorderLayout()).apply {
             add(buildToolbar(), BorderLayout.NORTH)
@@ -1400,6 +1485,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         addActionListener { chooseFirmwareUpdatePackageForSelectedProduct() }
                     }
                     add(updateFirmwareMenuItem)
+                    recoveryUpdateFirmwareMenuItem = JMenuItem("Recovery Update SignalSlinger...").apply {
+                        addActionListener { chooseSignalSlingerRecoveryUpdatePackage() }
+                    }
+                    add(recoveryUpdateFirmwareMenuItem)
                     automaticFirmwareUpdatesMenuItem = JCheckBoxMenuItem(
                         "",
                         displayPreferences.automaticFirmwareUpdatesEnabled,
@@ -2690,6 +2779,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             version = SerialSlingerAppVersion.value,
             deviceMode = selectedDeviceMode().label,
             busy = backgroundWorkInProgress,
+            exitProtected = exitProtectedOperation != null,
+            protectedOperation = exitProtectedOperation,
             connectionState = currentState?.connectionState?.name ?: ConnectionState.DISCONNECTED.name,
             connectionIndicator = connectionIndicatorMessage,
             status = statusLabel.text.orEmpty(),
@@ -6884,6 +6975,124 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
+    private fun chooseSignalSlingerRecoveryUpdatePackage() {
+        val portPath = chooseSignalSlingerRecoveryPort() ?: return
+        val board = chooseSignalSlingerRecoveryBoard() ?: return
+        val sourceChoice = JOptionPane.showOptionDialog(
+            this,
+            "SignalSlinger does not need to respond as an application for this recovery path.\n\n" +
+                "SerialSlinger will connect directly to the resident bootloader on $portPath using a $board package.",
+            "Recovery Update SignalSlinger",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+            null,
+            arrayOf("Download Latest", "Choose Local File", "Download Version", "Cancel"),
+            "Download Latest",
+        )
+        when (sourceChoice) {
+            0 -> {
+                updateSignalSlingerFromLatestGitHubRelease(
+                    portPath = portPath,
+                    recoverAlreadyWaiting = true,
+                    overrideBoard = board,
+                )
+            }
+            1 -> {
+                val boardDirectory = File(desktopSignalSlingerReleaseCacheDirectory(), board)
+                val chooser = JFileChooser().apply {
+                    dialogTitle = "Recovery Update SignalSlinger"
+                    fileSelectionMode = JFileChooser.FILES_ONLY
+                    isFileHidingEnabled = false
+                    currentDirectory = boardDirectory.takeIf(File::isDirectory) ?: desktopSignalSlingerReleaseCacheDirectory()
+                    fileFilter = FileNameExtensionFilter("SignalSlinger release info (*.json)", "json")
+                }
+                if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+                    return
+                }
+                val manifestFile = chooser.selectedFile
+                val release =
+                    runCatching {
+                        require(manifestFile.isFile) {
+                            "Selected recovery update file `${manifestFile.path}` was not found."
+                        }
+                        SignalSlingerFirmwareUpdate.parseReleaseInfo(manifestFile.readText())
+                    }.getOrElse { failure ->
+                        JOptionPane.showMessageDialog(
+                            this,
+                            "The selected file is not a readable SignalSlinger release manifest.\n\n" +
+                                (failure.message ?: failure::class.simpleName.orEmpty()),
+                            "Recovery Update SignalSlinger",
+                            JOptionPane.WARNING_MESSAGE,
+                        )
+                        return
+                    }
+                if (!DesktopSignalSlingerRecoverySupport.packageMatchesBoard(board, release.board)) {
+                    JOptionPane.showMessageDialog(
+                        this,
+                        "Selected package ${release.board} does not match the chosen physical hardware $board.",
+                        "Recovery Update SignalSlinger",
+                        JOptionPane.WARNING_MESSAGE,
+                    )
+                    return
+                }
+                updateSignalSlingerFromReleaseInfo(
+                    portPath = portPath,
+                    manifestFile = manifestFile,
+                    recoverAlreadyWaiting = true,
+                    allowAppHardwareMismatch = false,
+                )
+            }
+            2 -> {
+                val version = chooseSignalSlingerGitHubReleaseVersion() ?: return
+                updateSignalSlingerFromGitHubReleaseVersion(
+                    portPath = portPath,
+                    recoverAlreadyWaiting = true,
+                    overrideBoard = board,
+                    requestedVersion = version,
+                )
+            }
+        }
+    }
+
+    private fun chooseSignalSlingerRecoveryPort(): String? {
+        val defaultPort = currentConnectedPortPath ?: selectedProbe()?.portInfo?.systemPortPath.orEmpty()
+        val input = JOptionPane.showInputDialog(
+            this,
+            "Enter the FTDI serial port connected to the SignalSlinger bootloader.",
+            defaultPort,
+        ) ?: return null
+        return input.trim().takeIf(String::isNotBlank).also { selected ->
+            if (selected == null) {
+                JOptionPane.showMessageDialog(
+                    this,
+                    "Enter the FTDI serial port before starting a recovery update.",
+                    "Recovery Update SignalSlinger",
+                    JOptionPane.WARNING_MESSAGE,
+                )
+            }
+        }
+    }
+
+    private fun chooseSignalSlingerRecoveryBoard(): String? {
+        val options = (DesktopSignalSlingerRecoverySupport.supportedBoards + "Cancel").toTypedArray()
+        val initial =
+            DesktopSignalSlingerRecoverySupport.preferredBoard(loadedSnapshot?.info?.hardwareBuild)
+                ?: "Cancel"
+        val choice = JOptionPane.showOptionDialog(
+            this,
+            "Select the physical SignalSlinger hardware variant.\n\n" +
+                "Recovery mode cannot read the hardware build from the damaged application.",
+            "Recovery Update SignalSlinger",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+            null,
+            options,
+            initial,
+        )
+        return options.getOrNull(choice)
+            ?.takeIf { choice in DesktopSignalSlingerRecoverySupport.supportedBoards.indices }
+    }
+
     private fun chooseArduconUpdatePackage() {
         val portPath = currentConnectedPortPath ?: selectedProbe()?.portInfo?.systemPortPath
         if (portPath.isNullOrBlank()) {
@@ -7207,6 +7416,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
             busyDialogPrimaryMessage = "Preparing bootloader installation...",
+            exitProtectionOperation = "Installing SignalSlinger bootloader",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -7277,6 +7487,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
             busyDialogPrimaryMessage = "Preparing bootloader installation...",
+            exitProtectionOperation = "Installing SignalSlinger bootloader",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -7311,6 +7522,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
             busyDialogPrimaryMessage = "Preparing bootloader installation...",
+            exitProtectionOperation = "Installing SignalSlinger bootloader",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -7340,6 +7552,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
             busyDialogPrimaryMessage = "Preparing bootloader installation...",
+            exitProtectionOperation = "Installing SignalSlinger bootloader",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -7362,6 +7575,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
             busyDialogPrimaryMessage = "Preparing Arducon bootloader installation...",
+            exitProtectionOperation = "Installing Arducon bootloader",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -7392,6 +7606,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
             busyDialogPrimaryMessage = "Preparing Arducon bootloader installation...",
+            exitProtectionOperation = "Installing Arducon bootloader",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -7416,6 +7631,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
             busyDialogPrimaryMessage = "Preparing Arducon bootloader installation...",
+            exitProtectionOperation = "Installing Arducon bootloader",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -7440,6 +7656,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Installing Bootloader",
             busyDialogPrimaryMessage = "Preparing Arducon bootloader installation...",
+            exitProtectionOperation = "Installing Arducon bootloader",
         ) {
             val logEntries = mutableListOf<DesktopLogEntry>()
             try {
@@ -8862,8 +9079,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Updating SignalSlinger",
             busyDialogPrimaryMessage = "Updating SignalSlinger...",
+            exitProtectionOperation = "Updating SignalSlinger firmware",
         ) {
-            val logEntries = mutableListOf<DesktopLogEntry>()
+            val logEntries = streamingFirmwareUpdateLog("Update SignalSlinger")
             try {
                 performSignalSlingerUpdateWithRecoveryFallback(
                     portPath = portPath,
@@ -8877,7 +9095,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     val message = friendlyUpdateFailureMessage(exception)
                     logEntries += DesktopLogEntry(message, DesktopLogCategory.APP)
                     SwingUtilities.invokeLater {
-                        appendLog("Update SignalSlinger", logEntries)
+                        finishFirmwareUpdateLog("Update SignalSlinger", logEntries)
                         setStatus("SignalSlinger is already up to date.")
                         showAppMessageDialog(message)
                     }
@@ -8887,7 +9105,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     return@runInBackground
                 }
                 SwingUtilities.invokeLater {
-                    appendLog("Update SignalSlinger", logEntries)
+                    finishFirmwareUpdateLog("Update SignalSlinger", logEntries)
                 }
                 throw IllegalStateException(friendlyUpdateFailureMessage(exception), exception)
             }
@@ -8903,8 +9121,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Updating Arducon",
             busyDialogPrimaryMessage = "Updating Arducon...",
+            exitProtectionOperation = "Updating Arducon firmware",
         ) {
-            val logEntries = mutableListOf<DesktopLogEntry>()
+            val logEntries = streamingFirmwareUpdateLog("Update Arducon")
             try {
                 performArduconUpdate(
                     portPath = portPath,
@@ -8916,14 +9135,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     val message = friendlyArduconUpdateFailureMessage(exception)
                     logEntries += DesktopLogEntry(message, DesktopLogCategory.APP)
                     SwingUtilities.invokeLater {
-                        appendLog("Update Arducon", logEntries)
+                        finishFirmwareUpdateLog("Update Arducon", logEntries)
                         setStatus("Arducon is already up to date.")
                         showAppMessageDialog(message)
                     }
                     return@runInBackground
                 }
                 SwingUtilities.invokeLater {
-                    appendLog("Update Arducon", logEntries)
+                    finishFirmwareUpdateLog("Update Arducon", logEntries)
                 }
                 throw IllegalStateException(friendlyArduconUpdateFailureMessage(exception), exception)
             }
@@ -8936,8 +9155,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Updating Arducon",
             busyDialogPrimaryMessage = "Updating Arducon...",
+            exitProtectionOperation = "Updating Arducon firmware",
         ) {
-            val logEntries = mutableListOf<DesktopLogEntry>()
+            val logEntries = streamingFirmwareUpdateLog("Update Arducon")
             try {
                 val firmwareVersion = loadedSnapshot?.info?.softwareVersion?.trim()
                 val selection = ArduconReleaseCache(desktopArduconReleaseCacheDirectory()).selectLatestForUpdate(
@@ -8962,14 +9182,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     val message = friendlyArduconUpdateFailureMessage(exception)
                     logEntries += DesktopLogEntry(message, DesktopLogCategory.APP)
                     SwingUtilities.invokeLater {
-                        appendLog("Update Arducon", logEntries)
+                        finishFirmwareUpdateLog("Update Arducon", logEntries)
                         setStatus("Arducon is already up to date.")
                         showAppMessageDialog(message)
                     }
                     return@runInBackground
                 }
                 SwingUtilities.invokeLater {
-                    appendLog("Update Arducon", logEntries)
+                    finishFirmwareUpdateLog("Update Arducon", logEntries)
                 }
                 throw IllegalStateException(friendlyArduconUpdateFailureMessage(exception), exception)
             }
@@ -8985,8 +9205,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Updating Arducon",
             busyDialogPrimaryMessage = "Updating Arducon...",
+            exitProtectionOperation = "Updating Arducon firmware",
         ) {
-            val logEntries = mutableListOf<DesktopLogEntry>()
+            val logEntries = streamingFirmwareUpdateLog("Update Arducon")
             try {
                 val selection = ArduconReleaseCache(desktopArduconReleaseCacheDirectory()).selectGitHubReleaseForUpdate(requestedVersion)
                 logEntries += DesktopLogEntry(selection.message, DesktopLogCategory.APP)
@@ -8997,7 +9218,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 )
             } catch (exception: Exception) {
                 SwingUtilities.invokeLater {
-                    appendLog("Update Arducon", logEntries)
+                    finishFirmwareUpdateLog("Update Arducon", logEntries)
                 }
                 throw IllegalStateException(friendlyArduconUpdateFailureMessage(exception), exception)
             }
@@ -9014,16 +9235,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Updating SignalSlinger",
             busyDialogPrimaryMessage = "Updating SignalSlinger...",
+            exitProtectionOperation = "Updating SignalSlinger firmware",
         ) {
-            val logEntries = mutableListOf<DesktopLogEntry>()
+            val logEntries = streamingFirmwareUpdateLog("Update SignalSlinger")
             try {
                 val hardwareBuild = loadedSnapshot?.info?.hardwareBuild?.trim().orEmpty()
-                require(hardwareBuild.isNotBlank()) {
+                require(hardwareBuild.isNotBlank() || overrideBoard != null) {
                     "Load the attached SignalSlinger before downloading an update so SerialSlinger can choose the correct hardware package."
+                }
+                val requestedHardware = hardwareBuild.ifBlank {
+                    DesktopSignalSlingerRecoverySupport.hardwareBuildForBoard(overrideBoard.orEmpty())
                 }
                 val firmwareVersion = loadedSnapshot?.info?.softwareVersion?.trim()
                 val selection = SignalSlingerReleaseCache(desktopSignalSlingerReleaseCacheDirectory()).selectLatestForUpdate(
-                    hardwareBuild = hardwareBuild,
+                    hardwareBuild = requestedHardware,
                     currentFirmwareVersion = firmwareVersion,
                     overrideBoard = overrideBoard,
                 )
@@ -9048,7 +9273,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     return@runInBackground
                 }
                 SwingUtilities.invokeLater {
-                    appendLog("Update SignalSlinger", logEntries)
+                    finishFirmwareUpdateLog("Update SignalSlinger", logEntries)
                 }
                 throw IllegalStateException(friendlyUpdateFailureMessage(exception), exception)
             }
@@ -9066,15 +9291,19 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             showBusyDialog = true,
             busyDialogTitle = "Updating SignalSlinger",
             busyDialogPrimaryMessage = "Updating SignalSlinger...",
+            exitProtectionOperation = "Updating SignalSlinger firmware",
         ) {
-            val logEntries = mutableListOf<DesktopLogEntry>()
+            val logEntries = streamingFirmwareUpdateLog("Update SignalSlinger")
             try {
                 val hardwareBuild = loadedSnapshot?.info?.hardwareBuild?.trim().orEmpty()
                 require(hardwareBuild.isNotBlank() || overrideBoard != null) {
                     "Load the attached SignalSlinger before downloading an update so SerialSlinger can choose the correct hardware package."
                 }
+                val requestedHardware = hardwareBuild.ifBlank {
+                    DesktopSignalSlingerRecoverySupport.hardwareBuildForBoard(overrideBoard.orEmpty())
+                }
                 val selection = SignalSlingerReleaseCache(desktopSignalSlingerReleaseCacheDirectory()).selectGitHubReleaseForUpdate(
-                    hardwareBuild = hardwareBuild,
+                    hardwareBuild = requestedHardware,
                     releaseVersion = requestedVersion,
                     overrideBoard = overrideBoard,
                 )
@@ -9091,7 +9320,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     return@runInBackground
                 }
                 SwingUtilities.invokeLater {
-                    appendLog("Update SignalSlinger", logEntries)
+                    finishFirmwareUpdateLog("Update SignalSlinger", logEntries)
                 }
                 throw IllegalStateException(friendlyUpdateFailureMessage(exception), exception)
             }
@@ -9168,7 +9397,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val message = exception.message ?: "Update cancelled."
         logEntries += DesktopLogEntry(message, DesktopLogCategory.APP)
         SwingUtilities.invokeLater {
-            appendLog("Update SignalSlinger", logEntries)
+            finishFirmwareUpdateLog("Update SignalSlinger", logEntries)
             setStatus("Error: ${message.lineSequence().firstOrNull().orEmpty().ifBlank { "Update cancelled." }}")
         }
         return true
@@ -9248,7 +9477,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             log("Arducon update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}")
         }.getOrNull()
         SwingUtilities.invokeLater {
-            appendLog("Update Arducon", logEntries)
+            finishFirmwareUpdateLog("Update Arducon", logEntries)
             if (refreshedConnection != null) {
                 selectPort(refreshedConnection.portPath)
                 applyLoadedConnection(
@@ -9346,7 +9575,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             log("SignalSlinger update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}")
         }.getOrNull()
         SwingUtilities.invokeLater {
-            appendLog("Update SignalSlinger", logEntries)
+            finishFirmwareUpdateLog("Update SignalSlinger", logEntries)
             if (refreshedConnection != null) {
                 selectPort(refreshedConnection.portPath)
                 applyLoadedConnection(
@@ -10041,6 +10270,34 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         appendRenderedLog(rendered)
     }
 
+    private fun streamingFirmwareUpdateLog(title: String): MutableList<DesktopLogEntry> {
+        return DesktopStreamingLogEntries(
+            section = sessionLog.beginStreamingSection(title),
+            renderedTextSink = { rendered ->
+                if (rendered.isNotEmpty()) {
+                    if (SwingUtilities.isEventDispatchThread()) {
+                        appendRenderedLog(rendered)
+                    } else {
+                        SwingUtilities.invokeLater {
+                            appendRenderedLog(rendered)
+                        }
+                    }
+                }
+            },
+        )
+    }
+
+    private fun finishFirmwareUpdateLog(
+        title: String,
+        entries: MutableList<DesktopLogEntry>,
+    ) {
+        if (entries is DesktopStreamingLogEntries) {
+            entries.finish()
+        } else {
+            appendLog(title, entries)
+        }
+    }
+
     private fun appendUserActionLog(message: String) {
         appendLog(
             title = "User Action",
@@ -10159,12 +10416,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         busyDialogTitle: String = "Please Wait",
         busyDialogPrimaryMessage: String? = null,
         verifyConnectedIdentity: Boolean = true,
+        exitProtectionOperation: String? = null,
         task: () -> Unit,
     ) {
         if (backgroundWorkInProgress || appMessageDialogVisible) {
             return
         }
         backgroundWorkInProgress = true
+        this.exitProtectedOperation = exitProtectionOperation
         busyDialogTitleText = busyDialogTitle
         busyDialogPrimaryText = busyDialogPrimaryMessage
         stopAdvancedDeviceDataRefreshTimer()
@@ -10191,6 +10450,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     clearBusyProgress()
                     busyDialogTitleText = "Please Wait"
                     busyDialogPrimaryText = null
+                    exitProtectedOperation = null
                     setBusy(false)
                     val exception = failure
                     if (exception == null) {
@@ -10310,6 +10570,13 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         autoDetectButton.isEnabled = !isBusy
         portComboBox.isEnabled = !isBusy
         deviceModeCombo.isEnabled = !isBusy
+        if (::updateFirmwareMenuItem.isInitialized) {
+            updateFirmwareMenuItem.isEnabled = !isBusy && activeProductUiProfile().supportsFirmwareUpdate
+        }
+        if (::recoveryUpdateFirmwareMenuItem.isInitialized) {
+            recoveryUpdateFirmwareMenuItem.isEnabled =
+                !isBusy && selectedDeviceMode() == DeviceMode.SIGNALSLINGER
+        }
         rawCommandField.isEnabled =
             !isBusy &&
             rawSerialRowPanel.isVisible &&
@@ -10622,6 +10889,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             updateFirmwareMenuItem.text = "Update ${productProfile.productLabel} Firmware..."
             updateFirmwareMenuItem.isVisible = productProfile.supportsFirmwareUpdate
             updateFirmwareMenuItem.isEnabled = productProfile.supportsFirmwareUpdate
+        }
+        if (::recoveryUpdateFirmwareMenuItem.isInitialized) {
+            recoveryUpdateFirmwareMenuItem.isVisible = selectedDeviceMode() == DeviceMode.SIGNALSLINGER
+            recoveryUpdateFirmwareMenuItem.isEnabled =
+                selectedDeviceMode() == DeviceMode.SIGNALSLINGER &&
+                    !backgroundWorkInProgress
         }
         if (::automaticFirmwareUpdatesMenuItem.isInitialized) {
             automaticFirmwareUpdatesMenuItem.text = "Automatic ${productProfile.productLabel} Firmware Updates"
