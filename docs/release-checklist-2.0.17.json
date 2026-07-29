@@ -3,7 +3,7 @@
   "previousRelease": "v2.0.16",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "f49a3bb79a257d5f52ef9016e1e46359b483d4ec",
+  "sourceCommit": "ff1411e126bcbe6529a44696bddb7783dc4ab4e7",
   "version": "2.0.17",
   "androidVersionCode": "25",
   "releaseNotesFile": "docs/release-notes/v2.0.17.md",
@@ -94,29 +94,29 @@
     },
     {
       "id": "tag-pushed",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "2026-07-28 pushed main and annotated tag v2.0.17 to origin; tag target is ff1411e126bcbe6529a44696bddb7783dc4ab4e7.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "workflow-published",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions jDeploy Release run 30418193891 completed successfully in 4m12s; bundle build, jDeploy publication, canonical tarball upload, macOS branding repair, and release publication all passed.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "release-verified",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "gh release view v2.0.17 reported draft=false, prerelease=false, publishedAt=2026-07-29T03:00:40Z, target ff1411e, and 14 uploaded assets. Direct HTTP returned 200 with content-length 3770242. Downloaded serialslinger-2.0.17.tgz SHA-256 0d1d7a73e9887002b885b39d8c4490d38e43130524f162eb0a87c02238ee39f2 contains package version 2.0.17; downloaded Mac ARM64 installer SHA-256 d2d37bfd51ddd61097d800fbb7155f03bdccacdff7daaf82647a0082df5e893f contains branded icon.icns and app.xml icon data.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "final-checklist-audit",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Final audit addressed the documented release flow: plain version and Android versionCode alignment, checked notes, user-authorized hardware evidence reuse and architecture skips, serial Gradle and jDeploy gates, Android release bundle, gitleaks, main synchronization, annotated tag, watched workflow, public metadata/HTTP checks, and downloaded artifact/hash/content verification.",
       "skipReason": "",
       "skipRequestedBy": ""
     }
