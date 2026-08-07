@@ -12393,7 +12393,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         samples.forEach { sample ->
             updatedState = DeviceSessionWorkflow.ingestReportLines(updatedState, sample.responseLines)
         }
-        val phaseErrorMillis = DesktopInputSupport.estimateClockPhaseErrorMillis(
+        val phaseErrorMillis = DesktopInputSupport.estimateClockPhaseErrorMillisWithCoarseFallback(
             samples.map { sample ->
                 DesktopInputSupport.ClockPhaseSample(
                     midpointAt = sample.midpointAt,

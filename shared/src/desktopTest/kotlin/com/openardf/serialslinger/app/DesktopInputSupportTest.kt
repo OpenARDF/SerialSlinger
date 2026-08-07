@@ -453,6 +453,28 @@ class DesktopInputSupportTest {
     }
 
     @Test
+    fun estimatesClockPhaseWithCoarseFallbackWhenSamplesDoNotCrossSecondRollover() {
+        val phaseError = DesktopInputSupport.estimateClockPhaseErrorMillisWithCoarseFallback(
+            listOf(
+                DesktopInputSupport.ClockPhaseSample(
+                    midpointAt = LocalDateTime.of(2026, 8, 7, 11, 49, 47, 0),
+                    reportedTimeCompact = "260807144947",
+                ),
+                DesktopInputSupport.ClockPhaseSample(
+                    midpointAt = LocalDateTime.of(2026, 8, 7, 11, 49, 47, 200_000_000),
+                    reportedTimeCompact = "260807144947",
+                ),
+                DesktopInputSupport.ClockPhaseSample(
+                    midpointAt = LocalDateTime.of(2026, 8, 7, 11, 49, 47, 400_000_000),
+                    reportedTimeCompact = "260807144947",
+                ),
+            ),
+        )
+
+        assertEquals(-10_800_300L, phaseError)
+    }
+
+    @Test
     fun estimatesCoarseClockErrorFromSingleSample() {
         val phaseError = DesktopInputSupport.estimateCoarseClockErrorMillis(
             DesktopInputSupport.ClockPhaseSample(

@@ -566,6 +566,17 @@ object DesktopInputSupport {
         )
     }
 
+    fun estimateClockPhaseErrorMillisWithCoarseFallback(samples: List<ClockPhaseSample>): Long? {
+        return JvmTimeSupport.estimateClockPhaseErrorMillisWithCoarseFallback(
+            samples.map { sample ->
+                SharedClockPhaseSample(
+                    midpointAt = sample.midpointAt,
+                    reportedTimeCompact = sample.reportedTimeCompact,
+                )
+            },
+        )
+    }
+
     fun estimateCoarseClockErrorMillis(sample: ClockPhaseSample): Long? {
         return JvmTimeSupport.estimateCoarseClockErrorMillis(
             SharedClockPhaseSample(

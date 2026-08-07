@@ -5322,8 +5322,7 @@ object AndroidSessionController {
                 )
             }
         val phaseErrorMillis =
-            JvmTimeSupport.estimateClockPhaseErrorMillis(phaseSamples)
-                ?: estimateCoarsePostLoadClockPhaseErrorMillis(phaseSamples)
+            JvmTimeSupport.estimateClockPhaseErrorMillisWithCoarseFallback(phaseSamples)
         val latestSample = samples.lastOrNull()
         return DeviceLoadResult(
             state = updatedState,
@@ -5364,11 +5363,6 @@ object AndroidSessionController {
             return null
         }
         return (JvmTimeSupport.medianMillis(samples.map { it.roundTripMillis }) / 2).coerceAtLeast(0L)
-    }
-
-    private fun estimateCoarsePostLoadClockPhaseErrorMillis(samples: List<ClockPhaseSample>): Long? {
-        val estimates = samples.mapNotNull(JvmTimeSupport::estimateCoarseClockErrorMillis)
-        return estimates.takeIf { it.isNotEmpty() }?.let(JvmTimeSupport::medianMillis)
     }
 
     private fun performAlignedTimeSync(

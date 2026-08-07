@@ -783,6 +783,14 @@ object JvmTimeSupport {
         return null
     }
 
+    fun estimateClockPhaseErrorMillisWithCoarseFallback(samples: List<ClockPhaseSample>): Long? {
+        return estimateClockPhaseErrorMillis(samples)
+            ?: samples
+                .mapNotNull(::estimateCoarseClockErrorMillis)
+                .takeIf { it.isNotEmpty() }
+                ?.let(::medianMillis)
+    }
+
     fun estimateCoarseClockErrorMillis(sample: ClockPhaseSample): Long? {
         val reportedTime = sample.reportedTimeCompact?.let(::parseCompactTimestamp) ?: return null
         return Duration.between(reportedTime, sample.midpointAt).toMillis() - 500L
