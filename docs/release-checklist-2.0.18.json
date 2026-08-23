@@ -3,7 +3,7 @@
   "previousRelease": "v2.0.17",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "",
+  "sourceCommit": "81359554c1b62785d865a29dc824af68397192ad",
   "version": "2.0.18",
   "androidVersionCode": "26",
   "releaseNotesFile": "docs/release-notes/v2.0.18.md",
@@ -87,8 +87,8 @@
     },
     {
       "id": "merged-to-main",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "2026-08-22 main was fast-forwarded from 94ab0a0 to verified release-candidate 8135955 with git merge --ff-only Development_Android before tagging v2.0.18.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
