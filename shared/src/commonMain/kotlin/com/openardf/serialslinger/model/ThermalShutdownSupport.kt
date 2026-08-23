@@ -5,11 +5,20 @@ import kotlin.math.roundToInt
 object ThermalShutdownSupport {
     const val passcode: String = "7373"
     const val minimumCelsius: Int = 30
-    const val maximumCelsius: Int = 60
+    const val signalSlingerMaximumCelsius: Int = 85
+    const val arduconMaximumCelsius: Int = 60
+
+    fun maximumCelsius(productName: String? = null): Int =
+        if (productName.equals("Arducon", ignoreCase = true)) {
+            arduconMaximumCelsius
+        } else {
+            signalSlingerMaximumCelsius
+        }
 
     fun validateCelsius(value: Int, productName: String? = null): Int {
-        require(value in minimumCelsius..maximumCelsius) {
-            "Thermal Shutdown Threshold must be between $minimumCelsius C and $maximumCelsius C."
+        val maximum = maximumCelsius(productName)
+        require(value in minimumCelsius..maximum) {
+            "Thermal Shutdown Threshold must be between $minimumCelsius C and $maximum C."
         }
         return value
     }
@@ -29,5 +38,12 @@ object ThermalShutdownSupport {
         } else {
             "TMP H $validated"
         }
+    }
+
+    fun commandForEnabled(enabled: Boolean, productName: String? = null): String {
+        require(!productName.equals("Arducon", ignoreCase = true)) {
+            "Arducon does not support changing Thermal Shutdown mode."
+        }
+        return "TMP H ${if (enabled) "ON" else "OFF"}"
     }
 }

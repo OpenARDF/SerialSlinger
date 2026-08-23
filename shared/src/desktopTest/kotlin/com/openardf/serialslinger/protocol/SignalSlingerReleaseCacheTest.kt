@@ -247,6 +247,38 @@ class SignalSlingerReleaseCacheTest {
     }
 
     @Test
+    fun prefersNewerResidentReleaseOverOlderLatestGitHubVersion() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        val latestApi = URI("https://api.github.test/releases/latest")
+        try {
+            root.resolve("HW-3.4/2.0.4").apply {
+                mkdirs()
+                resolve("SignalSlinger-Release-Info-v2.0.4-HW-3.4.json")
+                    .writeText(manifest(version = "2.0.4", board = "HW-3.4"))
+            }
+
+            val selection = SignalSlingerReleaseCache(
+                rootDirectory = root,
+                repositoryApiUrl = latestApi,
+                downloadBytes = { uri ->
+                    when (uri) {
+                        latestApi -> """{"tag_name":"v2.0.3"}""".encodeToByteArray()
+                        else -> error("resident package should be preferred over older published firmware")
+                    }
+                },
+            ).selectLatestForUpdate(
+                hardwareBuild = "3.4",
+                currentFirmwareVersion = "2.0.3",
+            )
+
+            assertEquals(SignalSlingerReleaseSelectionSource.RESIDENT, selection.source)
+            assertEquals("2.0.4", selection.release.version)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun canForceLatestDownloadWhenResidentReleaseMatchesLatestGitHubVersion() {
         val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
         val latestApi = URI("https://api.github.test/releases/latest")

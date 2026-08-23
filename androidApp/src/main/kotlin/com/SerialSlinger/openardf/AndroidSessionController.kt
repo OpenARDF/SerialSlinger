@@ -2172,6 +2172,7 @@ object AndroidSessionController {
     fun runThermalShutdownThresholdSubmit(
         context: Context,
         thresholdCelsius: Int,
+        enableAfterWrite: Boolean = false,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<Unit>) -> Unit)? = null,
@@ -2219,15 +2220,28 @@ object AndroidSessionController {
                     productName = snapshot.info.productName,
                 )
                 val sentAtMs = System.currentTimeMillis()
-                transport.sendCommands(listOf(command))
+                val commands =
+                    if (enableAfterWrite) {
+                        listOf(command, ThermalShutdownSupport.commandForEnabled(true, snapshot.info.productName))
+                    } else {
+                        listOf(command)
+                    }
+                transport.sendCommands(commands)
                 val responseLines = transport.readAvailableLines()
                 val receivedAtMs = System.currentTimeMillis()
-                traceEntries = listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)) +
+                traceEntries = commands.map { sentCommand ->
+                    SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, sentCommand)
+                } +
                     responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) }
                 val nextState = DeviceSessionWorkflow.ingestReportLines(sessionState, responseLines)
                 val reportedThreshold = nextState.snapshot?.status?.thermalShutdownThresholdC?.toInt()
                 require(reportedThreshold == validatedThreshold) {
                     "Thermal Shutdown Threshold verification failed."
+                }
+                if (enableAfterWrite) {
+                    require(nextState.snapshot?.status?.thermalShutdownEnabled == true) {
+                        "Thermal Shutdown enable verification failed."
+                    }
                 }
                 synchronized(this) {
                     latestSessionViewState = AndroidSessionViewState(nextState, traceEntries)
@@ -2256,6 +2270,77 @@ object AndroidSessionController {
             )
             notifyListeners()
             onComplete?.let { callback -> mainHandler.post { callback(result.map { }) } }
+        }
+    }
+
+    fun runThermalShutdownModeSubmit(
+        context: Context,
+        enabled: Boolean,
+        requestedDeviceName: String? = null,
+        source: String = "ui",
+        onComplete: ((Result<Unit>) -> Unit)? = null,
+    ) {
+        val sessionState = synchronized(this) { latestSessionViewState?.state }
+        val snapshot = sessionState?.snapshot
+        if (sessionState == null || snapshot == null || !snapshot.capabilities.supportsThermalShutdownMode) {
+            val error = IllegalStateException("Thermal Shutdown mode requires SignalSlinger firmware 2.0.4 or newer.")
+            emitCommandLog("set-thermal-mode", source, success = false, summary = error.message.orEmpty())
+            onComplete?.let { callback -> mainHandler.post { callback(Result.failure(error)) } }
+            return
+        }
+
+        synchronized(this) {
+            latestSubmitSummary = "Submitting Thermal Shutdown mode update..."
+            statusText = "Submitting Thermal Shutdown mode update..."
+            statusIsError = false
+        }
+        notifyListeners()
+
+        thread(name = "serialslinger-android-thermal-mode-submit") {
+            var traceEntries: List<SerialTraceEntry> = emptyList()
+            val result = runWithResolvedTransport(
+                context = context,
+                requestedDeviceName = requestedDeviceName,
+                requestedTarget = null,
+                allowUsbAutoDetect = false,
+                missingMessage = "SignalSlinger is no longer connected.",
+            ) { target, transport ->
+                val command = ThermalShutdownSupport.commandForEnabled(enabled, snapshot.info.productName)
+                val sentAtMs = System.currentTimeMillis()
+                transport.sendCommands(listOf(command))
+                val responseLines = transport.readAvailableLines()
+                val receivedAtMs = System.currentTimeMillis()
+                traceEntries = listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)) +
+                    responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) }
+                val nextState = DeviceSessionWorkflow.ingestReportLines(sessionState, responseLines)
+                require(nextState.snapshot?.status?.thermalShutdownEnabled == enabled) {
+                    "Thermal Shutdown mode verification failed."
+                }
+                synchronized(this) {
+                    latestSessionViewState = AndroidSessionViewState(nextState, traceEntries)
+                    rememberLoadedTargetLocked(target)
+                    applySnapshotDrafts(nextState.snapshot, refreshClockDisplayAnchor = false)
+                    latestSubmitSummary = "Thermal Shutdown ${if (enabled) "enabled" else "disabled"}."
+                    statusText = latestSubmitSummary
+                    statusIsError = false
+                }
+            }
+            if (result.isFailure) {
+                synchronized(this) {
+                    latestSubmitSummary = "Submit failed.\n${result.exceptionOrNull()?.message ?: "Unknown error"}"
+                    statusText = "Thermal Shutdown mode update failed."
+                    statusIsError = true
+                }
+            }
+            emitCommandLog(
+                command = "set-thermal-mode",
+                source = source,
+                success = result.isSuccess,
+                summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = traceEntries,
+            )
+            notifyListeners()
+            onComplete?.let { callback -> mainHandler.post { callback(result) } }
         }
     }
 

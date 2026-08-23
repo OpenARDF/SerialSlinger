@@ -162,6 +162,14 @@ object SignalSlingerFirmwareSupport {
         ),
     )
 
+    private val modern204Profile = modern122Profile.copy(
+        id = "modern-2.0.4+",
+        minimumVersion = SignalSlingerFirmwareVersion(2, 0, 4),
+        capabilities = modern122Profile.capabilities.copy(
+            supportsThermalShutdownMode = true,
+        ),
+    )
+
     private val arduconBaseLoadCommands = listOf(
         "ID",
         "FOX",
@@ -244,6 +252,7 @@ object SignalSlingerFirmwareSupport {
         }
 
         return when {
+            parsedVersion >= SignalSlingerFirmwareVersion(2, 0, 4) -> modern204Profile
             parsedVersion >= SignalSlingerFirmwareVersion(1, 2, 2) -> modern122Profile
             parsedVersion >= SignalSlingerFirmwareVersion(1, 2, 1) -> modern121Profile
             parsedVersion >= SignalSlingerFirmwareVersion(1, 2) -> modern120Profile

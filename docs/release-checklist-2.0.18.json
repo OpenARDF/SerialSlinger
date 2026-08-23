@@ -1,0 +1,124 @@
+{
+  "release": "v2.0.18",
+  "previousRelease": "v2.0.17",
+  "repository": "OpenARDF/SerialSlinger",
+  "channel": "stable",
+  "sourceCommit": "",
+  "version": "2.0.18",
+  "androidVersionCode": "26",
+  "releaseNotesFile": "docs/release-notes/v2.0.18.md",
+  "items": [
+    {
+      "id": "version-aligned",
+      "status": "done",
+      "evidence": "build.gradle.kts resolves base, display, and package version 2.0.18 with a blank suffix; package.json and package-lock.json are 2.0.18; Android versionName follows the shared display version.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts versionCode is incremented from 25 in v2.0.17 to 26 for v2.0.18.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "status": "done",
+      "evidence": "2026-08-22 npm run jdeploy:release-preflight passed for serialslinger@2.0.18, plain Gradle versions, available v2.0.18 tag, GitHub releases workflow, and verified desktop jDeploy bundle.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "status": "done",
+      "evidence": "Shared firmware capability and response parsing now expose SignalSlinger 2.0.4+ thermal shutdown mode to both Android and desktop; both offer Disabled or Enabled at 30-85 C with verified command readback, while Arducon intentionally retains threshold-only 30-60 C behavior.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "The release scope explicitly requested all non-hardware tests; no attached Android/device regression was requested for this rollout.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "desktop-regression",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "The release scope explicitly requested all non-hardware tests; no attached transmitter regression was requested. The packaged macOS aarch64 app was installed, verified, and launched successfully.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows Intel x64 host is available in this macOS release session; the release scope explicitly requested all non-hardware tests.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Windows ARM64 host is available in this macOS release session; the release scope explicitly requested all non-hardware tests.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux Intel x64 host is available in this macOS release session; the release scope explicitly requested all non-hardware tests.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "status": "skipped",
+      "evidence": "",
+      "skipReason": "No Linux ARM64 host is available in this macOS release session; the release scope explicitly requested all non-hardware tests.",
+      "skipRequestedBy": "Charles Scharlau"
+    },
+    {
+      "id": "android-release-notes",
+      "status": "done",
+      "evidence": "docs/release-notes/v2.0.18.md passed the release-notes guard and contains terse Play Console notes covering thermal-shutdown controls and clock synchronization.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}

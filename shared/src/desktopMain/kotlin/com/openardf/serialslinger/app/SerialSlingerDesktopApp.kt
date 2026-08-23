@@ -6604,13 +6604,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun formatThermalShutdownThreshold(snapshot: DeviceSnapshot): String {
-        return if (snapshot.capabilities.supportsExtendedTemperatureReadback) {
-            DesktopInputSupport.formatTemperatureOrWaiting(
-                snapshot.status.thermalShutdownThresholdC,
-                displayPreferences.temperatureDisplayUnit,
-            )
+        if (!snapshot.capabilities.supportsExtendedTemperatureReadback) {
+            return "Not supported"
+        }
+        val formattedThreshold = DesktopInputSupport.formatTemperatureOrWaiting(
+            snapshot.status.thermalShutdownThresholdC,
+            displayPreferences.temperatureDisplayUnit,
+        )
+        return if (snapshot.capabilities.supportsThermalShutdownMode) {
+            when (snapshot.status.thermalShutdownEnabled) {
+                true -> "Enabled at $formattedThreshold"
+                false -> "Disabled"
+                null -> "Not read"
+            }
         } else {
-            "Not supported"
+            formattedThreshold
         }
     }
 
@@ -10710,7 +10718,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
         thermalShutdownThresholdField.cursor = thermalCursor
         thermalShutdownThresholdRowLabel.cursor = thermalCursor
-        val tooltip = if (editable) "Click to set thermal shutdown threshold." else null
+        val tooltip = if (editable) "Click to set thermal shutdown mode and threshold." else null
         thermalShutdownThresholdField.toolTipText = tooltip
         thermalShutdownThresholdRowLabel.toolTipText = tooltip
     }
@@ -11136,19 +11144,49 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val initial =
             snapshot.status.thermalShutdownThresholdC
                 ?.toInt()
-                ?.coerceIn(ThermalShutdownSupport.minimumCelsius, ThermalShutdownSupport.maximumCelsius)
+                ?.coerceIn(
+                    ThermalShutdownSupport.minimumCelsius,
+                    ThermalShutdownSupport.maximumCelsius(snapshot.info.productName),
+                )
                 ?: 50
+        val maximumCelsius = ThermalShutdownSupport.maximumCelsius(snapshot.info.productName)
+        if (snapshot.capabilities.supportsThermalShutdownMode) {
+            val choices = listOf("Disabled (fan and temperature logging remain active)") +
+                (ThermalShutdownSupport.minimumCelsius..maximumCelsius).map { "Enabled at $it C" }
+            val initialChoice =
+                if (snapshot.status.thermalShutdownEnabled == true) {
+                    choices[1 + initial - ThermalShutdownSupport.minimumCelsius]
+                } else {
+                    choices.first()
+                }
+            val selected = JOptionPane.showInputDialog(
+                this,
+                "Thermal shutdown is disabled by default. Select an Enabled value only if you want high temperature to suspend the event.",
+                "Thermal Shutdown Threshold",
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                choices.toTypedArray(),
+                initialChoice,
+            ) as? String ?: return
+            if (selected == choices.first()) {
+                submitThermalShutdownMode(enabled = false)
+            } else {
+                val thresholdCelsius = selected.removePrefix("Enabled at ").removeSuffix(" C").toInt()
+                submitThermalShutdownThreshold(thresholdCelsius, enableAfterWrite = true)
+            }
+            return
+        }
         val model = SpinnerNumberModel(
             initial,
             ThermalShutdownSupport.minimumCelsius,
-            ThermalShutdownSupport.maximumCelsius,
+            maximumCelsius,
             1,
         )
         val spinner = JSpinner(model)
         val result = JOptionPane.showConfirmDialog(
             this,
             arrayOf(
-                "Thermal Shutdown Threshold (${ThermalShutdownSupport.minimumCelsius}-${ThermalShutdownSupport.maximumCelsius} C):",
+                "Thermal Shutdown Threshold (${ThermalShutdownSupport.minimumCelsius}-$maximumCelsius C):",
                 spinner,
             ),
             "Thermal Shutdown Threshold",
@@ -11713,7 +11751,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun submitThermalShutdownThreshold(thresholdCelsius: Int) {
+    private fun submitThermalShutdownThreshold(
+        thresholdCelsius: Int,
+        enableAfterWrite: Boolean = false,
+    ) {
         val transport = currentTransport ?: run {
             JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
@@ -11722,21 +11763,32 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
-        val command = ThermalShutdownSupport.commandForCelsius(
+        val thresholdCommand = ThermalShutdownSupport.commandForCelsius(
             thresholdCelsius,
             productName = state.snapshot?.info?.productName,
         )
+        val commands = buildList {
+            add(thresholdCommand)
+            if (enableAfterWrite) {
+                add(ThermalShutdownSupport.commandForEnabled(true, state.snapshot?.info?.productName))
+            }
+        }
         runInBackground("Setting thermal shutdown threshold...") {
-            setBusyProgress(0, 1, commandProgressLabel(0, 1))
+            setBusyProgress(0, commands.size, commandProgressLabel(0, commands.size))
             val sentAtMs = System.currentTimeMillis()
-            transport.sendCommands(listOf(command))
+            transport.sendCommands(commands)
             val responseLines = transport.readAvailableLines()
             val receivedAtMs = System.currentTimeMillis()
-            setBusyProgress(1, 1, commandProgressLabel(1, 1))
+            setBusyProgress(commands.size, commands.size, commandProgressLabel(commands.size, commands.size))
             val nextState = DeviceSessionWorkflow.ingestReportLines(state, responseLines)
             val reportedThreshold = nextState.snapshot?.status?.thermalShutdownThresholdC?.toInt()
             require(reportedThreshold == thresholdCelsius) {
                 "Thermal Shutdown Threshold verification failed."
+            }
+            if (enableAfterWrite) {
+                require(nextState.snapshot.status.thermalShutdownEnabled == true) {
+                    "Thermal Shutdown enable verification failed."
+                }
             }
             currentState = nextState
             loadedSnapshot = nextState.snapshot
@@ -11745,13 +11797,57 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 appendLog(
                     "Thermal Shutdown Threshold",
                     buildList {
-                        add(DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL, sentAtMs))
+                        commands.forEach { command ->
+                            add(DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL, sentAtMs))
+                        }
                         responseLines.forEach { line ->
                             add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, receivedAtMs))
                         }
                     },
                 )
                 setStatus("Thermal Shutdown Threshold updated.")
+            }
+        }
+    }
+
+    private fun submitThermalShutdownMode(enabled: Boolean) {
+        val transport = currentTransport ?: run {
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
+            return
+        }
+        val state = currentState ?: run {
+            JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
+            return
+        }
+        require(state.snapshot?.capabilities?.supportsThermalShutdownMode == true) {
+            "Thermal Shutdown mode requires SignalSlinger firmware 2.0.4 or newer."
+        }
+        val command = ThermalShutdownSupport.commandForEnabled(enabled, state.snapshot.info.productName)
+        runInBackground("Setting thermal shutdown mode...") {
+            setBusyProgress(0, 1, commandProgressLabel(0, 1))
+            val sentAtMs = System.currentTimeMillis()
+            transport.sendCommands(listOf(command))
+            val responseLines = transport.readAvailableLines()
+            val receivedAtMs = System.currentTimeMillis()
+            setBusyProgress(1, 1, commandProgressLabel(1, 1))
+            val nextState = DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+            require(nextState.snapshot?.status?.thermalShutdownEnabled == enabled) {
+                "Thermal Shutdown mode verification failed."
+            }
+            currentState = nextState
+            loadedSnapshot = nextState.snapshot
+            SwingUtilities.invokeLater {
+                applySnapshotToForm(nextState.snapshot, recalculateClockOffset = false)
+                appendLog(
+                    "Thermal Shutdown Mode",
+                    buildList {
+                        add(DesktopLogEntry("TX $command", DesktopLogCategory.SERIAL, sentAtMs))
+                        responseLines.forEach { line ->
+                            add(DesktopLogEntry("RX $line", DesktopLogCategory.SERIAL, receivedAtMs))
+                        }
+                    },
+                )
+                setStatus("Thermal Shutdown ${if (enabled) "enabled" else "disabled"}.")
             }
         }
     }

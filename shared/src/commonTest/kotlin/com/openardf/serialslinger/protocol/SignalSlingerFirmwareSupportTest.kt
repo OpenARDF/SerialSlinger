@@ -7,6 +7,12 @@ import kotlin.test.assertTrue
 
 class SignalSlingerFirmwareSupportTest {
     @Test
+    fun enablesThermalShutdownModeControlsForFirmware204() {
+        assertFalse(SignalSlingerFirmwareSupport.resolve("2.0.3").capabilities.supportsThermalShutdownMode)
+        assertTrue(SignalSlingerFirmwareSupport.resolve("2.0.4").capabilities.supportsThermalShutdownMode)
+    }
+
+    @Test
     fun resolvesModernProfileForCurrentFirmwareWithSuffix() {
         val profile = SignalSlingerFirmwareSupport.resolve("1.2s")
 

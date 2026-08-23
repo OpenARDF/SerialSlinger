@@ -1949,7 +1949,19 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 applyTemperatureRowAppearance(minimumTemperatureLabelView, minimumTemperatureField, loadedStatus?.minimumTemperatureC)
             }
         }
-        val thermalThresholdText = formatTemperatureForDeviceData(loadedStatus?.thermalShutdownThresholdC, extendedTemperatureReadbackSupported)
+        val thermalThresholdText =
+            if (snapshot?.capabilities?.supportsThermalShutdownMode == true) {
+                when (loadedStatus?.thermalShutdownEnabled) {
+                    true -> "Enabled at " + formatTemperatureForDeviceData(
+                        loadedStatus.thermalShutdownThresholdC,
+                        extendedTemperatureReadbackSupported,
+                    )
+                    false -> "Disabled"
+                    null -> "Not read"
+                }
+            } else {
+                formatTemperatureForDeviceData(loadedStatus?.thermalShutdownThresholdC, extendedTemperatureReadbackSupported)
+            }
         val thermalThresholdField =
             if (advancedModeEnabled && extendedTemperatureReadbackSupported) {
                 pickerField(
@@ -1957,7 +1969,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     hint = "Thermal Shutdown Threshold",
                     actionLabel = "Thermal Shutdown Threshold",
                 ) {
-                    showThermalShutdownThresholdDialog(loadedStatus?.thermalShutdownThresholdC)
+                    showThermalShutdownThresholdDialog(
+                        loadedStatus?.thermalShutdownThresholdC,
+                        loadedStatus?.thermalShutdownEnabled,
+                        snapshot.info.productName,
+                        snapshot.capabilities.supportsThermalShutdownMode,
+                    )
                 }
             } else {
                 readOnlyField(thermalThresholdText)
@@ -1971,7 +1988,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 captureLabelView = { thermalThresholdLabelView = it },
             )
         if (advancedModeEnabled && extendedTemperatureReadbackSupported) {
-            val clickListener = View.OnClickListener { showThermalShutdownThresholdDialog(loadedStatus?.thermalShutdownThresholdC) }
+            val clickListener =
+                View.OnClickListener {
+                    showThermalShutdownThresholdDialog(
+                        loadedStatus?.thermalShutdownThresholdC,
+                        loadedStatus?.thermalShutdownEnabled,
+                        snapshot.info.productName,
+                        snapshot.capabilities.supportsThermalShutdownMode,
+                    )
+                }
             thermalThresholdLabelView?.setOnClickListener(clickListener)
             thermalThresholdRow.setOnClickListener(clickListener)
         }
@@ -5922,20 +5947,58 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
     }
 
-    private fun showThermalShutdownThresholdDialog(currentThresholdC: Double?) {
-        val celsiusOptions = ThermalShutdownSupport.minimumCelsius..ThermalShutdownSupport.maximumCelsius
-        val labels = celsiusOptions.map { "$it C" }.toTypedArray()
+    private fun showThermalShutdownThresholdDialog(
+        currentThresholdC: Double?,
+        currentEnabled: Boolean? = null,
+        productName: String? = null,
+        supportsMode: Boolean = false,
+    ) {
+        val maximumCelsius = ThermalShutdownSupport.maximumCelsius(productName)
+        val celsiusOptions = ThermalShutdownSupport.minimumCelsius..maximumCelsius
+        val thresholdLabels = celsiusOptions.map { "$it C" }
+        val labels =
+            if (supportsMode) {
+                (listOf("Disabled (fan and temperature logging remain active)") +
+                    thresholdLabels.map { "Enabled at $it" }).toTypedArray()
+            } else {
+                thresholdLabels.toTypedArray()
+            }
         val currentValue = currentThresholdC?.toInt()?.coerceIn(celsiusOptions) ?: 50
+        val checkedIndex =
+            if (supportsMode) {
+                if (currentEnabled == true) {
+                    1 + currentValue - ThermalShutdownSupport.minimumCelsius
+                } else {
+                    0
+                }
+            } else {
+                currentValue - ThermalShutdownSupport.minimumCelsius
+            }
         AlertDialog.Builder(this)
             .setTitle("Thermal Shutdown Threshold")
-            .setSingleChoiceItems(labels, currentValue - ThermalShutdownSupport.minimumCelsius) { dialog, which ->
-                val celsius = ThermalShutdownSupport.minimumCelsius + which
-                AndroidSessionController.runThermalShutdownThresholdSubmit(
-                    context = applicationContext,
-                    thresholdCelsius = celsius,
-                    source = "advanced",
-                ) {
-                    runOnUiThread { renderContent() }
+            .setMessage(
+                if (supportsMode) {
+                    "Thermal shutdown is disabled by default. Select an Enabled value only if you want high temperature to suspend the event."
+                } else {
+                    null
+                }
+            )
+            .setSingleChoiceItems(labels, checkedIndex) { dialog, which ->
+                if (supportsMode && which == 0) {
+                    AndroidSessionController.runThermalShutdownModeSubmit(
+                        context = applicationContext,
+                        enabled = false,
+                        source = "advanced",
+                    ) { runOnUiThread { renderContent() } }
+                } else {
+                    val offset = if (supportsMode) 1 else 0
+                    val celsius = ThermalShutdownSupport.minimumCelsius + which - offset
+                    AndroidSessionController.runThermalShutdownThresholdSubmit(
+                        context = applicationContext,
+                        thresholdCelsius = celsius,
+                        enableAfterWrite = supportsMode,
+                        source = "advanced",
+                    ) { runOnUiThread { renderContent() } }
                 }
                 dialog.dismiss()
             }

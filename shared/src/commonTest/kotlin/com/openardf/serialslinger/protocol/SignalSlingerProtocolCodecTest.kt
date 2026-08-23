@@ -243,12 +243,16 @@ class SignalSlingerProtocolCodecTest {
         val currentUpdate = SignalSlingerProtocolCodec.parseReportLine("* Temp: 40.0C")
         val minimumUpdate = SignalSlingerProtocolCodec.parseReportLine("* Min Temp: 35.5C")
         val thresholdUpdate = SignalSlingerProtocolCodec.parseReportLine("* Thermal shutdown threshold: 50C")
+        val disabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Thermal shutdown: Disabled")
+        val enabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Thermal shutdown: Enabled")
 
         assertEquals(48.0, maximumEverUpdate?.deviceStatusPatch?.maximumEverTemperatureC)
         assertEquals(42.5, maximumUpdate?.deviceStatusPatch?.maximumTemperatureC)
         assertEquals(40.0, currentUpdate?.deviceStatusPatch?.temperatureC)
         assertEquals(35.5, minimumUpdate?.deviceStatusPatch?.minimumTemperatureC)
         assertEquals(50.0, thresholdUpdate?.deviceStatusPatch?.thermalShutdownThresholdC)
+        assertEquals(false, disabledUpdate?.deviceStatusPatch?.thermalShutdownEnabled)
+        assertEquals(true, enabledUpdate?.deviceStatusPatch?.thermalShutdownEnabled)
     }
 
     @Test

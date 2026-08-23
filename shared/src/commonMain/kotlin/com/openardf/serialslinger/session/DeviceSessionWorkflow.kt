@@ -155,6 +155,7 @@ object DeviceSessionWorkflow {
                 maximumTemperatureC = update.deviceStatusPatch?.maximumTemperatureC ?: status.maximumTemperatureC,
                 maximumEverTemperatureC = update.deviceStatusPatch?.maximumEverTemperatureC ?: status.maximumEverTemperatureC,
                 thermalShutdownThresholdC = update.deviceStatusPatch?.thermalShutdownThresholdC ?: status.thermalShutdownThresholdC,
+                thermalShutdownEnabled = update.deviceStatusPatch?.thermalShutdownEnabled ?: status.thermalShutdownEnabled,
                 internalBatteryVolts = update.deviceStatusPatch?.internalBatteryVolts ?: status.internalBatteryVolts,
                 externalBatteryVolts = update.deviceStatusPatch?.externalBatteryVolts ?: status.externalBatteryVolts,
                 daysRemaining = update.deviceStatusPatch?.daysRemaining ?: status.daysRemaining,

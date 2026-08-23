@@ -40,6 +40,7 @@ data class DeviceStatusPatch(
     val maximumTemperatureC: Double? = null,
     val maximumEverTemperatureC: Double? = null,
     val thermalShutdownThresholdC: Double? = null,
+    val thermalShutdownEnabled: Boolean? = null,
     val internalBatteryVolts: Double? = null,
     val externalBatteryVolts: Double? = null,
     val daysRemaining: Int? = null,
@@ -172,6 +173,7 @@ object SignalSlingerProtocolCodec {
     private val minimumTemperaturePattern = Regex("""^\*\s*Min Temp:\s*(-?\d+(?:\.\d+)?)C$""")
     private val maximumEverTemperaturePattern = Regex("""^\*\s*Max Ever:\s*(-?\d+(?:\.\d+)?)C$""")
     private val thermalShutdownThresholdPattern = Regex("""^\*\s*Thermal shutdown threshold:\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
+    private val thermalShutdownModePattern = Regex("""^\*\s*Thermal shutdown:\s*(Enabled|Disabled)$""", RegexOption.IGNORE_CASE)
     private val negativeEventStatePatterns = listOf(
         Regex("""^\*\s*Not scheduled$""", RegexOption.IGNORE_CASE),
         Regex("""^\*.*will not run.*$""", RegexOption.IGNORE_CASE),
@@ -346,7 +348,10 @@ object SignalSlingerProtocolCodec {
 
         arduconThermalShutdownThresholdPattern.matchEntire(trimmed)?.let { match ->
             val thresholdC = match.groupValues[1].toDouble()
-                .takeIf { it >= ThermalShutdownSupport.minimumCelsius && it <= ThermalShutdownSupport.maximumCelsius }
+                .takeIf {
+                    it >= ThermalShutdownSupport.minimumCelsius &&
+                        it <= ThermalShutdownSupport.arduconMaximumCelsius
+                }
                 ?: return null
             return DeviceReportUpdate(
                 deviceStatusPatch = DeviceStatusPatch(
@@ -630,6 +635,14 @@ object SignalSlingerProtocolCodec {
             return DeviceReportUpdate(
                 deviceStatusPatch = DeviceStatusPatch(
                     thermalShutdownThresholdC = match.groupValues[1].toDouble(),
+                ),
+            )
+        }
+
+        thermalShutdownModePattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceStatusPatch = DeviceStatusPatch(
+                    thermalShutdownEnabled = match.groupValues[1].equals("Enabled", ignoreCase = true),
                 ),
             )
         }
