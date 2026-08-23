@@ -3,7 +3,7 @@
   "previousRelease": "v2.0.17",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "81359554c1b62785d865a29dc824af68397192ad",
+  "sourceCommit": "60ec392447787aa191de42e62fc98ecd913b13e8",
   "version": "2.0.18",
   "androidVersionCode": "26",
   "releaseNotesFile": "docs/release-notes/v2.0.18.md",
@@ -94,29 +94,29 @@
     },
     {
       "id": "tag-pushed",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "2026-08-22 pushed main and annotated tag v2.0.18 to origin; tag target is 60ec392447787aa191de42e62fc98ecd913b13e8.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "workflow-published",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions jDeploy Release run 32616718684 completed successfully in 4m38s; desktop bundle build, jDeploy publication, canonical tarball upload, macOS branding repair, and GitHub release publication all passed.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "release-verified",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub release v2.0.18 is published with draft=false, prerelease=false, target 60ec392447787aa191de42e62fc98ecd913b13e8, and 14 uploaded assets. Direct tarball HTTP returned 200 and 3773803 bytes. Downloaded serialslinger-2.0.18.tgz SHA-256 19919ff8de61e56a5a610856dfaa6933e2596ad76ea003576980e0df5bc755f8 contains package version 2.0.18 and release commit/tag metadata; downloaded Mac ARM64 installer SHA-256 1b93ba87d7478e510f792aa93cc61257e5629561e06e5e2f79ea75cd82427fc7 contains branded icon.icns and app.xml icon data.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "final-checklist-audit",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Final audit covers plain 2.0.18 and Android versionCode 26 alignment, checked release notes, user-authorized hardware-test exclusions, full Gradle and jDeploy package/install gates, Android release bundle build, gitleaks, main synchronization, annotated tag, successful watched workflow, and public metadata, HTTP, hash, and artifact-content verification.",
       "skipReason": "",
       "skipRequestedBy": ""
     }
