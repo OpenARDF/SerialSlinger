@@ -62,7 +62,13 @@ fun DeviceIdentityObservation.comparisonWith(expected: DeviceIdentityObservation
 
 fun DeviceInfo.deviceIdentityObservation(): DeviceIdentityObservation =
     DeviceIdentityObservation(
-        recognizedInfoResponse = identityReportReceived,
+        recognizedInfoResponse =
+            identityReportReceived ||
+                (
+                    productName.equals("SignalSlinger", ignoreCase = true) &&
+                        softwareVersion != null &&
+                        !SignalSlingerFirmwareSupport.supportsDeviceUniqueId(softwareVersion)
+                ),
         deviceUniqueId = deviceUniqueId,
     )
 
@@ -137,11 +143,10 @@ data class DeviceSubmitResult(
 
 object DeviceSessionController {
     fun probeDeviceIdentity(transport: DeviceTransport): DeviceIdentityProbeResult {
-        val command = "INF"
         val linesReceived = mutableListOf<String>()
         val traceEntries = mutableListOf<SerialTraceEntry>()
 
-        repeat(DEVICE_IDENTITY_PROBE_ATTEMPTS) { attemptIndex ->
+        fun sendAndRead(command: String): List<String> {
             val sentAtMs = platformCurrentTimeMillis()
             transport.sendCommands(listOf(command))
             traceEntries += SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, command)
@@ -152,6 +157,22 @@ object DeviceSessionController {
             traceEntries += responseLines.map { line ->
                 SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line)
             }
+            return responseLines
+        }
+
+        fun preUidSignalSlingerObserved(responseLines: List<String>): Boolean =
+            responseLines
+                .mapNotNull { line ->
+                    SignalSlingerProtocolCodec.parseReportLine(line)?.deviceInfoPatch
+                }
+                .any { patch ->
+                    patch.productName.equals("SignalSlinger", ignoreCase = true) &&
+                        patch.softwareVersion != null &&
+                        !SignalSlingerFirmwareSupport.supportsDeviceUniqueId(patch.softwareVersion)
+                }
+
+        repeat(DEVICE_IDENTITY_PROBE_ATTEMPTS) { attemptIndex ->
+            val responseLines = sendAndRead("INF")
             val deviceInfoPatches = responseLines.mapNotNull { line ->
                 SignalSlingerProtocolCodec.parseReportLine(line)?.deviceInfoPatch
             }
@@ -165,13 +186,7 @@ object DeviceSessionController {
                     traceEntries = traceEntries,
                 )
             }
-            val preUidFirmwareObserved =
-                deviceInfoPatches.any { patch ->
-                    patch.productName.equals("SignalSlinger", ignoreCase = true) &&
-                        patch.softwareVersion != null &&
-                        !SignalSlingerFirmwareSupport.supportsDeviceUniqueId(patch.softwareVersion)
-                }
-            if (preUidFirmwareObserved) {
+            if (preUidSignalSlingerObserved(responseLines)) {
                 return DeviceIdentityProbeResult(
                     deviceUniqueId = null,
                     recognizedInfoResponse = true,
@@ -179,6 +194,21 @@ object DeviceSessionController {
                     linesReceived = linesReceived,
                     traceEntries = traceEntries,
                 )
+            }
+            val legacyHelpResponse = responseLines.any { line ->
+                line.trim().equals("* Commands:", ignoreCase = true)
+            }
+            if (attemptIndex == 0 && legacyHelpResponse) {
+                val versionResponseLines = sendAndRead("VER")
+                if (preUidSignalSlingerObserved(versionResponseLines)) {
+                    return DeviceIdentityProbeResult(
+                        deviceUniqueId = null,
+                        recognizedInfoResponse = true,
+                        attemptCount = attemptIndex + 1,
+                        linesReceived = linesReceived,
+                        traceEntries = traceEntries,
+                    )
+                }
             }
             if (attemptIndex < DEVICE_IDENTITY_PROBE_ATTEMPTS - 1) {
                 platformSleep(DEVICE_IDENTITY_PROBE_RETRY_SETTLE_MS)

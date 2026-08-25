@@ -5164,7 +5164,7 @@ object AndroidSessionController {
                     )
                     add(
                         AndroidLogEntry(
-                            "No recognizable INF identity report was received after " +
+                            "No recognizable device identity report was received after " +
                                 "${failure.probeResult.attemptCount} attempts; " +
                                 "${failure.probeResult.linesReceived.size} response lines were captured.",
                             AndroidLogCategory.APP,

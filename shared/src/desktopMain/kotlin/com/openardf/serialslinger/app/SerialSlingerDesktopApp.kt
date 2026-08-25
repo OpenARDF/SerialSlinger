@@ -874,6 +874,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var cloneTemplateSourceDeviceUniqueId: String? = null
     private var clockDisplayTimer: Timer? = null
     private var automaticDeviceTimeSyncTimer: Timer? = null
+    private var automaticDeviceTimeSyncFailureSuppressed: Boolean = false
     private var clockPhaseWarningActive: Boolean = false
     private var lastClockPhaseErrorMillis: Long? = null
     private var autoDetectButtonLongPressTimer: Timer? = null
@@ -10425,6 +10426,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         busyDialogPrimaryMessage: String? = null,
         verifyConnectedIdentity: Boolean = true,
         exitProtectionOperation: String? = null,
+        onFailure: ((Exception) -> Unit)? = null,
         task: () -> Unit,
     ) {
         if (backgroundWorkInProgress || appMessageDialogVisible) {
@@ -10466,6 +10468,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                         updateAdvancedDeviceDataRefreshTimer()
                         return@invokeLater
                     }
+                    onFailure?.invoke(exception)
                     if (exception is ConnectedDeviceIdentityChangedException) {
                         backgroundWorkInProgress = false
                         updateAdvancedDeviceDataRefreshTimer()
@@ -10565,7 +10568,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             add(
                 DesktopLogEntry(
-                    "No recognizable INF identity report was received after " +
+                    "No recognizable device identity report was received after " +
                         "${failure.probeResult.attemptCount} attempts; " +
                         "${failure.probeResult.linesReceived.size} response lines were captured.",
                     DesktopLogCategory.APP,
@@ -11237,6 +11240,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         if (displayPreferences.timeSetMode == mode) {
             return
         }
+        automaticDeviceTimeSyncFailureSuppressed = false
         displayPreferences = displayPreferences.copy(timeSetMode = mode)
         applyTimeSetMode(mode)
         persistDisplayPreferences()
@@ -12578,6 +12582,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         currentState = connection.result.state
         currentConnectedPortPath = connection.portPath
         loadedSnapshot = connection.result.state.snapshot
+        automaticDeviceTimeSyncFailureSuppressed = false
         lastConnectedDeviceIdentityProbeAtMs = 0L
         updateProductSectionTitles(loadedSnapshot)
         temperatureResetCommandsSupported = connection.temperatureResetCommandsSupported
@@ -13076,7 +13081,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun syncDeviceTimeToSystem(onComplete: (Boolean) -> Unit = {}) {
+    private fun syncDeviceTimeToSystem(
+        automaticRequest: Boolean = false,
+        onComplete: (Boolean) -> Unit = {},
+    ) {
         val transport = currentTransport
         val state = currentState
         val snapshot = loadedSnapshot
@@ -13091,7 +13099,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
 
-        runInBackground("Syncing device time to system time...") {
+        runInBackground(
+            status = "Syncing device time to system time...",
+            onFailure = {
+                if (automaticRequest) {
+                    automaticDeviceTimeSyncFailureSuppressed = true
+                }
+            },
+        ) {
             try {
                 val syncProgressTotal = estimatedSyncProgressUnits()
                 setBusyProgress(0, syncProgressTotal, "Preparing sync")
@@ -13109,6 +13124,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 loadedSnapshot = finalAttempt.state.snapshot
                 deviceTimeOffset = Duration.ofMillis(-(finalAttempt.phaseErrorMillis ?: 0L))
                 lastDeviceTimeCheckAtMs = System.currentTimeMillis()
+                automaticDeviceTimeSyncFailureSuppressed = false
 
                 SwingUtilities.invokeLater {
                     applySnapshotToForm(finalAttempt.state.snapshot, recalculateClockOffset = false)
@@ -13878,26 +13894,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun maybeTriggerAutomaticDeviceTimeSync() {
-        if (
-            displayPreferences.timeSetMode != TimeSetMode.AUTOMATIC ||
-            currentTransport == null ||
-            currentState?.connectionState != ConnectionState.CONNECTED ||
-            loadedSnapshot?.capabilities?.supportsScheduling != true ||
-            !automaticDeviceTimeSyncNeeded()
-        ) {
+        if (!shouldScheduleAutomaticDeviceTimeSync()) {
             return
         }
         if (automaticDeviceTimeSyncTimer?.isRunning == true) {
             return
         }
         automaticDeviceTimeSyncTimer = Timer(100) {
-            if (
-                displayPreferences.timeSetMode != TimeSetMode.AUTOMATIC ||
-                currentTransport == null ||
-                currentState?.connectionState != ConnectionState.CONNECTED ||
-                loadedSnapshot?.capabilities?.supportsScheduling != true ||
-                !automaticDeviceTimeSyncNeeded()
-            ) {
+            if (!shouldScheduleAutomaticDeviceTimeSync()) {
                 automaticDeviceTimeSyncTimer?.stop()
                 automaticDeviceTimeSyncTimer = null
                 return@Timer
@@ -13905,7 +13909,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             if (!backgroundWorkInProgress && !appMessageDialogVisible) {
                 automaticDeviceTimeSyncTimer?.stop()
                 automaticDeviceTimeSyncTimer = null
-                syncDeviceTimeToSystem()
+                syncDeviceTimeToSystem(automaticRequest = true)
             }
         }.apply {
             isRepeats = true
@@ -13916,6 +13920,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun automaticDeviceTimeSyncNeeded(): Boolean {
         return loadedSnapshot?.settings?.currentTimeCompact == null || hasClockPhaseWarning()
     }
+
+    private fun shouldScheduleAutomaticDeviceTimeSync(): Boolean =
+        DesktopAutomaticWorkPolicy.shouldScheduleAutomaticTimeSync(
+            automaticMode = displayPreferences.timeSetMode == TimeSetMode.AUTOMATIC,
+            transportAvailable = currentTransport != null,
+            connected = currentState?.connectionState == ConnectionState.CONNECTED,
+            schedulingSupported = loadedSnapshot?.capabilities?.supportsScheduling == true,
+            syncNeeded = automaticDeviceTimeSyncNeeded(),
+            failureSuppressed = automaticDeviceTimeSyncFailureSuppressed,
+        )
 
     private fun maybeShowCloneClockReminder(
         message: String,

@@ -60,4 +60,28 @@ class DesktopAutomaticWorkPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun automaticTimeSyncRunsOnlyUntilAConnectionAttemptFails() {
+        assertTrue(
+            DesktopAutomaticWorkPolicy.shouldScheduleAutomaticTimeSync(
+                automaticMode = true,
+                transportAvailable = true,
+                connected = true,
+                schedulingSupported = true,
+                syncNeeded = true,
+                failureSuppressed = false,
+            ),
+        )
+        assertFalse(
+            DesktopAutomaticWorkPolicy.shouldScheduleAutomaticTimeSync(
+                automaticMode = true,
+                transportAvailable = true,
+                connected = true,
+                schedulingSupported = true,
+                syncNeeded = true,
+                failureSuppressed = true,
+            ),
+        )
+    }
 }

@@ -187,6 +187,85 @@ class DeviceSessionControllerTest {
     }
 
     @Test
+    fun probeDeviceIdentityRecognizesFirmware12sAfterHelpOnlyInfReply() {
+        val transport =
+            FakeDeviceTransport(
+                scriptedResponses =
+                    mapOf(
+                        "INF" to
+                            listOf(
+                                "> INF",
+                                "* Commands:",
+                                "* > CLK [T|S|F|D [\"YYMMDDhhmmss\"]] - Read/set time/start/finish/days",
+                            ),
+                        "VER" to
+                            listOf(
+                                "VER",
+                                "* SignalSlinger 80m Radio Orienteering Transmitter",
+                                "* SW Ver: 1.2s HW Build: 3.4",
+                            ),
+                    ),
+            )
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+
+        assertEquals(listOf("INF", "VER"), transport.sentCommands)
+        assertTrue(result.recognizedInfoResponse)
+        assertEquals(null, result.deviceUniqueId)
+        assertEquals(1, result.attemptCount)
+    }
+
+    @Test
+    fun probeDeviceIdentityRecognizesFirmware121AfterHelpOnlyInfReply() {
+        val transport =
+            FakeDeviceTransport(
+                scriptedResponses =
+                    mapOf(
+                        "INF" to
+                            listOf(
+                                "> INF",
+                                "* Commands:",
+                                "* > ? - List valid commands",
+                            ),
+                        "VER" to
+                            listOf(
+                                "VER",
+                                "* SignalSlinger 80m Radio Orienteering Transmitter",
+                                "* SW Ver: 1.2.1 HW Build: 3.5",
+                            ),
+                    ),
+            )
+
+        val result = DeviceSessionController.probeDeviceIdentity(transport)
+
+        assertEquals(listOf("INF", "VER"), transport.sentCommands)
+        assertTrue(result.recognizedInfoResponse)
+        assertEquals(null, result.deviceUniqueId)
+        assertEquals(1, result.attemptCount)
+    }
+
+    @Test
+    fun loadedFirmware12SeriesDevicesAreRecognizedAsLegacyIdentities() {
+        listOf("1.2s", "1.2.1").forEach { softwareVersion ->
+            val observation =
+                DeviceInfo(
+                    productName = "SignalSlinger",
+                    softwareVersion = softwareVersion,
+                ).deviceIdentityObservation()
+
+            assertTrue(observation.recognizedInfoResponse, softwareVersion)
+            assertEquals(null, observation.deviceUniqueId)
+        }
+
+        assertFalse(
+            DeviceInfo(
+                productName = "SignalSlinger",
+                softwareVersion = "2.0.3",
+            ).deviceIdentityObservation().recognizedInfoResponse,
+        )
+    }
+
+    @Test
     fun probeDeviceIdentityDoesNotTreatUidCapableVersionReportAsLegacyIdentity() {
         val transport =
             FakeDeviceTransport(

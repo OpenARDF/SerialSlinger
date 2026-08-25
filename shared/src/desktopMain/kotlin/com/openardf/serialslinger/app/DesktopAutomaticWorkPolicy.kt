@@ -33,4 +33,19 @@ object DesktopAutomaticWorkPolicy {
         backgroundWorkInProgress ||
             appMessageDialogVisible ||
             identityProbeInProgress
+
+    fun shouldScheduleAutomaticTimeSync(
+        automaticMode: Boolean,
+        transportAvailable: Boolean,
+        connected: Boolean,
+        schedulingSupported: Boolean,
+        syncNeeded: Boolean,
+        failureSuppressed: Boolean,
+    ): Boolean =
+        automaticMode &&
+            transportAvailable &&
+            connected &&
+            schedulingSupported &&
+            syncNeeded &&
+            !failureSuppressed
 }
