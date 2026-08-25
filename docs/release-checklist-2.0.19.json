@@ -99,8 +99,8 @@
     {
       "id": "merged-to-main",
       "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "main was fast-forwarded from 1ce7ddb to verified release-candidate e7505a2 with git merge --ff-only Development_Android before tagging v2.0.19.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
