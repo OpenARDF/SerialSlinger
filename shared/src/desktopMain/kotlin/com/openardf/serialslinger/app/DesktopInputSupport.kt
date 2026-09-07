@@ -426,6 +426,8 @@ object DesktopInputSupport {
         finishTimeCompact: String?,
         startsInFallback: String?,
         daysToRun: Int? = null,
+        sessionReport: com.openardf.serialslinger.model.SessionReport? = null,
+        sessionHistory: List<com.openardf.serialslinger.model.SessionHistoryRecord> = emptyList(),
     ): String {
         return JvmTimeSupport.describeEventStatus(
             deviceReportedEventEnabled = deviceReportedEventEnabled,
@@ -435,6 +437,8 @@ object DesktopInputSupport {
             finishTimeCompact = finishTimeCompact,
             startsInFallback = startsInFallback,
             daysToRun = daysToRun,
+            sessionReport = sessionReport,
+            sessionHistory = sessionHistory,
         )
     }
 

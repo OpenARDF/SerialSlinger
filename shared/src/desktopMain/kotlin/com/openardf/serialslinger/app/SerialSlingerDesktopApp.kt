@@ -1,5 +1,7 @@
 package com.openardf.serialslinger.app
 
+import com.openardf.serialslinger.model.JvmTimeSupport
+
 import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.ArduconFoxRole
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
@@ -11151,20 +11153,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     ThermalShutdownSupport.minimumCelsius,
                     ThermalShutdownSupport.maximumCelsius(snapshot.info.productName),
                 )
-                ?: 50
+                ?: if (snapshot.info.productName.equals("Arducon", ignoreCase = true)) 50 else 65
         val maximumCelsius = ThermalShutdownSupport.maximumCelsius(snapshot.info.productName)
         if (snapshot.capabilities.supportsThermalShutdownMode) {
             val choices = listOf("Disabled (fan and temperature logging remain active)") +
                 (ThermalShutdownSupport.minimumCelsius..maximumCelsius).map { "Enabled at $it C" }
             val initialChoice =
-                if (snapshot.status.thermalShutdownEnabled == true) {
+                if (snapshot.status.thermalShutdownEnabled != false) {
                     choices[1 + initial - ThermalShutdownSupport.minimumCelsius]
                 } else {
                     choices.first()
                 }
             val selected = JOptionPane.showInputDialog(
                 this,
-                "Thermal shutdown is disabled by default. Select an Enabled value only if you want high temperature to suspend the event.",
+                "SignalSlinger defaults to protection enabled at 65 C. A scheduled session pauses while hot and can resume after cooling within its original time window. Disabling protection removes this safeguard.",
                 "Thermal Shutdown Threshold",
                 JOptionPane.WARNING_MESSAGE,
                 null,
@@ -13540,7 +13542,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             finishTimeCompact = timedSettings.finishTimeCompact,
             startsInFallback = snapshot.status.eventStartsInSummary,
             daysToRun = timedSettings.daysToRun,
+            sessionReport = snapshot.status.sessionReport,
+            sessionHistory = snapshot.status.sessionHistory,
         ), unreadPlaceholder = false)
+        startsInField.toolTipText = "<html>" + JvmTimeSupport.describeSessionHistory(snapshot.status.sessionHistory).replace("\n", "<br>") + "</html>"
         val lastsAlertActive = DesktopInputSupport.eventDurationDiffersFromDefault(
             startTimeCompact = timedSettings.startTimeCompact,
             finishTimeCompact = timedSettings.finishTimeCompact,

@@ -946,6 +946,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 finishTimeCompact = timedEventSettings.finishTimeCompact,
                 startsInFallback = if (cloneTemplateSettings == null) loadedStatus?.eventStartsInSummary else null,
                 daysToRun = timedEventSettings.daysToRun,
+                sessionReport = if (cloneTemplateSettings == null) loadedStatus?.sessionReport else null,
+                sessionHistory = if (cloneTemplateSettings == null) loadedStatus?.sessionHistory.orEmpty() else emptyList(),
             )
         val durationSummary =
             JvmTimeSupport.describeEventDurationHoursMinutes(
@@ -3091,6 +3093,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         finishTimeCompact = settings.finishTimeCompact,
                         startsInFallback = if (displayedTimedEventUsesCloneTemplate) null else status?.eventStartsInSummary,
                         daysToRun = settings.daysToRun,
+                        sessionReport = if (displayedTimedEventUsesCloneTemplate) null else status?.sessionReport,
+                        sessionHistory = if (displayedTimedEventUsesCloneTemplate) emptyList() else status?.sessionHistory.orEmpty(),
                     )
                 }.orEmpty()
             }
@@ -3282,6 +3286,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("External battery V: ${status.externalBatteryVolts?.toString().orUnknown()}")
             appendLine("Event enabled: ${status.eventEnabled?.toString().orUnknown()}")
             appendLine("Event state: ${status.eventStateSummary.orUnknown()}")
+            appendLine(JvmTimeSupport.describeSessionHistory(status.sessionHistory))
             appendLine(
                 "Derived event status: ${
                     JvmTimeSupport.describeEventStatus(
@@ -3292,6 +3297,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         finishTimeCompact = settings.finishTimeCompact,
                         startsInFallback = status.eventStartsInSummary,
                         daysToRun = settings.daysToRun,
+                        sessionReport = status.sessionReport,
+                        sessionHistory = status.sessionHistory,
                     )
                 }",
             )
@@ -3817,6 +3824,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 finishTimeCompact = settings.finishTimeCompact,
                 startsInFallback = status.eventStartsInSummary,
                 daysToRun = settings.daysToRun,
+                sessionReport = status.sessionReport,
+                sessionHistory = status.sessionHistory,
             )
 
         return cardLayout().apply {
@@ -3825,6 +3834,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 sectionBody(
                     buildString {
                         appendLine("Derived event status: $derivedEventStatus")
+                        appendLine(JvmTimeSupport.describeSessionHistory(status.sessionHistory))
                         appendLine("Starts in: ${status.eventStartsInSummary.orUnknown()}")
                         appendLine("Duration: ${JvmTimeSupport.describeEventDuration(settings.startTimeCompact, settings.finishTimeCompact, status.eventDurationSummary)}")
                         appendLine("Maximum ever temperature: ${formatTemperatureForUnit(status.maximumEverTemperatureC)}")
@@ -5963,10 +5973,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             } else {
                 thresholdLabels.toTypedArray()
             }
-        val currentValue = currentThresholdC?.toInt()?.coerceIn(celsiusOptions) ?: 50
+        val currentValue = currentThresholdC?.toInt()?.coerceIn(celsiusOptions)
+            ?: if (productName.equals("Arducon", ignoreCase = true)) 50 else 65
         val checkedIndex =
             if (supportsMode) {
-                if (currentEnabled == true) {
+                if (currentEnabled != false) {
                     1 + currentValue - ThermalShutdownSupport.minimumCelsius
                 } else {
                     0
@@ -5978,7 +5989,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             .setTitle("Thermal Shutdown Threshold")
             .setMessage(
                 if (supportsMode) {
-                    "Thermal shutdown is disabled by default. Select an Enabled value only if you want high temperature to suspend the event."
+                    "SignalSlinger defaults to protection enabled at 65 C. A scheduled session pauses while hot and can resume after cooling within its original time window. Disabling protection removes this safeguard."
                 } else {
                     null
                 }

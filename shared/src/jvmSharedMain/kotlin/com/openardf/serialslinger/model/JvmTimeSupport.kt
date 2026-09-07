@@ -316,6 +316,57 @@ object JvmTimeSupport {
         finishTimeCompact: String?,
         startsInFallback: String?,
         daysToRun: Int? = null,
+        sessionReport: SessionReport? = null,
+        sessionHistory: List<SessionHistoryRecord> = emptyList(),
+    ): String {
+        val observed = when (sessionReport?.action) {
+            1, 3 -> "Running"
+            2 -> "Paused: ${SessionHistorySupport.reason(sessionReport.reason)}"
+            4 -> "Last session completed (device confirmed)"
+            5 -> "Last session finished with interruptions"
+            6 -> "Interrupted: ${SessionHistorySupport.reason(sessionReport.reason)}"
+            7 -> "Schedule expired (completion unconfirmed)"
+            else -> if (sessionReport?.blocked == true) "Waiting for a safe temperature" else null
+        }
+        val summary = observed ?: describeScheduleWindow(
+            if (sessionReport == null) deviceReportedEventEnabled else null,
+            if (sessionReport == null) eventStateSummary else null, currentTimeCompact,
+            startTimeCompact, finishTimeCompact, startsInFallback, daysToRun,
+        )
+        // History spans schedules; never attach a previous schedule's stop to this one.
+        val start = startTimeCompact?.let(::parseCompactTimestamp)
+        val stop = sessionHistory.lastOrNull {
+            it.action in listOf(2, 4, 5, 6) && start != null &&
+                java.time.Instant.ofEpochSecond(it.scheduleEpoch).atZone(java.time.ZoneId.systemDefault()).toLocalDateTime() == start
+        }
+        return if (stop == null) summary else "$summary; last stop: ${SessionHistorySupport.reason(stop.reason)} (${sessionRecordTime(stop)})"
+    }
+
+    private fun sessionRecordTime(record: SessionHistoryRecord): String =
+        record.timestampCompact?.let(::parseCompactTimestamp)?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+            ?: "time unavailable"
+
+    fun describeSessionHistory(history: List<SessionHistoryRecord>): String {
+        if (history.isEmpty()) return "No device session history available."
+        return buildString {
+            if (history.any { it.flags and 128 != 0 }) appendLine("Earlier history is unavailable; the device keeps a limited recent history.")
+            history.forEach { record ->
+                append("${sessionRecordTime(record)}: ${SessionHistorySupport.action(record.action)}")
+                if (record.reason != 0) append(" — ${SessionHistorySupport.reason(record.reason)}")
+                record.temperatureC?.let { append("; $it°C (limit ${record.thresholdC}°C)") }
+                appendLine()
+            }
+        }.trim()
+    }
+
+    private fun describeScheduleWindow(
+        deviceReportedEventEnabled: Boolean?,
+        eventStateSummary: String?,
+        currentTimeCompact: String?,
+        startTimeCompact: String?,
+        finishTimeCompact: String?,
+        startsInFallback: String?,
+        daysToRun: Int? = null,
     ): String {
         val normalizedSummary = eventStateSummary?.trim().orEmpty()
         val summaryLower = normalizedSummary.lowercase()
@@ -323,6 +374,7 @@ object JvmTimeSupport {
         val start = startTimeCompact?.let(::parseCompactTimestamp)
         val finish = finishTimeCompact?.let(::parseCompactTimestamp)
 
+        if (summaryLower.contains("interrupt")) return "Interrupted (stop time unavailable)"
         if (current == null) {
             return "Device Time not set."
         }
@@ -335,32 +387,27 @@ object JvmTimeSupport {
             if (start == finish) {
                 return "Disabled"
             }
+            val overallFinish = finish.plusDays(((daysToRun ?: 1).coerceAtLeast(1) - 1).toLong())
+            if (!current.isBefore(overallFinish)) return "Schedule expired (completion unconfirmed)"
+            if (deviceReportedEventEnabled == false) return "Disabled"
             if (current < start) {
                 return "Starts in ${formatDurationCompact(Duration.between(current, start))}"
             }
 
             val totalDays = daysToRun?.coerceAtLeast(1) ?: 1
             if (totalDays > 1) {
-                val overallFinish = finish.plusDays((totalDays - 1).toLong())
-                if (!current.isBefore(overallFinish)) {
-                    return "Completed $totalDays of $totalDays days"
-                }
-
                 val elapsedDays = max(0L, Duration.between(start, current).toDays())
                 val activeWindowStart = start.plusDays(elapsedDays)
                 val activeWindowFinish = finish.plusDays(elapsedDays)
                 if (!current.isBefore(activeWindowStart) && current < activeWindowFinish) {
-                    return "Running Day ${elapsedDays + 1} - Time remaining ${formatDurationCompact(Duration.between(current, activeWindowFinish))}"
+                    return "${if (deviceReportedEventEnabled == true) "Running" else "Scheduled"} Day ${elapsedDays + 1} - Time remaining ${formatDurationCompact(Duration.between(current, activeWindowFinish))}"
                 }
 
                 return "Starts in ${formatDurationCompact(Duration.between(current, activeWindowStart.plusDays(1)))}"
             }
 
             if (current < finish) {
-                return "Running - Time remaining ${formatDurationCompact(Duration.between(current, finish))}"
-            }
-            if (!current.isBefore(finish)) {
-                return "Completed"
+                return "${if (deviceReportedEventEnabled == true) "Running" else "Scheduled"} - Time remaining ${formatDurationCompact(Duration.between(current, finish))}"
             }
         }
 

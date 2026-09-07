@@ -1,5 +1,7 @@
 package com.openardf.serialslinger.protocol
 
+import com.openardf.serialslinger.model.SessionReport
+import com.openardf.serialslinger.model.SessionHistoryRecord
 import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DaysToRunSupport
@@ -35,6 +37,9 @@ data class DeviceInfoPatch(
 )
 
 data class DeviceStatusPatch(
+    val sessionReport: SessionReport? = null,
+    val clearSessionHistory: Boolean = false,
+    val sessionHistoryRecord: SessionHistoryRecord? = null,
     val temperatureC: Double? = null,
     val minimumTemperatureC: Double? = null,
     val maximumTemperatureC: Double? = null,
@@ -194,6 +199,7 @@ object SignalSlingerProtocolCodec {
 
     fun parseReportLine(line: String): DeviceReportUpdate? {
         val trimmed = line.trim()
+        if (trimmed.startsWith("* Session ")) return parseSessionReport(trimmed)
         appInfoPattern.find(trimmed)?.let { match ->
             val fields = parseKeyValueFields(match.groupValues[1])
             val productName = fields["product"]
@@ -841,6 +847,48 @@ object SignalSlingerProtocolCodec {
         }
 
         return "$year$month$day$hour$minute$second"
+    }
+
+    private fun parseSessionReport(line: String): DeviceReportUpdate? {
+        val fields = parseKeyValueFields(line.substringAfter(":", ""))
+        fun number(key: String, range: LongRange): Long? = fields[key]?.toLongOrNull()?.takeIf { it in range }
+        fun small(key: String, range: IntRange): Int? = number(key, range.first.toLong()..range.last.toLong())?.toInt()
+        val patch = when {
+            line.startsWith("* Session state:") -> {
+                if (fields["v"] != "1") return null
+                val action = small("action", 0..7) ?: return null
+                val reason = small("reason", 0..9) ?: return null
+                val remaining = small("remaining", 0..255) ?: return null
+                val blocked = small("blocked", 0..1) ?: return null
+                DeviceStatusPatch(sessionReport = SessionReport(action, reason, remaining, blocked == 1), daysRemaining = remaining)
+            }
+            line.startsWith("* Session history:") -> {
+                if (fields["v"] != "1") return null
+                val capacity = small("capacity", 1..16) ?: return null
+                small("count", 0..capacity) ?: return null
+                DeviceStatusPatch(clearSessionHistory = true)
+            }
+            line.startsWith("* Session record:") -> {
+                if (fields["v"] != "1") return null
+                val sequence = number("seq", 0..0xffffffffL) ?: return null
+                val base = number("base", 0..0xffffffffL) ?: return null
+                val start = number("start", 0..0xffffffffL) ?: return null
+                val finish = number("finish", 0..0xffffffffL) ?: return null
+                val at = number("at", 0..0xffffffffL) ?: return null
+                val action = small("action", 1..7) ?: return null
+                val reason = small("reason", 0..9) ?: return null
+                val flags = small("flags", 0..255) ?: return null
+                val temp = small("temp", -32768..32767) ?: return null
+                val limit = small("limit", 30..85) ?: return null
+                DeviceStatusPatch(sessionHistoryRecord = SessionHistoryRecord(
+                    sequence, base, start, finish,
+                    if (flags and 1 != 0) parseEpochSecondsCompact(at.toString()) else null,
+                    action, reason, flags, if (temp == -32768) null else temp / 10.0, limit,
+                ))
+            }
+            else -> return null
+        }
+        return DeviceReportUpdate(deviceStatusPatch = patch)
     }
 
     private fun parseEpochSecondsCompact(raw: String): String? {

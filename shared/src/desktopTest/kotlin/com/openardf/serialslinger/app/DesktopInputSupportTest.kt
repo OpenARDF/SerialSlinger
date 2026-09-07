@@ -144,7 +144,7 @@ class DesktopInputSupportTest {
     }
 
     @Test
-    fun describesCompletedEventAsCompleted() {
+    fun describesPastWindowAsExpiredWithoutCompletionEvidence() {
         val label = DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = true,
             eventStateSummary = null,
@@ -154,7 +154,7 @@ class DesktopInputSupportTest {
             startsInFallback = null,
         )
 
-        assertEquals("Completed", label)
+        assertEquals("Schedule expired (completion unconfirmed)", label)
     }
 
     @Test
@@ -188,7 +188,7 @@ class DesktopInputSupportTest {
     }
 
     @Test
-    fun describesCompletedMultiDayEventWithProgressSummary() {
+    fun doesNotInferSuccessfulDaysFromExpiredSchedule() {
         val label = DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = true,
             eventStateSummary = null,
@@ -199,7 +199,7 @@ class DesktopInputSupportTest {
             daysToRun = 3,
         )
 
-        assertEquals("Completed 3 of 3 days", label)
+        assertEquals("Schedule expired (completion unconfirmed)", label)
     }
 
     @Test

@@ -146,10 +146,21 @@ object DeviceSessionWorkflow {
             productName = nextInfo.productName,
         )
 
+        val identityChanged = infoPatch?.deviceUniqueId != null && infoPatch.deviceUniqueId != info.deviceUniqueId
+        val settingsPatch = update.settingsPatch
+        val scheduleChanged =
+            (settingsPatch?.startTimeObserved == true && settingsPatch.startTimeCompact != settings.startTimeCompact) ||
+            (settingsPatch?.finishTimeObserved == true && settingsPatch.finishTimeCompact != settings.finishTimeCompact) ||
+            (settingsPatch?.daysToRun != null && settingsPatch.daysToRun != settings.daysToRun)
+        val patch = update.deviceStatusPatch
+        val history = if (identityChanged || patch?.clearSessionHistory == true) emptyList() else status.sessionHistory
+        val record = patch?.sessionHistoryRecord
         return copy(
             info = nextInfo,
             status = status.copy(
                 connectionState = connectionState,
+                sessionReport = if (identityChanged || scheduleChanged) null else patch?.sessionReport ?: status.sessionReport,
+                sessionHistory = if (record == null) history else (history.filterNot { it.sequence == record.sequence } + record).takeLast(16),
                 temperatureC = update.deviceStatusPatch?.temperatureC ?: status.temperatureC,
                 minimumTemperatureC = update.deviceStatusPatch?.minimumTemperatureC ?: status.minimumTemperatureC,
                 maximumTemperatureC = update.deviceStatusPatch?.maximumTemperatureC ?: status.maximumTemperatureC,
