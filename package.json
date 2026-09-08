@@ -1,6 +1,6 @@
 {
   "name": "serialslinger",
-  "version": "2.0.19-b",
+  "version": "2.0.20",
   "description": "Desktop configuration tool for SignalSlinger devices.",
   "author": "OpenARDF",
   "homepage": "https://github.com/OpenARDF/SerialSlinger",
