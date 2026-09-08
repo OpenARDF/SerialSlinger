@@ -43,50 +43,50 @@
     {
       "id": "android-regression",
       "description": "Run the Android tablet regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly approved omitting hardware testing for this release after confirming this includes the Android real-transmitter regression. No Android device is connected.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "desktop-regression",
       "description": "Run the macOS desktop UI regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly approved omitting hardware testing for this release after confirming this includes the Mac real-transmitter regression. Local jDeploy installation and launch were verified separately.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "windows-intel-x64-smoke",
       "description": "Install and launch the packaged Windows Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly approved omission after these platform launch checks were listed. No Windows Intel x64 host is available in this macOS session.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "windows-arm64-smoke",
       "description": "Install and launch the packaged Windows ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly approved omission after these platform launch checks were listed. No Windows ARM64 host is available in this macOS session.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "linux-intel-x64-smoke",
       "description": "Install and launch the packaged Linux Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly approved omission after these platform launch checks were listed. No Linux Intel x64 host is available in this macOS session.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "linux-arm64-smoke",
       "description": "Install and launch the packaged Linux ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly approved omission after these platform launch checks were listed. No Linux ARM64 host is available in this macOS session.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "android-release-notes",
