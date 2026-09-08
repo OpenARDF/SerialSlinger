@@ -882,7 +882,7 @@ object SignalSlingerProtocolCodec {
                 val limit = small("limit", 30..85) ?: return null
                 DeviceStatusPatch(sessionHistoryRecord = SessionHistoryRecord(
                     sequence, base, start, finish,
-                    if (flags and 1 != 0) parseEpochSecondsCompact(at.toString()) else null,
+                    if (flags and 1 != 0) parseEpochSecondsCompact(at.toString(), deviceWallClock = true) else null,
                     action, reason, flags, if (temp == -32768) null else temp / 10.0, limit,
                 ))
             }
@@ -891,12 +891,15 @@ object SignalSlingerProtocolCodec {
         return DeviceReportUpdate(deviceStatusPatch = patch)
     }
 
-    private fun parseEpochSecondsCompact(raw: String): String? {
+    private fun parseEpochSecondsCompact(raw: String, deviceWallClock: Boolean = false): String? {
         val epochSeconds = raw.trim().toLongOrNull() ?: return null
         if (epochSeconds < MinimumValidEpochSeconds || epochSeconds >= MaximumValidEpochSeconds) {
             return null
         }
-        val fields = platformLocalDateTimeFields(epochSeconds) ?: return null
+        // SignalSlinger encodes its local clock fields as an epoch without a timezone offset.
+        // Arducon's epoch reports are UTC instants and still require local conversion.
+        val fields = (if (deviceWallClock) platformUtcDateTimeFields(epochSeconds)
+            else platformLocalDateTimeFields(epochSeconds)) ?: return null
         val year = (fields.year % 100).toString().padStart(2, '0')
         val month = fields.month.toString().padStart(2, '0')
         val day = fields.day.toString().padStart(2, '0')

@@ -146,19 +146,30 @@ object DeviceSessionWorkflow {
             productName = nextInfo.productName,
         )
 
-        val identityChanged = infoPatch?.deviceUniqueId != null && infoPatch.deviceUniqueId != info.deviceUniqueId
+        // INF probes temporarily clear info.deviceUniqueId. Keep the history owner separately
+        // so rediscovering the same transmitter does not discard its freshly read records.
+        val identityChanged = infoPatch?.deviceUniqueId != null &&
+            status.sessionHistoryDeviceUniqueId != null &&
+            status.sessionHistoryDeviceUniqueId != nextInfo.deviceUniqueId
         val settingsPatch = update.settingsPatch
         val scheduleChanged =
             (settingsPatch?.startTimeObserved == true && settingsPatch.startTimeCompact != settings.startTimeCompact) ||
             (settingsPatch?.finishTimeObserved == true && settingsPatch.finishTimeCompact != settings.finishTimeCompact) ||
             (settingsPatch?.daysToRun != null && settingsPatch.daysToRun != settings.daysToRun)
         val patch = update.deviceStatusPatch
+        val eventSummary = when {
+            identityChanged -> patch?.eventStateSummary
+            patch?.eventStateSummary == "Not scheduled" &&
+                status.eventStateSummary?.contains("interrupted", ignoreCase = true) == true -> status.eventStateSummary
+            else -> patch?.eventStateSummary ?: status.eventStateSummary
+        }
         val history = if (identityChanged || patch?.clearSessionHistory == true) emptyList() else status.sessionHistory
         val record = patch?.sessionHistoryRecord
         return copy(
             info = nextInfo,
             status = status.copy(
                 connectionState = connectionState,
+                sessionHistoryDeviceUniqueId = infoPatch?.deviceUniqueId ?: status.sessionHistoryDeviceUniqueId,
                 sessionReport = if (identityChanged || scheduleChanged) null else patch?.sessionReport ?: status.sessionReport,
                 sessionHistory = if (record == null) history else (history.filterNot { it.sequence == record.sequence } + record).takeLast(16),
                 temperatureC = update.deviceStatusPatch?.temperatureC ?: status.temperatureC,
@@ -171,7 +182,7 @@ object DeviceSessionWorkflow {
                 externalBatteryVolts = update.deviceStatusPatch?.externalBatteryVolts ?: status.externalBatteryVolts,
                 daysRemaining = update.deviceStatusPatch?.daysRemaining ?: status.daysRemaining,
                 eventEnabled = update.deviceStatusPatch?.eventEnabled ?: status.eventEnabled,
-                eventStateSummary = update.deviceStatusPatch?.eventStateSummary ?: status.eventStateSummary,
+                eventStateSummary = eventSummary,
                 eventStartsInSummary = update.deviceStatusPatch?.eventStartsInSummary ?: status.eventStartsInSummary,
                 eventDurationSummary = update.deviceStatusPatch?.eventDurationSummary ?: status.eventDurationSummary,
             ),

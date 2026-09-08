@@ -55,6 +55,7 @@ import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Spinner
+import android.widget.Toast
 import android.widget.TextView
 import android.util.TypedValue
 import androidx.core.content.FileProvider
@@ -82,6 +83,8 @@ import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
 import com.openardf.serialslinger.model.MultiDayDurationGuardOption
+import com.openardf.serialslinger.model.ScheduleSubmitSupport
+import com.openardf.serialslinger.model.SchedulePresentation
 import com.openardf.serialslinger.model.ScheduleDurationGuardSupport
 import com.openardf.serialslinger.model.RelativeScheduleSelection
 import com.openardf.serialslinger.model.RelativeScheduleSupport
@@ -1353,7 +1356,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                     relativeStartDisplaySelectionOverride = null
                                     startTimeField.setText(formatRelativeTimeSelection(initialSelection))
                                 },
-                            ) { preserveDaysToRun, effectiveDuration ->
+                            ) { requestedDaysToRun, effectiveDuration ->
                                 val resolvedDuration = effectiveDuration ?: chosenDuration
                                 val finishSelection = relativeTimeSelectionForDuration(resolvedDuration)
                                 relativeStartDisplaySelectionOverride = selection
@@ -1377,7 +1380,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                                     previewStartCompact?.let {
                                                         JvmTimeSupport.finishTimeCompactFromStart(it, resolvedDuration)
                                                     },
-                                                daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
+                                                daysToRun = requestedDaysToRun,
                                             )
                                         }
                                     } else {
@@ -1385,7 +1388,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                             context = applicationContext,
                                             offsetCommand = formatRelativeTimeCommand(selection),
                                             finishOffsetCommand = JvmTimeSupport.formatRelativeDurationCommand(resolvedDuration),
-                                            preservedDaysToRun = if (preserveDaysToRun) timedEventSettings.daysToRun else null,
+                                            preservedDaysToRun = requestedDaysToRun,
                                         )
                                     }
                                 }
@@ -1440,7 +1443,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 onCancel = {
                                     startTimeField.setText(formattedTimestamp)
                                 },
-                            ) { preserveDaysToRun, effectiveDuration ->
+                            ) { requestedDaysToRun, effectiveDuration ->
                                 clearRelativeScheduleDisplayOverrides()
                                 startTimeField.setText(formattedTimestamp)
                                 runStartTimeSubmitOrPreview(
@@ -1449,7 +1452,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                         normalizedStartTime,
                                         effectiveDuration ?: chosenDuration,
                                     ),
-                                    preserveDaysToRun = preserveDaysToRun,
+                                    requestedDaysToRun = requestedDaysToRun,
                                 )
                             }
                         }
@@ -1533,7 +1536,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 relativeFinishDisplaySelectionOverride = null
                                 finishTimeField.setText(formatRelativeTimeSelection(initialSelection))
                             },
-                        ) { preserveDaysToRun, effectiveDuration ->
+                        ) { requestedDaysToRun, effectiveDuration ->
                             val effectiveSelection = if (effectiveDuration != null && effectiveDuration != proposedDuration) {
                                 relativeTimeSelectionForDuration(effectiveDuration)
                             } else {
@@ -1554,14 +1557,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                     updatePreviewSettings { settings ->
                                         settings.copy(
                                             finishTimeCompact = effectiveFinishCompact,
-                                            daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
+                                            daysToRun = requestedDaysToRun,
                                         )
                                     }
                                 } else {
                                     AndroidSessionController.runRelativeFinishTimeSubmit(
                                         context = applicationContext,
                                         offsetCommand = formatRelativeTimeCommand(effectiveSelection),
-                                        preservedDaysToRun = if (preserveDaysToRun) timedEventSettings.daysToRun else null,
+                                        preservedDaysToRun = requestedDaysToRun,
                                     )
                                 }
                             }
@@ -1591,7 +1594,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                     JvmTimeSupport.formatCompactTimestamp(timedEventSettings.finishTimeCompact),
                                 )
                             },
-                        ) { preserveDaysToRun, effectiveDuration ->
+                        ) { requestedDaysToRun, effectiveDuration ->
                             clearRelativeScheduleDisplayOverrides()
                             val finalFinishTimeInput = if (effectiveDuration?.takeIf { it != proposedDuration } != null) {
                                 val startTimeCompact = timedEventSettings.startTimeCompact ?: return@chooseScheduleChangeDurationResolution
@@ -1602,7 +1605,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             finishTimeField.setText(JvmTimeSupport.formatCompactTimestamp(finalFinishTimeInput))
                             runFinishTimeSubmitOrPreview(
                                 finishTimeInput = finalFinishTimeInput,
-                                preserveDaysToRun = preserveDaysToRun,
+                                requestedDaysToRun = requestedDaysToRun,
                             )
                         }
                     }
@@ -1693,10 +1696,16 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         ) ?: Duration.ofMinutes(defaultEventLengthMinutes.toLong()),
                 ) { selectedDuration ->
                     clearRelativeScheduleDisplayOverrides()
-                    runEventDurationSubmitOrPreview(
-                        requestedDuration = selectedDuration,
-                        preserveDaysToRun = false,
-                    )
+                    chooseScheduleChangeDurationResolution(
+                        currentDaysToRun = timedEventSettings.daysToRun,
+                        proposedDuration = selectedDuration,
+                        onCancel = {},
+                    ) { requestedDaysToRun, duration ->
+                        runEventDurationSubmitOrPreview(
+                            requestedDuration = duration ?: selectedDuration,
+                            requestedDaysToRun = requestedDaysToRun,
+                        )
+                    }
                 }
             }.apply {
                 if (durationDiffersFromDefault) {
@@ -1775,6 +1784,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     captureLabelView = { daysToRunLabelView = it },
                 ),
             )
+        }
+        if (!timedEventUnavailable) {
+            timedEventCard.addView(sectionBody(
+                if (uiState.scheduleDerivedDataPending) "Schedule: updating..."
+                else SchedulePresentation.scheduleLines(timedEventSettings).joinToString("\n"),
+            ))
+        }
+        loadedStatus?.let { status ->
+            deviceSettingsCard.addView(sectionBody(JvmTimeSupport.describeSessionHistory(status.sessionHistory)))
         }
         daysToRunLabelView?.alpha = if (schedulingFieldsEditable) 1f else 0.55f
         wireImmediateIntSpinner(daysToRunSpinner, selectedValue = timedEventSettings.daysToRun) { selectedValue ->
@@ -2869,24 +2887,24 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun runStartTimeSubmitOrPreview(
         startTimeInput: String,
         requestedFinishTimeInput: String?,
-        preserveDaysToRun: Boolean,
+        requestedDaysToRun: Int,
     ) {
         runTimedEventSettingsChangeWithCloneTemplateGuard {
-            runStartTimeSubmitOrPreviewAllowed(startTimeInput, requestedFinishTimeInput, preserveDaysToRun)
+            runStartTimeSubmitOrPreviewAllowed(startTimeInput, requestedFinishTimeInput, requestedDaysToRun)
         }
     }
 
     private fun runStartTimeSubmitOrPreviewAllowed(
         startTimeInput: String,
         requestedFinishTimeInput: String?,
-        preserveDaysToRun: Boolean,
+        requestedDaysToRun: Int,
     ) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings ->
                 settings.copy(
                     startTimeCompact = JvmTimeSupport.parseOptionalCompactTimestamp(startTimeInput),
                     finishTimeCompact = requestedFinishTimeInput?.let(JvmTimeSupport::parseOptionalCompactTimestamp),
-                    daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
+                    daysToRun = requestedDaysToRun,
                 )
             }
             return
@@ -2896,28 +2914,28 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             startTimeInput = startTimeInput,
             defaultEventLengthMinutes = defaultEventLengthMinutes,
             requestedFinishTimeInput = requestedFinishTimeInput,
-            preserveDaysToRun = preserveDaysToRun,
+            requestedDaysToRun = requestedDaysToRun,
         )
     }
 
     private fun runFinishTimeSubmitOrPreview(
         finishTimeInput: String,
-        preserveDaysToRun: Boolean,
+        requestedDaysToRun: Int,
     ) {
         runTimedEventSettingsChangeWithCloneTemplateGuard {
-            runFinishTimeSubmitOrPreviewAllowed(finishTimeInput, preserveDaysToRun)
+            runFinishTimeSubmitOrPreviewAllowed(finishTimeInput, requestedDaysToRun)
         }
     }
 
     private fun runFinishTimeSubmitOrPreviewAllowed(
         finishTimeInput: String,
-        preserveDaysToRun: Boolean,
+        requestedDaysToRun: Int,
     ) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings ->
                 settings.copy(
                     finishTimeCompact = JvmTimeSupport.parseOptionalCompactTimestamp(finishTimeInput),
-                    daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
+                    daysToRun = requestedDaysToRun,
                 )
             }
             return
@@ -2925,22 +2943,22 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.runFinishTimeSubmit(
             context = applicationContext,
             finishTimeInput = finishTimeInput,
-            preserveDaysToRun = preserveDaysToRun,
+            requestedDaysToRun = requestedDaysToRun,
         )
     }
 
     private fun runEventDurationSubmitOrPreview(
         requestedDuration: Duration,
-        preserveDaysToRun: Boolean,
+        requestedDaysToRun: Int,
     ) {
         runTimedEventSettingsChangeWithCloneTemplateGuard {
-            runEventDurationSubmitOrPreviewAllowed(requestedDuration, preserveDaysToRun)
+            runEventDurationSubmitOrPreviewAllowed(requestedDuration, requestedDaysToRun)
         }
     }
 
     private fun runEventDurationSubmitOrPreviewAllowed(
         requestedDuration: Duration,
-        preserveDaysToRun: Boolean,
+        requestedDaysToRun: Int,
     ) {
         if (isPreviewModeActive()) {
             updatePreviewSettings { settings ->
@@ -2949,7 +2967,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         settings.startTimeCompact?.let {
                             JvmTimeSupport.finishTimeCompactFromStart(it, requestedDuration)
                         },
-                    daysToRun = if (preserveDaysToRun) settings.daysToRun else settings.daysToRun,
+                    daysToRun = requestedDaysToRun,
                 )
             }
             return
@@ -2957,7 +2975,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AndroidSessionController.runEventDurationSubmit(
             context = applicationContext,
             requestedDuration = requestedDuration,
-            preserveDaysToRun = preserveDaysToRun,
+            requestedDaysToRun = requestedDaysToRun,
         )
     }
 
@@ -3287,6 +3305,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("Event enabled: ${status.eventEnabled?.toString().orUnknown()}")
             appendLine("Event state: ${status.eventStateSummary.orUnknown()}")
             appendLine(JvmTimeSupport.describeSessionHistory(status.sessionHistory))
+            SchedulePresentation.scheduleLines(settings).forEach { appendLine(it) }
             appendLine(
                 "Derived event status: ${
                     JvmTimeSupport.describeEventStatus(
@@ -7556,7 +7575,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         daysChoice: StartTimeDaysToRunChoice,
         proposedDuration: Duration?,
         onCancel: () -> Unit,
-        onResolved: (preserveDaysToRun: Boolean, resultingDuration: Duration?) -> Unit,
+        onResolved: (requestedDaysToRun: Int, resultingDuration: Duration?) -> Unit,
     ) {
         val options = ScheduleDurationGuardSupport.planForScheduleChange(
             currentDaysToRun = currentDaysToRun,
@@ -7573,7 +7592,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 proposedDuration = proposedDuration,
                 selectedOption = option,
             )
-            onResolved(resolution.preserveDaysToRun, resolution.resultingDuration)
+            onResolved(resolution.resultingDaysToRun, resolution.resultingDuration)
         }
     }
 
@@ -7581,8 +7600,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         currentDaysToRun: Int,
         proposedDuration: Duration?,
         onCancel: () -> Unit,
-        onResolved: (preserveDaysToRun: Boolean, effectiveDuration: Duration?) -> Unit,
+        onResolved: (requestedDaysToRun: Int, effectiveDuration: Duration?) -> Unit,
     ) {
+        val selectedDevice = AndroidSessionController.snapshotUiState().sessionViewState?.state?.snapshot?.info
         chooseStartTimeDaysToRunHandling(
             currentDaysToRun = currentDaysToRun,
             onCancel = onCancel,
@@ -7592,8 +7612,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 daysChoice = daysChoice,
                 proposedDuration = proposedDuration,
                 onCancel = onCancel,
-            ) { preserveDaysToRun, resolvedDuration ->
-                onResolved(preserveDaysToRun, resolvedDuration ?: proposedDuration)
+            ) { requestedDaysToRun, resolvedDuration ->
+                val currentDevice = AndroidSessionController.snapshotUiState().sessionViewState?.state?.snapshot?.info
+                if (!isPreviewModeActive() && !ScheduleSubmitSupport.sameDeviceForSchedule(selectedDevice, currentDevice)) {
+                    Toast.makeText(this, "Device changed. Review the schedule and select the days again.", Toast.LENGTH_LONG).show()
+                    onCancel()
+                    return@resolveMultiDayDurationGuardForScheduleChange
+                }
+                onResolved(requestedDaysToRun, resolvedDuration ?: proposedDuration)
             }
         }
     }

@@ -27,6 +27,7 @@ import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.CloneTemplateEligibility
 import com.openardf.serialslinger.model.CloneDeviceIdentitySupport
+import com.openardf.serialslinger.model.SchedulePresentation
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.SettingsField
@@ -4163,6 +4164,7 @@ object AndroidSessionController {
         onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
     ) {
         runRelativeScheduleSubmit(
+            requestedDaysToRun = preservedDaysToRun,
             context = context,
             commands = ScheduleSubmitSupport.relativeStartCommands(
                 offsetCommand = offsetCommand,
@@ -4203,6 +4205,7 @@ object AndroidSessionController {
         onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
     ) {
         runRelativeScheduleSubmit(
+            requestedDaysToRun = preservedDaysToRun,
             context = context,
             commands = ScheduleSubmitSupport.relativeFinishCommands(
                 offsetCommand = offsetCommand,
@@ -4221,7 +4224,7 @@ object AndroidSessionController {
         startTimeInput: String,
         defaultEventLengthMinutes: Int,
         requestedFinishTimeInput: String? = null,
-        preserveDaysToRun: Boolean = false,
+        requestedDaysToRun: Int? = null,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -4311,7 +4314,7 @@ object AndroidSessionController {
                         } else {
                             null
                         },
-                        preserveDaysToRun = preserveDaysToRun,
+                        requestedDaysToRun = requestedDaysToRun,
                     )
                     submittedStartTimeCompact = editRequest.startTimeCompact
 
@@ -4330,10 +4333,7 @@ object AndroidSessionController {
                             missingMessage = "SignalSlinger is no longer connected.",
                         ) { target, transport ->
                             resolvedTarget = target
-                            val editedSettings = editableSettings.copy(
-                                startTimeCompact = editableSettings.startTimeCompact.copy(editedValue = editRequest.startTimeCompact),
-                                finishTimeCompact = editableSettings.finishTimeCompact.copy(editedValue = editRequest.finishTimeCompact),
-                            )
+                            val editedSettings = editRequest.applyTo(editableSettings)
                             DeviceSessionController.submitEdits(
                                 sessionState,
                                 editedSettings,
@@ -4433,7 +4433,7 @@ object AndroidSessionController {
     fun runFinishTimeSubmit(
         context: Context,
         finishTimeInput: String,
-        preserveDaysToRun: Boolean = false,
+        requestedDaysToRun: Int? = null,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -4508,7 +4508,7 @@ object AndroidSessionController {
                     val editRequest = ScheduleSubmitSupport.absoluteFinishEdit(
                         currentSettings = scheduleBaseSettings,
                         normalizedFinishTime = normalizedFinishTime,
-                        preserveDaysToRun = preserveDaysToRun,
+                        requestedDaysToRun = requestedDaysToRun,
                     )
                     if (
                         editRequest.finishTimeCompact == snapshot.settings.finishTimeCompact &&
@@ -4525,15 +4525,7 @@ object AndroidSessionController {
                             missingMessage = "SignalSlinger is no longer connected.",
                         ) { target, transport ->
                             resolvedTarget = target
-                            val editedSettings =
-                                editableSettings.copy(
-                                    startTimeCompact = editableSettings.startTimeCompact.copy(
-                                        editedValue = editRequest.startTimeCompact,
-                                    ),
-                                    finishTimeCompact = editableSettings.finishTimeCompact.copy(
-                                        editedValue = editRequest.finishTimeCompact,
-                                    ),
-                                )
+                            val editedSettings = editRequest.applyTo(editableSettings)
                             DeviceSessionController.submitEdits(
                                 sessionState,
                                 editedSettings,
@@ -4618,7 +4610,7 @@ object AndroidSessionController {
     fun runEventDurationSubmit(
         context: Context,
         requestedDuration: Duration,
-        preserveDaysToRun: Boolean = false,
+        requestedDaysToRun: Int? = null,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -4629,7 +4621,7 @@ object AndroidSessionController {
                 ScheduleSubmitSupport.absoluteDurationEdit(
                     currentSettings = snapshot?.settings ?: error("Load a SignalSlinger snapshot before submitting changes."),
                     requestedDuration = requestedDuration,
-                    preserveDaysToRun = preserveDaysToRun,
+                    requestedDaysToRun = requestedDaysToRun,
                 ).finishTimeCompact ?: error("Finish Time must not be blank.")
             } catch (error: Throwable) {
                 synchronized(this) {
@@ -4648,7 +4640,7 @@ object AndroidSessionController {
         runFinishTimeSubmit(
             context = context,
             finishTimeInput = normalizedFinishTime,
-            preserveDaysToRun = preserveDaysToRun,
+            requestedDaysToRun = requestedDaysToRun,
             requestedDeviceName = requestedDeviceName,
             source = "set-lasts",
             onComplete = onComplete,
@@ -5657,6 +5649,9 @@ object AndroidSessionController {
         additionalLines: List<String> = emptyList(),
     ): String {
         return buildString {
+            result.state.snapshot?.settings?.let { settings ->
+                SchedulePresentation.scheduleLines(settings).forEach { appendLine(it) }
+            }
             appendLine("$statusPrefix submitted.")
             appendLine("Commands sent: ${result.commandsSent.size}")
             result.commandsSent.forEach { command ->
@@ -5723,6 +5718,9 @@ object AndroidSessionController {
 
         return buildString {
             appendLine("Submit succeeded.")
+            result.state.snapshot?.settings?.let { settings ->
+                SchedulePresentation.scheduleLines(settings).forEach { appendLine(it) }
+            }
             appendLine("Commands sent: ${result.commandsSent.size}")
             appendLine("Submit response lines: ${result.linesReceived.size}")
             appendLine("Readback commands sent: ${result.readbackCommandsSent.size}")
@@ -6157,6 +6155,7 @@ object AndroidSessionController {
         context: Context,
         commands: List<String>,
         primaryField: SettingKey,
+        requestedDaysToRun: Int? = null,
         statusPrefix: String,
         requestedDeviceName: String? = null,
         source: String = "ui",
@@ -6238,6 +6237,7 @@ object AndroidSessionController {
                     nextState = DeviceSessionWorkflow.ingestReportLines(nextState, responseLines)
                 }
                 val reloadResult = DeviceSessionController.refreshFromDevice(nextState, transport, startEditing = false)
+                ScheduleSubmitSupport.requireSelectedDaysReadback(requestedDaysToRun, reloadResult.linesReceived)
                 val refreshedState =
                     reloadResult.state.copy(
                         editableSettings = reloadResult.state.snapshot?.let { snapshot ->

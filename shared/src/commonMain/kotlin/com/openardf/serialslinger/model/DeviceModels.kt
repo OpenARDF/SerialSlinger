@@ -111,6 +111,7 @@ data class DeviceStatus(
     val eventStartsInSummary: String? = null,
     val eventDurationSummary: String? = null,
     val sessionReport: SessionReport? = null,
+    val sessionHistoryDeviceUniqueId: String? = null,
     val sessionHistory: List<SessionHistoryRecord> = emptyList(),
     val lastCommunicationError: String? = null,
 )

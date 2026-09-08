@@ -401,6 +401,40 @@ object DeviceSessionController {
             notifyReportReceived = ::notifyReportReceived,
         )
 
+        // A probe without a UID cannot establish ownership of history from an earlier load.
+        updatedState.snapshot?.let { snapshot ->
+            if (snapshot.info.deviceUniqueId == null && snapshot.status.sessionHistoryDeviceUniqueId != null) {
+                updatedState = updatedState.copy(snapshot = snapshot.copy(status = snapshot.status.copy(
+                    sessionReport = null, sessionHistory = emptyList(), sessionHistoryDeviceUniqueId = null,
+                )))
+            }
+        }
+
+        // EVT precedes CLK/INF in the load plan because later reads depend on its event type.
+        // Initial schedule discovery or a changed device can invalidate that early session
+        // report. Read a fresh outcome after the schedule and identity have been established.
+        if (updatedState.snapshot?.status?.sessionReport == null && lines.any {
+                SignalSlingerProtocolCodec.parseReportLine(it)?.deviceStatusPatch?.sessionReport != null
+            }) {
+            updatedState = sendCommandAndIngest(
+                command = "EVT",
+                state = updatedState,
+                transport = transport,
+                commands = commands,
+                lines = lines,
+                traceEntries = traceEntries,
+                notifyReportReceived = ::notifyReportReceived,
+            )
+            afterCommand?.invoke("EVT", updatedState, transport)?.let { intervention ->
+                commands += intervention.commandsSent
+                lines += intervention.linesReceived
+                traceEntries += intervention.traceEntries
+                notifyReportReceived(intervention.linesReceived)
+                updatedState = intervention.state
+            }
+            progress?.invoke(commands.size, commands.size)
+        }
+
         if (startEditing && updatedState.editableSettings == null) {
             updatedState = DeviceSessionWorkflow.startEditing(updatedState)
         }

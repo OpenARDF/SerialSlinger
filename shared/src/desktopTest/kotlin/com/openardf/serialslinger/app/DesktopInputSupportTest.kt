@@ -144,7 +144,7 @@ class DesktopInputSupportTest {
     }
 
     @Test
-    fun describesPastWindowAsExpiredWithoutCompletionEvidence() {
+    fun describesElapsedEventAsExpiredWithoutCompletionEvidence() {
         val label = DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = true,
             eventStateSummary = null,
@@ -154,7 +154,7 @@ class DesktopInputSupportTest {
             startsInFallback = null,
         )
 
-        assertEquals("Schedule expired (completion unconfirmed)", label)
+        assertEquals("Expired — completion not confirmed", label)
     }
 
     @Test
@@ -188,7 +188,7 @@ class DesktopInputSupportTest {
     }
 
     @Test
-    fun doesNotInferSuccessfulDaysFromExpiredSchedule() {
+    fun describesElapsedMultiDayEventAsExpiredWithoutCompletionEvidence() {
         val label = DesktopInputSupport.describeEventStatus(
             deviceReportedEventEnabled = true,
             eventStateSummary = null,
@@ -199,7 +199,7 @@ class DesktopInputSupportTest {
             daysToRun = 3,
         )
 
-        assertEquals("Schedule expired (completion unconfirmed)", label)
+        assertEquals("Expired — completion not confirmed", label)
     }
 
     @Test
@@ -210,7 +210,7 @@ class DesktopInputSupportTest {
             currentTimeCompact = "260411090000",
         )
 
-        assertEquals("(1 Remaining)", summary)
+        assertEquals("(1 remaining reported; completion unknown)", summary)
     }
 
     @Test
@@ -235,7 +235,7 @@ class DesktopInputSupportTest {
                 finishTimeCompact = "260410170000",
             )
 
-        assertEquals("(3 Remaining)", summary)
+        assertEquals("(3 scheduled windows remaining)", summary)
     }
 
     @Test
@@ -249,7 +249,7 @@ class DesktopInputSupportTest {
                 finishTimeCompact = "260410170000",
             )
 
-        assertEquals("(1 Remaining)", summary)
+        assertEquals("(2 scheduled windows remaining)", summary)
     }
 
     @Test

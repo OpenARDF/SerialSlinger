@@ -3,6 +3,7 @@ package com.openardf.serialslinger.model
 /** Values are the version 1 SignalSlinger EVT protocol, independent of firmware version. */
 data class SessionReport(val action: Int, val reason: Int, val remaining: Int, val blocked: Boolean)
 
+/** Epoch fields encode the transmitter's wall clock, not UTC instants. */
 data class SessionHistoryRecord(
     val sequence: Long,
     val scheduleEpoch: Long,

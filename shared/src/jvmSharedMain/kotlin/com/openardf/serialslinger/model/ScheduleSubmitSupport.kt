@@ -1,12 +1,21 @@
 package com.openardf.serialslinger.model
 
+import com.openardf.serialslinger.protocol.SignalSlingerProtocolCodec
 import java.time.Duration
 
 data class ScheduleEditRequest(
     val startTimeCompact: String?,
     val finishTimeCompact: String?,
+    val requestedDaysToRun: Int? = null,
     val forceWriteKeys: Set<SettingKey> = emptySet(),
-)
+) {
+    /** Keep the selected count as the write and verification target, even after a refresh. */
+    fun applyTo(editable: EditableDeviceSettings): EditableDeviceSettings = editable.copy(
+        startTimeCompact = editable.startTimeCompact.copy(editedValue = startTimeCompact),
+        finishTimeCompact = editable.finishTimeCompact.copy(editedValue = finishTimeCompact),
+        daysToRun = editable.daysToRun.copy(editedValue = requestedDaysToRun ?: editable.daysToRun.editedValue),
+    )
+}
 
 data class DaysToRunEditRequest(
     val daysToRun: Int,
@@ -16,6 +25,23 @@ data class DaysToRunEditRequest(
 )
 
 object ScheduleSubmitSupport {
+    fun sameDeviceForSchedule(expected: DeviceInfo?, actual: DeviceInfo?): Boolean =
+        expected != null && actual != null &&
+            expected.deviceUniqueId == actual.deviceUniqueId &&
+            expected.serialPortName == actual.serialPortName &&
+            expected.productName == actual.productName
+
+    /** Only fresh readback can confirm the count; an inherited snapshot is not evidence. */
+    fun requireSelectedDaysReadback(requestedDaysToRun: Int?, readbackLines: List<String>) {
+        if (requestedDaysToRun == null) return
+        val observed = readbackLines.mapNotNull {
+            SignalSlingerProtocolCodec.parseReportLine(it)?.settingsPatch?.daysToRun
+        }.lastOrNull()
+        check(observed == requestedDaysToRun) {
+            "Days To Run verification failed: selected=$requestedDaysToRun, readback=${observed ?: "not reported"}."
+        }
+    }
+
     fun relativeStartCommands(
         offsetCommand: String,
         finishOffsetCommand: String,
@@ -47,7 +73,7 @@ object ScheduleSubmitSupport {
         normalizedStartTime: String,
         requestedFinishTimeCompact: String? = null,
         defaultEventLengthMinutes: Int? = null,
-        preserveDaysToRun: Boolean = false,
+        requestedDaysToRun: Int? = null,
     ): ScheduleEditRequest {
         val resolvedStartTime = JvmTimeSupport.resolveStartTimeForChange(
             startTimeCompact = normalizedStartTime,
@@ -72,14 +98,15 @@ object ScheduleSubmitSupport {
         return ScheduleEditRequest(
             startTimeCompact = resolvedStartTime,
             finishTimeCompact = resolvedFinishTime,
-            forceWriteKeys = if (preserveDaysToRun) setOf(SettingKey.DAYS_TO_RUN) else emptySet(),
+            requestedDaysToRun = requestedDaysToRun?.let(DaysToRunSupport::validate),
+            forceWriteKeys = if (requestedDaysToRun != null) setOf(SettingKey.DAYS_TO_RUN) else emptySet(),
         )
     }
 
     fun absoluteFinishEdit(
         currentSettings: DeviceSettings,
         normalizedFinishTime: String,
-        preserveDaysToRun: Boolean = false,
+        requestedDaysToRun: Int? = null,
     ): ScheduleEditRequest {
         val resolvedSchedule = JvmTimeSupport.resolveScheduleForFinishTimeChange(
             startTimeCompact = currentSettings.startTimeCompact,
@@ -89,7 +116,8 @@ object ScheduleSubmitSupport {
         return ScheduleEditRequest(
             startTimeCompact = resolvedSchedule.startTimeCompact,
             finishTimeCompact = resolvedSchedule.finishTimeCompact,
-            forceWriteKeys = if (preserveDaysToRun) setOf(SettingKey.DAYS_TO_RUN) else emptySet(),
+            requestedDaysToRun = requestedDaysToRun?.let(DaysToRunSupport::validate),
+            forceWriteKeys = if (requestedDaysToRun != null) setOf(SettingKey.DAYS_TO_RUN) else emptySet(),
         )
     }
 
@@ -97,19 +125,19 @@ object ScheduleSubmitSupport {
         currentSettings: DeviceSettings,
         normalizedFinishTime: String,
         requestedDurationOverride: Duration? = null,
-        preserveDaysToRun: Boolean = false,
+        requestedDaysToRun: Int? = null,
     ): ScheduleEditRequest {
         return if (requestedDurationOverride != null) {
             absoluteDurationEdit(
                 currentSettings = currentSettings,
                 requestedDuration = requestedDurationOverride,
-                preserveDaysToRun = preserveDaysToRun,
+                requestedDaysToRun = requestedDaysToRun,
             )
         } else {
             absoluteFinishEdit(
                 currentSettings = currentSettings,
                 normalizedFinishTime = normalizedFinishTime,
-                preserveDaysToRun = preserveDaysToRun,
+                requestedDaysToRun = requestedDaysToRun,
             )
         }
     }
@@ -117,7 +145,7 @@ object ScheduleSubmitSupport {
     fun absoluteDurationEdit(
         currentSettings: DeviceSettings,
         requestedDuration: Duration,
-        preserveDaysToRun: Boolean = false,
+        requestedDaysToRun: Int? = null,
     ): ScheduleEditRequest {
         require(!requestedDuration.isNegative && !requestedDuration.isZero) {
             "Event duration must be positive."
@@ -127,7 +155,7 @@ object ScheduleSubmitSupport {
         return absoluteFinishEdit(
             currentSettings = currentSettings,
             normalizedFinishTime = JvmTimeSupport.finishTimeCompactFromStart(normalizedStartTime, requestedDuration),
-            preserveDaysToRun = preserveDaysToRun,
+            requestedDaysToRun = requestedDaysToRun,
         )
     }
 
@@ -146,7 +174,7 @@ object ScheduleSubmitSupport {
             absoluteFinishEdit(
                 currentSettings = currentSettings,
                 normalizedFinishTime = finishTimeCompact,
-                preserveDaysToRun = true,
+                requestedDaysToRun = requestedDaysToRun,
             )
         }
         return DaysToRunEditRequest(

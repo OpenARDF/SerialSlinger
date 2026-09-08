@@ -12,7 +12,7 @@ class SessionStatusTest {
         assertEquals("Last session finished with interruptions", status(SessionReport(5, 1, 0, false)))
         assertEquals("Last session completed (device confirmed)", status(SessionReport(4, 1, 0, false)))
         assertEquals("Schedule expired (completion unconfirmed)", status(SessionReport(7, 0, 0, false)))
-        assertEquals("Interrupted (stop time unavailable)", status(summary = "Event interrupted!", enabled = false))
+        assertEquals("Interrupted", status(summary = "Event interrupted!", enabled = false))
         assertEquals("Disabled", status(enabled = false))
         assertTrue(status(enabled = null).startsWith("Scheduled Day 2"))
     }

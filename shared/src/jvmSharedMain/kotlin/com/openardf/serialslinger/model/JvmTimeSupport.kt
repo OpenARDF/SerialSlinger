@@ -334,10 +334,11 @@ object JvmTimeSupport {
             startTimeCompact, finishTimeCompact, startsInFallback, daysToRun,
         )
         // History spans schedules; never attach a previous schedule's stop to this one.
+        // Decode the firmware epoch as wall-clock fields, just like its CLK display.
         val start = startTimeCompact?.let(::parseCompactTimestamp)
         val stop = sessionHistory.lastOrNull {
             it.action in listOf(2, 4, 5, 6) && start != null &&
-                java.time.Instant.ofEpochSecond(it.scheduleEpoch).atZone(java.time.ZoneId.systemDefault()).toLocalDateTime() == start
+                java.time.LocalDateTime.ofEpochSecond(it.scheduleEpoch, 0, java.time.ZoneOffset.UTC) == start
         }
         return if (stop == null) summary else "$summary; last stop: ${SessionHistorySupport.reason(stop.reason)} (${sessionRecordTime(stop)})"
     }
@@ -374,7 +375,15 @@ object JvmTimeSupport {
         val start = startTimeCompact?.let(::parseCompactTimestamp)
         val finish = finishTimeCompact?.let(::parseCompactTimestamp)
 
-        if (summaryLower.contains("interrupt")) return "Interrupted (stop time unavailable)"
+        // Outcome reports take precedence over calendar estimates. A past finish is not proof of RF operation.
+        if (summaryLower.contains("interrupted")) {
+            val expired = current != null && finish != null &&
+                !current.isBefore(finish.plusDays(((daysToRun ?: 1).coerceAtLeast(1) - 1).toLong()))
+            return if (expired) "Interrupted — schedule expired" else "Interrupted"
+        }
+        if (summaryLower.startsWith("session expired") || summaryLower.startsWith("no remaining scheduled day window")) {
+            return "Expired — completion not confirmed"
+        }
         if (current == null) {
             return "Device Time not set."
         }
@@ -388,7 +397,7 @@ object JvmTimeSupport {
                 return "Disabled"
             }
             val overallFinish = finish.plusDays(((daysToRun ?: 1).coerceAtLeast(1) - 1).toLong())
-            if (!current.isBefore(overallFinish)) return "Schedule expired (completion unconfirmed)"
+            if (!current.isBefore(overallFinish)) return "Expired — completion not confirmed"
             if (deviceReportedEventEnabled == false) return "Disabled"
             if (current < start) {
                 return "Starts in ${formatDurationCompact(Duration.between(current, start))}"
@@ -663,14 +672,13 @@ object JvmTimeSupport {
         if (normalizeCurrentTimeCompactForDisplay(currentTimeCompact) == null) {
             return "(? Remaining)"
         }
-        val remainingDays =
-            daysToRunRemaining ?: estimateDaysToRunRemaining(
-                totalDaysToRun = totalDaysToRun,
-                currentTimeCompact = currentTimeCompact,
-                startTimeCompact = startTimeCompact,
-                finishTimeCompact = finishTimeCompact,
-            ) ?: return ""
-        return "(${remainingDays.coerceAtLeast(0)} Remaining)"
+        val scheduledRemaining = estimateDaysToRunRemaining(
+            totalDaysToRun, currentTimeCompact, startTimeCompact, finishTimeCompact,
+        )
+        if (scheduledRemaining == 0) return "(Expired; 0 scheduled windows remaining)"
+        if (scheduledRemaining != null) return "($scheduledRemaining scheduled windows remaining)"
+        val reported = daysToRunRemaining ?: return ""
+        return "(${reported.coerceAtLeast(0)} remaining reported; completion unknown)"
     }
 
     fun estimateDaysToRunRemaining(
@@ -701,8 +709,8 @@ object JvmTimeSupport {
             return 0
         }
 
-        val elapsedDays = max(0L, Duration.between(start, current).toDays())
-        return (totalDays - elapsedDays.toInt() - 1).coerceIn(0, totalDays)
+        // Include an active window until its finish; starting is not completing it.
+        return (0 until totalDays).count { day -> current.isBefore(finish.plusDays(day.toLong())) }
     }
 
     fun currentSystemTimeCompact(systemNow: LocalDateTime = LocalDateTime.now()): String {
