@@ -3,7 +3,7 @@
   "previousRelease": "v2.0.19",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "ca7975434b840a2bbfdffb0ded4865477eeae819",
+  "sourceCommit": "4a9e3b1d69ff467f40bfd76e605074cff68e9e67",
   "version": "2.0.20",
   "androidVersionCode": "28",
   "releaseNotesFile": "docs/release-notes/v2.0.20.md",
@@ -107,32 +107,32 @@
     {
       "id": "tag-pushed",
       "description": "Create and push the annotated vX.Y.Z release tag at the verified main release commit.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Annotated v2.0.20 was pushed from verified main commit 4a9e3b1d69ff467f40bfd76e605074cff68e9e67. main and Development_Android were synchronized before publication; the pre-tag guard passed with six explicit user-approved hardware/platform waivers.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "workflow-published",
       "description": "Watch the jDeploy Release GitHub Actions workflow through publication and record the run ID, conclusion, and duration.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions jDeploy Release run 34175689181 completed successfully in 2m56s at 2026-09-08T01:12:09Z for source 4a9e3b1d69ff467f40bfd76e605074cff68e9e67. Desktop bundle build, jDeploy publication, canonical tarball upload, Mac installer branding repair, and release-body publication passed.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "release-verified",
       "description": "Verify the GitHub release is published, non-draft, non-prerelease unless requested, targets the intended commit, and exposes downloadable assets.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub release v2.0.20 is published with draft=false and prerelease=false at source 4a9e3b1d69ff467f40bfd76e605074cff68e9e67. All 14 uploaded asset URLs returned HTTP 200. Fresh serialslinger-2.0.20.tgz download (3797657 bytes; SHA256 993d9575dc52a95f1dcc8a6caef3a4b51b7eb8530b154513025fe53865a8070d) contains package and JAR version 2.0.20, the exact release commit, and gitTag v2.0.20. Fresh Mac ARM64 installer (4623956 bytes; SHA256 c26b91c7b73325d9be8d624c32502819399c01b7cde09276901a5e751ab50bee) has the verified project icon and app.xml branding. GitHub release body matches the checked notes including Android Play Console text.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "final-checklist-audit",
       "description": "Run the final checklist guard, commit the post-tag evidence update, and synchronize main and Development_Android without moving the tag.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Final audit covers aligned plain 2.0.20/Android versionCode 28, 959 successful test executions, lint and bundle verification, direct jDeploy package/install/launch checks, explicit six-check hardware/platform waiver, unsigned Android AAB disclosure, release notes, secret scanning, exact annotated tag, successful publication, and public artifact HTTP/hash/content verification. Post-tag evidence is committed and synchronized to main and Development_Android without moving v2.0.20.",
       "skipReason": "",
       "skipRequestedBy": ""
     }
