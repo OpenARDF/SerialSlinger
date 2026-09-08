@@ -3,7 +3,7 @@
   "previousRelease": "v2.0.19",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "",
+  "sourceCommit": "ca7975434b840a2bbfdffb0ded4865477eeae819",
   "version": "2.0.20",
   "androidVersionCode": "28",
   "releaseNotesFile": "docs/release-notes/v2.0.20.md",
@@ -99,8 +99,8 @@
     {
       "id": "merged-to-main",
       "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "main and Development_Android were fast-forwarded to release candidate ca79754 after preserving and reconciling duplicate release preparation. The candidate contains the tested app code, aligned 2.0.20 version and Android versionCode 28, and validated release notes.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
