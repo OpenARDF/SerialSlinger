@@ -3,7 +3,7 @@
   "previousRelease": "v2.0.20",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "",
+  "sourceCommit": "3ab1c36",
   "version": "2.0.21",
   "androidVersionCode": 29,
   "releaseNotesFile": "docs/release-notes/v2.0.21.md",
@@ -28,7 +28,7 @@
       "id": "release-preflight",
       "description": "Run the jDeploy release preflight and record the package version, target tag, workflow target, and desktop bundle verification evidence.",
       "status": "done",
-      "evidence": "2026-09-16: Gradle check, Android unit tests/compile, desktop bundle verification and bundleRelease passed; jDeploy release-preflight, package, install-local, verify-installation and pack-preview passed. Logs /private/tmp/serialslinger-2021-*.log.",
+      "evidence": "Final code at 3ab1c36: complete Gradle check, Android debug unit tests/compile, verified desktop bundle and Android release AAB passed in 5m18s. Final jDeploy preflight and local reinstall passed. Timed virtual serial baseline sent TMP at 688/1523 bytes; corrected transport waited for all 1523 and retained final record. Real app read four full seven-record histories without truncation. Logs /private/tmp/serialslinger-2021-readwindow-validation.log, -readwindow-pty.json, -final-preflight.log, -final-ui.log.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
@@ -36,7 +36,7 @@
       "id": "platform-parity-review",
       "description": "Review Android, desktop, and shared changes for parity; either carry behavior across platforms or record why a platform-specific difference is intentional.",
       "status": "done",
-      "evidence": "Clone-template overwrite and implicit GO 0 were Android-specific paths; desktop already preserves existing templates and stops only by explicit action. Shared full-UID labels and session-history presentation/log summaries cover desktop and Android; tests passed.",
+      "evidence": "Shared history/identity changes cover desktop and Android. Android-only template overwrite/implicit stop paths fixed; desktop already preserves template and requires explicit stop. The newly discovered long-reply timeout is corrected in desktop, Android USB and Android direct serial transports through the same tested bounded read window; brief polling and silence deadlines retained.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
