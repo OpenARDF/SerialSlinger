@@ -51,10 +51,10 @@
     {
       "id": "desktop-regression",
       "description": "Run the macOS desktop UI regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles waived the remaining checks on 2026-09-16. macOS launch, hardware connection, time synchronization, raw commands, and four complete seven-record history reads passed. Remaining settings edits/submission, relative scheduling, disable-event and clone UI checks were not completed because GUI automation could not reliably focus the Java controls.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "windows-intel-x64-smoke",
@@ -100,7 +100,7 @@
       "id": "merged-to-main",
       "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
       "status": "done",
-      "evidence": "Main fast-forwarded to verified release candidate 6c0b79d8c39eaf97b7f1a3feb0eda16875512695. Source fixes, full automated tests, packaged launch/connect/time/history checks and accepted platform waivers are recorded; final desktop UI waiver remains pending.",
+      "evidence": "Verified source and release preparation integrated into main at ad3615a. Charles subsequently waived the remaining desktop UI checks; all requested test waivers are recorded.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
