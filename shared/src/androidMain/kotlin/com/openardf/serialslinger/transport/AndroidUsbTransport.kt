@@ -126,6 +126,7 @@ class AndroidUsbTransport(
             readWindowMs = maxDurationMs,
             readPollTimeoutMs = 5,
             quietMs = 20,
+            completionGraceMs = 0,
         )
     }
 
@@ -137,17 +138,18 @@ class AndroidUsbTransport(
         readWindowMs: Long,
         readPollTimeoutMs: Int,
         quietMs: Long,
+        completionGraceMs: Long = 4_000,
     ): List<String> {
         val port = serialPort ?: return emptyList()
         val readStartedAt = System.currentTimeMillis()
         sleepAfterRecentWrite(readStartedAt)
-        val deadline = System.currentTimeMillis() + readWindowMs
+        val window = SerialReadWindow(System.currentTimeMillis(), readWindowMs, quietMs, completionGraceMs)
         var lastDataAt: Long? = null
         var chunkCount = 0
         var byteCount = 0
         val buffer = ByteArray(256)
 
-        while (System.currentTimeMillis() <= deadline) {
+        while (window.shouldRead(System.currentTimeMillis(), lastDataAt)) {
             val bytesRead =
                 try {
                     port.read(buffer, readPollTimeoutMs)

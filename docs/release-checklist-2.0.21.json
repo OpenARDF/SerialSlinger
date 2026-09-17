@@ -43,10 +43,10 @@
     {
       "id": "android-regression",
       "description": "Run the Android tablet regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "No Android device is attached; Charles explicitly authorized skipping this release check on 2026-09-16. Automated Android tests and release build passed.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "desktop-regression",
@@ -59,34 +59,34 @@
     {
       "id": "windows-intel-x64-smoke",
       "description": "Install and launch the packaged Windows Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "No Windows x64 release-test host is available in this session.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "windows-arm64-smoke",
       "description": "Install and launch the packaged Windows ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Windows ARM64 VM exists but a usable guest desktop and package smoke were not established in this session.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "linux-intel-x64-smoke",
       "description": "Install and launch the packaged Linux Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "No Linux x64 release-test host is available in this session.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "linux-arm64-smoke",
       "description": "Install and launch the packaged Linux ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "No Linux ARM64 release-test host is available in this session.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "android-release-notes",

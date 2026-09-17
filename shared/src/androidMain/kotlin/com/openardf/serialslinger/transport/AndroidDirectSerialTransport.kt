@@ -71,11 +71,11 @@ class AndroidDirectSerialTransport(
 
     override fun readAvailableLines(): List<String> {
         val fd = serialFd ?: return emptyList()
-        val deadline = System.currentTimeMillis() + readTimeoutMs
+        val window = SerialReadWindow(System.currentTimeMillis(), readTimeoutMs.toLong(), quietPeriodMs)
         var lastDataAt: Long? = null
         val buffer = ByteArray(256)
 
-        while (System.currentTimeMillis() <= deadline) {
+        while (window.shouldRead(System.currentTimeMillis(), lastDataAt)) {
             val bytesRead = readAvailable(fd, buffer)
             if (bytesRead > 0) {
                 lineBuffer.appendAscii(buffer, bytesRead)

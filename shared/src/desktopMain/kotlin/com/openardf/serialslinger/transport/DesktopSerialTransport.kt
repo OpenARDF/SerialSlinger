@@ -79,15 +79,15 @@ class DesktopSerialTransport(
     }
 
     fun readAvailableLinesBriefly(maxDurationMs: Long = 120): List<String> {
-        return readAvailableLinesFor(maxDurationMs)
+        return readAvailableLinesFor(maxDurationMs, completionGraceMs = 0)
     }
 
-    private fun readAvailableLinesFor(maxDurationMs: Long): List<String> {
+    private fun readAvailableLinesFor(maxDurationMs: Long, completionGraceMs: Long = 4_000): List<String> {
         val port = serialPort ?: return emptyList()
-        val deadline = System.currentTimeMillis() + maxDurationMs
+        val window = SerialReadWindow(System.currentTimeMillis(), maxDurationMs, quietPeriodMs, completionGraceMs)
         var lastDataAt: Long? = null
 
-        while (System.currentTimeMillis() <= deadline) {
+        while (window.shouldRead(System.currentTimeMillis(), lastDataAt)) {
             val availableBytes = port.bytesAvailable()
             if (availableBytes > 0) {
                 val buffer = ByteArray(availableBytes)
