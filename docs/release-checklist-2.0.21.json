@@ -3,7 +3,7 @@
   "previousRelease": "v2.0.20",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "3ab1c36",
+  "sourceCommit": "6c0b79d8c39eaf97b7f1a3feb0eda16875512695",
   "version": "2.0.21",
   "androidVersionCode": 29,
   "releaseNotesFile": "docs/release-notes/v2.0.21.md",
@@ -99,8 +99,8 @@
     {
       "id": "merged-to-main",
       "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Main fast-forwarded to verified release candidate 6c0b79d8c39eaf97b7f1a3feb0eda16875512695. Source fixes, full automated tests, packaged launch/connect/time/history checks and accepted platform waivers are recorded; final desktop UI waiver remains pending.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
