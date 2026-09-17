@@ -178,7 +178,11 @@ class DesktopSessionLog(
         synchronized(writeLock) {
             val file = currentLogFile()
             val header = headerTextIfNeeded(file)
-            val rendered = renderSection(title, entries)
+            val history = com.openardf.serialslinger.model.SessionHistoryPresentation.logSummary(
+                entries.filter { it.category == DesktopLogCategory.SERIAL && it.message.startsWith("RX ") }.map { it.message.removePrefix("RX ") },
+            )
+            val historyEntries = history?.lines()?.map { DesktopLogEntry(it, timestampMs = clock.millis()) }.orEmpty()
+            val rendered = renderSection(title, entries + historyEntries)
             val written = header + rendered
             appendToFile(file, written)
             return written

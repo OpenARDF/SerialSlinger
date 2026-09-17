@@ -776,7 +776,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val daysToRunRowLabel = JLabel("Days To Run")
     private val daysRemainingLabel = JLabel(" ")
     private val scheduleSummaryArea = JTextArea(4, 32).apply { isEditable = false }
-    private val sessionStopArea = JTextArea(3, 32).apply { isEditable = false; lineWrap = true; wrapStyleWord = true }
+    private val sessionHistoryView = DesktopSessionHistoryView {
+        showAppMessageDialog(
+            JvmTimeSupport.describeSessionHistoryDetails(loadedSnapshot?.status?.sessionHistory.orEmpty()),
+            "Transmitter run history",
+        )
+    }
+    private val sessionStopArea = sessionHistoryView.summary
+
     private val startsInField = JTextField()
     private val lastsField = JTextField()
     private val lastsRowLabel = JLabel("Duration")
@@ -2101,7 +2108,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 row = addRow(section, row, minimumTemperatureRowLabel, minimumTemperatureField)
                 row = addRow(section, row, thermalShutdownThresholdRowLabel, thermalShutdownThresholdField)
                 row = addRow(section, row, temperatureCalibrationRowLabel, temperatureCalibrationField)
-                row = addRow(section, row, "Session history", JScrollPane(sessionStopArea))
+                row = addRow(section, row, sessionHistoryView.label, sessionHistoryView.panel)
                 addRow(section, row, "Version", versionInfoField)
             })
             add(Box.createVerticalGlue())
@@ -2232,7 +2239,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val port = portPath?.takeIf { it.isNotBlank() } ?: "unknown port"
         val unit = snapshot?.info?.deviceUniqueId
             ?.takeIf { it.isNotBlank() }
-            ?.let { " unit ${it.takeLast(8)}" }
+            ?.let { " unit $it" }
             .orEmpty()
         return DesktopLogEntry(
             "Connected device type: ${productLabel(snapshot)}$unit on $port.",
@@ -2453,7 +2460,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         scheduleSummaryArea.text = SchedulePresentation.scheduleLines(settings).joinToString("\n")
         scheduleSummaryArea.caretPosition = 0
         sessionStopArea.text = JvmTimeSupport.describeSessionHistory(snapshot.status.sessionHistory)
-        sessionStopArea.caretPosition = sessionStopArea.document.length
+        sessionStopArea.caretPosition = 0
         daysField.value = settings.daysToRun.coerceAtLeast(1)
         daysRemainingLabel.text = JvmTimeSupport.formatDaysToRunRemainingSummary(
             totalDaysToRun = settings.daysToRun,
@@ -10884,6 +10891,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val defaultMenuForeground = UIManager.getColor("MenuItem.foreground") ?: Color.BLACK
         val defaultCheckBoxMenuForeground = UIManager.getColor("CheckBoxMenuItem.foreground") ?: defaultMenuForeground
         val advancedEnabled = displayPreferences.advancedModeEnabled
+        sessionHistoryView.setAdvancedMode(advancedEnabled)
         val connected = currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
         val productProfile = activeProductUiProfile()
         val volatileTemperatureResetSupported = supportsVolatileTemperatureExtremaReset()
@@ -13542,7 +13550,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             startTimeCompact = timedSettings.startTimeCompact,
             finishTimeCompact = timedSettings.finishTimeCompact,
         )
-        startsInField.toolTipText = "<html>" + JvmTimeSupport.describeSessionHistory(snapshot.status.sessionHistory).replace("\n", "<br>") + "</html>"
+        startsInField.toolTipText = null
         val lastsAlertActive = DesktopInputSupport.eventDurationDiffersFromDefault(
             startTimeCompact = timedSettings.startTimeCompact,
             finishTimeCompact = timedSettings.finishTimeCompact,

@@ -315,6 +315,11 @@ class SignalSlingerProtocolCodecTest {
 
     @Test
     fun parsesDeviceReportedEventStateLines() {
+        for (outcome in listOf("Event completed.", "Event finished with interruptions.")) {
+            val update = SignalSlingerProtocolCodec.parseReportLine("* $outcome")
+            assertEquals(false, update?.deviceStatusPatch?.eventEnabled)
+            assertEquals(outcome, update?.deviceStatusPatch?.eventStateSummary)
+        }
         val enabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Running forever.")
         val disabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Not scheduled")
         val eventStartDisabledUpdate = SignalSlingerProtocolCodec.parseReportLine("* Event start disabled (Start = Finish)")

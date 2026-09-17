@@ -12,6 +12,23 @@ import kotlin.test.assertTrue
 
 class DesktopSessionLogTest {
     @Test
+    fun savesRawDeviceHistoryAndReadableSummaryInTheSameFile() {
+        val directory = Files.createTempDirectory("desktop-history-log")
+        try {
+            val log = DesktopSessionLog(rootDirectory = directory)
+            val raw = "* Session record: v=1 seq=22 base=1789542600 start=1789516800 finish=1789543257 at=1789543257 action=4 reason=1 flags=129 temp=272 limit=65"
+            log.appendSection("Load", listOf(
+                DesktopLogEntry("RX * Session history: v=1 count=1 capacity=7", DesktopLogCategory.SERIAL),
+                DesktopLogEntry("RX $raw", DesktopLogCategory.SERIAL),
+            ))
+            val saved = Files.readString(log.currentLogFile())
+            assertTrue(saved.contains(raw))
+            assertTrue(saved.contains("Device run history (captured readback)"))
+            assertTrue(saved.contains("Completed at 2026-09-16 07:20:57"))
+        } finally { directory.toFile().deleteRecursively() }
+    }
+
+    @Test
     fun writesDailyLogFileWithDateInNameAndTimestampedEntries() {
         val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
         val log = DesktopSessionLog(

@@ -36,6 +36,7 @@ import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.TimedEventDefaultFrequencies
 import com.openardf.serialslinger.model.hasWallClockTimeSet
 import com.openardf.serialslinger.model.isValidDtmfPassword
+import com.openardf.serialslinger.session.RunningEventReadSupport
 import com.openardf.serialslinger.session.DeviceLoadInterventionResult
 import com.openardf.serialslinger.session.DeviceLoadResult
 import com.openardf.serialslinger.session.DeviceIdentityCheckPurpose
@@ -255,6 +256,7 @@ private data class EventPauseRequest(
     val id: Long,
     val message: String,
     val latch: CountDownLatch,
+    var stopRequested: Boolean = false,
 )
 
 private data class ResolvedTransport(
@@ -317,10 +319,19 @@ object AndroidSessionController {
     private var deviceTimeOffset: Duration? = null
     private var lastClockPhaseErrorMillis: Long? = null
     private var cachedManualWriteDelayMillis: Long? = null
-    private var cloneTemplateSettings: DeviceSettings? = null
-    private var cloneTemplateSourceDeviceUniqueId: String? = null
-    private var cloneTemplateDaysRemaining: Int? = null
-    private var cloneTemplateTimedEventEditsLocked: Boolean = false
+    private val cloneTemplateMemory = AndroidCloneTemplateMemory()
+    private var cloneTemplateSettings: DeviceSettings?
+        get() = cloneTemplateMemory.settings
+        set(value) { cloneTemplateMemory.settings = value }
+    private var cloneTemplateSourceDeviceUniqueId: String?
+        get() = cloneTemplateMemory.sourceDeviceUniqueId
+        set(value) { cloneTemplateMemory.sourceDeviceUniqueId = value }
+    private var cloneTemplateDaysRemaining: Int?
+        get() = cloneTemplateMemory.daysRemaining
+        set(value) { cloneTemplateMemory.daysRemaining = value }
+    private var cloneTemplateTimedEventEditsLocked: Boolean
+        get() = cloneTemplateMemory.timedEventEditsLocked
+        set(value) { cloneTemplateMemory.timedEventEditsLocked = value }
     private var pendingTimelyReplyWarning: String? = null
     private var pendingEventPauseRequest: EventPauseRequest? = null
     private var nextEventPauseRequestId: Long = 1L
@@ -437,12 +448,15 @@ object AndroidSessionController {
         }
     }
 
-    fun confirmEventPauseNotice(id: Long) {
+    fun confirmEventPauseNotice(id: Long, stopRequested: Boolean = false) {
         val request =
             synchronized(this) {
                 pendingEventPauseRequest
                     ?.takeIf { it.id == id }
-                    ?.also { pendingEventPauseRequest = null }
+                    ?.also {
+                        it.stopRequested = stopRequested
+                        pendingEventPauseRequest = null
+                    }
             }
         request?.latch?.countDown()
         if (request != null) {
@@ -1015,34 +1029,26 @@ object AndroidSessionController {
         val message =
             "The attached SignalSlinger reports that an event is in progress:\n\n" +
                 "$eventSummary\n\n" +
-                "A running event may let the SignalSlinger sleep between transmissions and miss commands. " +
-                "When you tap OK, SerialSlinger will send GO 0 to pause the event, then continue loading data."
-        if (requireConfirmation) {
-            waitForEventPauseDismissal(message)
-        }
-        val sentAtMs = System.currentTimeMillis()
-        transport.sendCommands(listOf("GO 0"))
-        val responseLines = transport.readAvailableLines()
-        val receivedAtMs = System.currentTimeMillis()
+                "Keep running reads data without stopping the event; sleeping between transmissions may leave some data unavailable. " +
+                "Stop event and read sends GO 0. The event will remain stopped until you restart it."
+        val stopRequested = !requireConfirmation || waitForEventPauseDecision(message)
+        val intervention = RunningEventReadSupport.stopIfRequested(
+            state, transport, stopRequested,
+        )
         logAppEvent(
             title = "event-state",
             lines = listOf(
                 "SignalSlinger reported an event in progress: $eventSummary",
-                if (requireConfirmation) {
-                    "User dismissed warning; sent GO 0 before continuing."
+                if (!stopRequested) {
+                    "Reading without stopping the event."
+                } else if (requireConfirmation) {
+                    "User chose Stop event and read; sent GO 0."
                 } else {
                     "Automation sent GO 0 before continuing."
                 },
             ),
         )
-        return DeviceLoadInterventionResult(
-            state = DeviceSessionWorkflow.ingestReportLines(state, responseLines),
-            commandsSent = listOf("GO 0"),
-            linesReceived = responseLines,
-            traceEntries =
-                listOf(SerialTraceEntry(sentAtMs, SerialTraceDirection.TX, "GO 0")) +
-                    responseLines.map { line -> SerialTraceEntry(receivedAtMs, SerialTraceDirection.RX, line) },
-        )
+        return intervention
     }
 
     private fun drainResidualStartupReportAfterVer(
@@ -1267,7 +1273,7 @@ object AndroidSessionController {
             ?: status.eventStartsInSummary?.trim()?.takeIf { it.isNotEmpty() }
     }
 
-    private fun waitForEventPauseDismissal(message: String) {
+    private fun waitForEventPauseDecision(message: String): Boolean {
         val request =
             synchronized(this) {
                 val request = EventPauseRequest(
@@ -1282,6 +1288,7 @@ object AndroidSessionController {
             }
         notifyListeners()
         request.latch.await()
+        return request.stopRequested
     }
 
     fun clearLoadedSessionIfMatches(
@@ -1353,6 +1360,7 @@ object AndroidSessionController {
         notifyListeners()
 
         thread(name = "serialslinger-android-probe") {
+            var runningEventChoiceMade = false
             var resolvedTarget: AndroidConnectionTarget? = null
             fun attemptProbe(
                 requestedDeviceNameForAttempt: String?,
@@ -1377,12 +1385,15 @@ object AndroidSessionController {
                                 command = command,
                                 state = state,
                                 transport = activeTransport,
-                            ) ?: pauseRunningEventAfterEvtIfNeeded(
-                                command = command,
-                                state = state,
-                                transport = activeTransport,
-                                requireConfirmation = source != "adb",
-                            )
+                            ) ?: if (!runningEventChoiceMade && command.equals("EVT", ignoreCase = true) && activeEventSummary(state) != null) {
+                                runningEventChoiceMade = true
+                                pauseRunningEventAfterEvtIfNeeded(
+                                    command = command,
+                                    state = state,
+                                    transport = activeTransport,
+                                    requireConfirmation = source != "adb",
+                                )
+                            } else null
                         },
                     )
                     require(hasSignalSlingerReportLine(initialLoad.linesReceived)) {
@@ -6679,7 +6690,7 @@ object AndroidSessionController {
                             traceEntries = displayedReloadResult.traceEntries,
                         )
                         rememberLoadedTargetLocked(AndroidConnectionTarget.Usb(startState.getOrThrow().deviceName))
-                        displayedReloadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
+                        cloneTemplateMemory.seedAfterFirmwareReload(displayedReloadResult.state.snapshot)
                         applySnapshotDrafts(displayedReloadResult.state.snapshot, refreshClockDisplayAnchor = false)
                         outcome.reloadResult.clockAnchor?.let { anchor ->
                             applyClockDisplayAnchor(
@@ -6952,7 +6963,7 @@ object AndroidSessionController {
                             traceEntries = displayedReloadResult.traceEntries,
                         )
                         rememberLoadedTargetLocked(AndroidConnectionTarget.Usb(startState.getOrThrow().deviceName))
-                        displayedReloadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
+                        cloneTemplateMemory.seedAfterFirmwareReload(displayedReloadResult.state.snapshot)
                         applySnapshotDrafts(displayedReloadResult.state.snapshot, refreshClockDisplayAnchor = false)
                     } else {
                         latestSessionViewState = null

@@ -347,18 +347,11 @@ object JvmTimeSupport {
         record.timestampCompact?.let(::parseCompactTimestamp)?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
             ?: "time unavailable"
 
-    fun describeSessionHistory(history: List<SessionHistoryRecord>): String {
-        if (history.isEmpty()) return "No device session history available."
-        return buildString {
-            if (history.any { it.flags and 128 != 0 }) appendLine("Earlier history is unavailable; the device keeps a limited recent history.")
-            history.forEach { record ->
-                append("${sessionRecordTime(record)}: ${SessionHistorySupport.action(record.action)}")
-                if (record.reason != 0) append(" — ${SessionHistorySupport.reason(record.reason)}")
-                record.temperatureC?.let { append("; $it°C (limit ${record.thresholdC}°C)") }
-                appendLine()
-            }
-        }.trim()
-    }
+    fun describeSessionHistory(history: List<SessionHistoryRecord>): String =
+        SessionHistoryPresentation.summary(history)
+
+    fun describeSessionHistoryDetails(history: List<SessionHistoryRecord>): String =
+        SessionHistoryPresentation.details(history)
 
     private fun describeScheduleWindow(
         deviceReportedEventEnabled: Boolean?,

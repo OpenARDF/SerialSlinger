@@ -1791,8 +1791,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 else SchedulePresentation.scheduleLines(timedEventSettings).joinToString("\n"),
             ))
         }
-        loadedStatus?.let { status ->
-            deviceSettingsCard.addView(sectionBody(JvmTimeSupport.describeSessionHistory(status.sessionHistory)))
+        if (advancedModeEnabled) loadedStatus?.let { status ->
+            deviceSettingsCard.addView(sectionBody("Session history\n" + JvmTimeSupport.describeSessionHistory(status.sessionHistory)))
+            deviceSettingsCard.addView(Button(this).apply {
+                text = "View history details"
+                setOnClickListener {
+                    showLargeTextDialog("Transmitter run history", JvmTimeSupport.describeSessionHistoryDetails(status.sessionHistory))
+                }
+            })
         }
         daysToRunLabelView?.alpha = if (schedulingFieldsEditable) 1f else 0.55f
         wireImmediateIntSpinner(daysToRunSpinner, selectedValue = timedEventSettings.daysToRun) { selectedValue ->
@@ -2371,7 +2377,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         AlertDialog.Builder(this)
             .setTitle("SignalSlinger Event In Progress")
             .setMessage(notice.message)
-            .setPositiveButton("OK", null)
+            .setPositiveButton("Keep running") { _, _ ->
+                AndroidSessionController.confirmEventPauseNotice(notice.id)
+            }
+            .setNegativeButton("Stop event and read") { _, _ ->
+                AndroidSessionController.confirmEventPauseNotice(notice.id, stopRequested = true)
+            }
             .create()
             .apply {
                 setOnDismissListener {
@@ -3304,7 +3315,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("External battery V: ${status.externalBatteryVolts?.toString().orUnknown()}")
             appendLine("Event enabled: ${status.eventEnabled?.toString().orUnknown()}")
             appendLine("Event state: ${status.eventStateSummary.orUnknown()}")
-            appendLine(JvmTimeSupport.describeSessionHistory(status.sessionHistory))
+            if (advancedModeEnabled) appendLine(JvmTimeSupport.describeSessionHistory(status.sessionHistory))
             SchedulePresentation.scheduleLines(settings).forEach { appendLine(it) }
             appendLine(
                 "Derived event status: ${
@@ -3853,7 +3864,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 sectionBody(
                     buildString {
                         appendLine("Derived event status: $derivedEventStatus")
-                        appendLine(JvmTimeSupport.describeSessionHistory(status.sessionHistory))
+                        if (advancedModeEnabled) appendLine(JvmTimeSupport.describeSessionHistory(status.sessionHistory))
                         appendLine("Starts in: ${status.eventStartsInSummary.orUnknown()}")
                         appendLine("Duration: ${JvmTimeSupport.describeEventDuration(settings.startTimeCompact, settings.finishTimeCompact, status.eventDurationSummary)}")
                         appendLine("Maximum ever temperature: ${formatTemperatureForUnit(status.maximumEverTemperatureC)}")
@@ -6402,7 +6413,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun resolveAndroidUserActionDescription(view: View): String? {
         val explicitLabel = view.contentDescription?.toString()?.trim().takeIf { !it.isNullOrBlank() }
         if (explicitLabel != null) {
-            return "Tapped $explicitLabel."
+            return androidTapDescription(explicitLabel)
         }
         val directText =
             (view as? TextView)?.text
@@ -6410,11 +6421,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 ?.trim()
                 ?.takeIf(String::isNotBlank)
         if (directText != null) {
-            return "Tapped $directText."
+            return androidTapDescription(directText)
         }
         val nestedText = firstTextLabel(view)
         if (nestedText != null) {
-            return "Tapped $nestedText."
+            return androidTapDescription(nestedText)
         }
         return null
     }

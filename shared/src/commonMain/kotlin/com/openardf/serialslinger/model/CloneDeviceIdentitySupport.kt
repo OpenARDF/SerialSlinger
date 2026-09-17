@@ -30,7 +30,7 @@ object CloneDeviceIdentitySupport {
         val sourceId = requireNotNull(templateSourceDeviceUniqueId.normalizedDeviceUniqueId())
         error(
             "Clone cancelled because the attached SignalSlinger is the same unit that supplied " +
-                "the clone template (unit ${sourceId.takeLast(8)}). Connect a different SignalSlinger and try again.",
+                "the clone template (unit $sourceId). Connect a different SignalSlinger and try again.",
         )
     }
 

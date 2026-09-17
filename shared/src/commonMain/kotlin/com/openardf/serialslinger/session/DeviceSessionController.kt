@@ -73,7 +73,7 @@ fun DeviceInfo.deviceIdentityObservation(): DeviceIdentityObservation =
     )
 
 fun DeviceIdentityObservation.deviceIdentityLabel(): String =
-    deviceUniqueId?.let { "unit ${it.takeLast(8)}" }
+    deviceUniqueId?.let { "unit $it" }
         ?: if (recognizedInfoResponse) "a legacy firmware unit" else "an unverified device"
 
 enum class DeviceIdentityComparison {

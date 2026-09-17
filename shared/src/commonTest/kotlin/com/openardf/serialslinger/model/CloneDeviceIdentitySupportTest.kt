@@ -1,11 +1,30 @@
 package com.openardf.serialslinger.model
 
+import com.openardf.serialslinger.session.deviceIdentityLabel
+
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class CloneDeviceIdentitySupportTest {
+    @Test
+    fun factoryIdsWithIdenticalZeroSuffixesRemainDistinctAndRecognizable() {
+        val fox4 = "42348279800081200106014200000000"
+        val fox2 = "42348279800053200112011900000000"
+        CloneDeviceIdentitySupport.requireDifferentDevice(fox4, fox2)
+        val error = assertFailsWith<IllegalStateException> {
+            CloneDeviceIdentitySupport.requireDifferentDevice(fox2, fox2)
+        }
+        assertTrue(error.message.orEmpty().contains(fox2))
+        val labels = listOf(fox4, fox2).map {
+            com.openardf.serialslinger.session.DeviceIdentityObservation(true, it)
+        }.map { observation ->
+            with(observation) { deviceIdentityLabel() }
+        }
+        assertEquals(2, labels.toSet().size)
+        assertTrue(labels[0].contains(fox4))
+    }
     @Test
     fun differentDeviceUidsAllowClone() {
         assertEquals(

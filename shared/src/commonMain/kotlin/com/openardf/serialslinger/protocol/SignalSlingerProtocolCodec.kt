@@ -180,12 +180,15 @@ object SignalSlingerProtocolCodec {
     private val thermalShutdownThresholdPattern = Regex("""^\*\s*Thermal shutdown threshold:\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
     private val thermalShutdownModePattern = Regex("""^\*\s*Thermal shutdown:\s*(Enabled|Disabled)$""", RegexOption.IGNORE_CASE)
     private val negativeEventStatePatterns = listOf(
+        Regex("""^\*\s*GO\s+0:[^;]+;\s*Stopped$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*Not scheduled$""", RegexOption.IGNORE_CASE),
         Regex("""^\*.*will not run.*$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*Event start disabled.*$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*No remaining scheduled day window.*$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*Config err\b.*$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*Event interrupted!$""", RegexOption.IGNORE_CASE),
+        Regex("""^\*\s*Event completed\.$""", RegexOption.IGNORE_CASE),
+        Regex("""^\*\s*Event finished with interruptions\.$""", RegexOption.IGNORE_CASE),
     )
     private val positiveEventStatePatterns = listOf(
         Regex("""^\*\s*Running forever\.$""", RegexOption.IGNORE_CASE),
