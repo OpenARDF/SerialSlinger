@@ -42,6 +42,7 @@ class DeviceSessionWorkflowTest {
                 "* Temp: 20.9C",
                 "* Min Temp: 18.4C",
                 "* Thermal shutdown threshold: 50C",
+                "* FRE C=5 Hz (1389 ppb)",
                 "* Int. Bat = 4.1 Volts",
                 "* Ext. Bat =12.8 Volts",
             ),
@@ -51,6 +52,7 @@ class DeviceSessionWorkflowTest {
         assertEquals(ConnectionState.CONNECTED, updated.connectionState)
         assertEquals("1.2.3", snapshot.info.softwareVersion)
         assertEquals("3.5", snapshot.info.hardwareBuild)
+        assertEquals(1389, snapshot.info.rfFrequencyCalibrationPpb)
         assertTrue(snapshot.info.identityReportReceived)
         assertEquals("314A323536384E171D00321700000000", snapshot.info.deviceUniqueId)
         assertTrue(snapshot.capabilities.supportsScheduling)
@@ -84,10 +86,12 @@ class DeviceSessionWorkflowTest {
             listOf(
                 "* SW Ver: 2.0.2 HW Build: 3.5",
                 "* Bootloader: BL0.13 protocol 1",
+                "* FRE C=5 Hz (1389 ppb)",
             ),
         )
         assertEquals("BL0.13", stateWithBootloader.snapshot?.info?.bootloaderVersion)
         assertEquals(1, stateWithBootloader.snapshot?.info?.bootloaderProtocolVersion)
+        assertEquals(1389, stateWithBootloader.snapshot?.info?.rfFrequencyCalibrationPpb)
 
         val reloadedOlderApp = DeviceSessionWorkflow.ingestReportLines(
             stateWithBootloader,
@@ -97,6 +101,7 @@ class DeviceSessionWorkflowTest {
         assertEquals("1.2.2", reloadedOlderApp.snapshot?.info?.softwareVersion)
         assertEquals(null, reloadedOlderApp.snapshot?.info?.bootloaderVersion)
         assertEquals(null, reloadedOlderApp.snapshot?.info?.bootloaderProtocolVersion)
+        assertEquals(null, reloadedOlderApp.snapshot?.info?.rfFrequencyCalibrationPpb)
     }
 
     @Test

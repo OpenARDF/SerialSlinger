@@ -13,6 +13,18 @@ class SignalSlingerFirmwareSupportTest {
     }
 
     @Test
+    fun readsRfFrequencyCalibrationForFirmware207AndLater() {
+        val olderProfile = SignalSlingerFirmwareSupport.resolve("2.0.6")
+        val calibrationProfile = SignalSlingerFirmwareSupport.resolve("2.0.7")
+
+        assertFalse(olderProfile.capabilities.supportsRfFrequencyCalibrationReadback)
+        assertFalse("FRE C" in olderProfile.fullLoadCommands)
+        assertEquals("modern-2.0.7+", calibrationProfile.id)
+        assertTrue(calibrationProfile.capabilities.supportsRfFrequencyCalibrationReadback)
+        assertTrue("FRE C" in calibrationProfile.fullLoadCommands)
+    }
+
+    @Test
     fun resolvesModernProfileForCurrentFirmwareWithSuffix() {
         val profile = SignalSlingerFirmwareSupport.resolve("1.2s")
 

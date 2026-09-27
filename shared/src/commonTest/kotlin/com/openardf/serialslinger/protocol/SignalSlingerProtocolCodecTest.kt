@@ -35,6 +35,22 @@ class SignalSlingerProtocolCodecTest {
     }
 
     @Test
+    fun parsesRfFrequencyCalibrationStatusIntoDeviceInfoPatch() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("* FRE C=5 Hz (1389 ppb)")
+
+        assertNotNull(update)
+        assertEquals(1389, update.deviceInfoPatch?.rfFrequencyCalibrationPpb)
+    }
+
+    @Test
+    fun parsesRfFrequencyCalibrationFromFullDeviceReport() {
+        val update = SignalSlingerProtocolCodec.parseReportLine("*   RF calibration: -833 ppb")
+
+        assertNotNull(update)
+        assertEquals(-833, update.deviceInfoPatch?.rfFrequencyCalibrationPpb)
+    }
+
+    @Test
     fun parsesAppInfoBootloaderReplyIntoDeviceInfoPatch() {
         val update = SignalSlingerProtocolCodec.parseReportLine("* INF bl=BL0.13 proto=1")
 

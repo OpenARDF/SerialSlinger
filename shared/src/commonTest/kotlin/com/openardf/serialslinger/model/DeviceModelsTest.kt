@@ -124,6 +124,34 @@ class DeviceModelsTest {
     }
 
     @Test
+    fun formatsRfFrequencyCalibrationForDeviceData() {
+        assertEquals(
+            "+5 Hz at 3.600 MHz (+1389 ppb)",
+            RfFrequencyCalibrationSupport.format(
+                correctionPpb = 1389,
+                operatingFrequencyHz = 3_600_000L,
+                supported = true,
+            ),
+        )
+        assertEquals(
+            "-1.18 Hz at 3.550 MHz (-333 ppb)",
+            RfFrequencyCalibrationSupport.format(
+                correctionPpb = -333,
+                operatingFrequencyHz = 3_550_000L,
+                supported = true,
+            ),
+        )
+        assertEquals(
+            "Not read",
+            RfFrequencyCalibrationSupport.format(null, 3_550_000L, supported = true),
+        )
+        assertEquals(
+            "Not supported",
+            RfFrequencyCalibrationSupport.format(null, 3_550_000L, supported = false),
+        )
+    }
+
+    @Test
     fun unsupportedFieldsAreFilteredOutByCapabilities() {
         val editable = sampleEditableSettings()
         val capabilities = DeviceCapabilities(

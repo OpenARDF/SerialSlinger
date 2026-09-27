@@ -279,6 +279,46 @@ class SignalSlingerReleaseCacheTest {
     }
 
     @Test
+    fun preservesNewerResidentReleaseWhenConnectedFirmwareMatchesIt() {
+        val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
+        val latestApi = URI("https://api.github.test/releases/latest")
+        val zipUrl = "https://github.com/OpenARDF/SignalSlinger/releases/download/v2.0.6/SignalSlinger-Release-Files-v2.0.6-HW-3.4.zip"
+        val residentManifest = root.resolve("HW-3.4/2.0.7/SignalSlinger-Release-Info-v2.0.7-HW-3.4.json")
+        var requestedAsset = false
+        try {
+            residentManifest.parentFile.mkdirs()
+            residentManifest.writeText(manifest(version = "2.0.7", board = "HW-3.4"))
+
+            val error = assertFailsWith<SignalSlingerAlreadyCurrentException> {
+                SignalSlingerReleaseCache(
+                    rootDirectory = root,
+                    repositoryApiUrl = latestApi,
+                    downloadBytes = { uri ->
+                        when (uri) {
+                            latestApi -> """{"tag_name":"v2.0.6","browser_download_url":"$zipUrl"}""".encodeToByteArray()
+                            URI(zipUrl) -> {
+                                requestedAsset = true
+                                releaseZip(version = "2.0.6", board = "HW-3.4")
+                            }
+                            else -> error("unexpected URI $uri")
+                        }
+                    },
+                ).selectLatestForUpdate(
+                    hardwareBuild = "3.4",
+                    currentFirmwareVersion = "2.0.7",
+                )
+            }
+
+            assertEquals("The connected SignalSlinger already has firmware 2.0.7.", error.message)
+            assertEquals(false, requestedAsset)
+            assertTrue(residentManifest.isFile)
+            assertNull(root.resolve("HW-3.4/2.0.6").takeIf { it.exists() })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun canForceLatestDownloadWhenResidentReleaseMatchesLatestGitHubVersion() {
         val root = Files.createTempDirectory("signalslinger-release-cache-test").toFile()
         val latestApi = URI("https://api.github.test/releases/latest")

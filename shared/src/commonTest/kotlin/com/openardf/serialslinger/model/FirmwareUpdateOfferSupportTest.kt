@@ -50,5 +50,9 @@ class FirmwareUpdateOfferSupportTest {
             FirmwareUpdateOfferSupport.snapshotKey(uidA),
             FirmwareUpdateOfferSupport.snapshotKey(uidB),
         )
+        assertNotEquals(
+            FirmwareUpdateOfferSupport.snapshotKey(uidB),
+            FirmwareUpdateOfferSupport.snapshotKey(uidB, residentFirmwareVersion = "2.0.7"),
+        )
     }
 }

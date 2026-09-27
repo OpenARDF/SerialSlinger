@@ -121,6 +121,11 @@ object DeviceSessionWorkflow {
             },
             softwareVersion = infoPatch?.softwareVersion ?: info.softwareVersion,
             hardwareBuild = infoPatch?.hardwareBuild ?: info.hardwareBuild,
+            rfFrequencyCalibrationPpb = when {
+                infoPatch?.rfFrequencyCalibrationPpb != null -> infoPatch.rfFrequencyCalibrationPpb
+                appIdentityObserved -> null
+                else -> info.rfFrequencyCalibrationPpb
+            },
             appStartAddress = infoPatch?.appStartAddress ?: info.appStartAddress,
             appBaud = infoPatch?.appBaud ?: info.appBaud,
             updateBaud = infoPatch?.updateBaud ?: info.updateBaud,

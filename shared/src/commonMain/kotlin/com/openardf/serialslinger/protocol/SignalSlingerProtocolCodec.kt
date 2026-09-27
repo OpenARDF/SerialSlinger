@@ -27,6 +27,7 @@ data class DeviceInfoPatch(
     val deviceUniqueId: String? = null,
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
+    val rfFrequencyCalibrationPpb: Int? = null,
     val appStartAddress: Int? = null,
     val appBaud: Int? = null,
     val updateBaud: Int? = null,
@@ -179,6 +180,9 @@ object SignalSlingerProtocolCodec {
     private val maximumEverTemperaturePattern = Regex("""^\*\s*Max Ever:\s*(-?\d+(?:\.\d+)?)C$""")
     private val thermalShutdownThresholdPattern = Regex("""^\*\s*Thermal shutdown threshold:\s*(-?\d+(?:\.\d+)?)C$""", RegexOption.IGNORE_CASE)
     private val thermalShutdownModePattern = Regex("""^\*\s*Thermal shutdown:\s*(Enabled|Disabled)$""", RegexOption.IGNORE_CASE)
+    private val rfFrequencyCalibrationInfoPattern = Regex("""^\*\s*RF calibration:\s*([+-]?\d+)\s+ppb$""", RegexOption.IGNORE_CASE)
+    private val rfFrequencyCalibrationStatusPattern =
+        Regex("""^\*\s*FRE C=([+-]?\d+)\s+Hz\s+\(([+-]?\d+)\s+ppb\)$""", RegexOption.IGNORE_CASE)
     private val negativeEventStatePatterns = listOf(
         Regex("""^\*\s*GO\s+0:[^;]+;\s*Stopped$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*Not scheduled$""", RegexOption.IGNORE_CASE),
@@ -435,6 +439,22 @@ object SignalSlingerProtocolCodec {
                     bootloaderVersion = bootloaderVersion,
                     bootloaderProtocolVersion = bootloaderProtocolVersion,
                     bootloaderProtocol = bootloaderProtocolVersion?.toString(),
+                ),
+            )
+        }
+
+        rfFrequencyCalibrationStatusPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceInfoPatch = DeviceInfoPatch(
+                    rfFrequencyCalibrationPpb = match.groupValues[2].toInt(),
+                ),
+            )
+        }
+
+        rfFrequencyCalibrationInfoPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceInfoPatch = DeviceInfoPatch(
+                    rfFrequencyCalibrationPpb = match.groupValues[1].toInt(),
                 ),
             )
         }

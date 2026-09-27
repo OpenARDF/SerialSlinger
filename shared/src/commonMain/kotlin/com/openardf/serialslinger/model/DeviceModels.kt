@@ -1,5 +1,8 @@
 package com.openardf.serialslinger.model
 
+import kotlin.math.absoluteValue
+import kotlin.math.roundToLong
+
 enum class ConnectionState {
     DISCONNECTED,
     CONNECTING,
@@ -71,6 +74,7 @@ data class DeviceCapabilities(
     val supportsAmToneEditing: Boolean = false,
     val supportsPttResetEditing: Boolean = false,
     val supportsTemperatureCalibrationEditing: Boolean = false,
+    val supportsRfFrequencyCalibrationReadback: Boolean = false,
     val supportsExternalBatteryControl: Boolean = false,
     val supportsPatternEditing: Boolean = false,
     val supportsScheduling: Boolean = false,
@@ -85,6 +89,7 @@ data class DeviceInfo(
     val deviceUniqueId: String? = null,
     val softwareVersion: String? = null,
     val hardwareBuild: String? = null,
+    val rfFrequencyCalibrationPpb: Int? = null,
     val appStartAddress: Int? = null,
     val appBaud: Int? = null,
     val updateBaud: Int? = null,
@@ -220,6 +225,43 @@ object TemperatureCalibrationSupport {
     }
 
     fun format(value: Int?): String = value?.toString() ?: "Not read"
+}
+
+object RfFrequencyCalibrationSupport {
+    fun format(
+        correctionPpb: Int?,
+        operatingFrequencyHz: Long?,
+        supported: Boolean,
+    ): String {
+        if (!supported) {
+            return "Not supported"
+        }
+        if (correctionPpb == null) {
+            return "Not read"
+        }
+
+        val correctionText = "${signed(correctionPpb)} ppb"
+        val frequencyHz = operatingFrequencyHz?.takeIf { it > 0L }
+            ?: return correctionText
+        val shiftHz = frequencyHz.toDouble() * correctionPpb.toDouble() / 1_000_000_000.0
+        return "${formatSignedHz(shiftHz)} at ${FrequencySupport.formatFrequencyMhz(frequencyHz)} ($correctionText)"
+    }
+
+    private fun formatSignedHz(value: Double): String {
+        val hundredths = (value * 100.0).roundToLong()
+        val sign = when {
+            hundredths > 0L -> "+"
+            hundredths < 0L -> "-"
+            else -> ""
+        }
+        val absoluteHundredths = hundredths.absoluteValue
+        val whole = absoluteHundredths / 100L
+        val fraction = (absoluteHundredths % 100L).toString().padStart(2, '0').trimEnd('0')
+        val magnitude = if (fraction.isEmpty()) whole.toString() else "$whole.$fraction"
+        return "$sign$magnitude Hz"
+    }
+
+    private fun signed(value: Int): String = if (value > 0) "+$value" else value.toString()
 }
 
 enum class ValidationState {

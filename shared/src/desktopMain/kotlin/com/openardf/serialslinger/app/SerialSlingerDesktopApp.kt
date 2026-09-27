@@ -18,6 +18,7 @@ import com.openardf.serialslinger.model.FirmwareUpdateOfferSupport
 import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
 import com.openardf.serialslinger.model.MultiDayDurationGuardOption
 import com.openardf.serialslinger.model.MultiDayDurationGuardPlanner
+import com.openardf.serialslinger.model.RfFrequencyCalibrationSupport
 import com.openardf.serialslinger.model.ScheduleDurationGuardSupport
 import com.openardf.serialslinger.model.SchedulePresentation
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
@@ -255,6 +256,11 @@ fun main() {
         SerialSlingerDesktopFrame().apply {
             installExternalTerminationProtection()
             isVisible = true
+            // Swing otherwise gives the first eligible editor focus, which can select Pattern Text
+            // and make an accidental keypress look like a deliberate settings change.
+            SwingUtilities.invokeLater {
+                KeyboardFocusManager.getCurrentKeyboardFocusManager().clearGlobalFocusOwner()
+            }
         }
     }
 }
@@ -807,6 +813,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val pttResetRowLabel = JLabel("PTT Reset")
     private val pttResetField = JComboBox(DefaultComboBoxModel(pttResetOptions().toTypedArray()))
     private val transmissionsField = JTextField()
+    private val rfFrequencyCalibrationField = JTextField()
     private val versionInfoField = JTextField()
     private val internalBatteryField = JTextField()
     private val externalBatteryField = JTextField()
@@ -841,6 +848,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val maximumEverTemperatureRowLabel = JLabel("Maximum Ever Temperature")
     private val thermalShutdownThresholdRowLabel = JLabel("Thermal Shutdown Threshold")
     private val temperatureCalibrationRowLabel = JLabel("Temperature Calibration")
+    private val rfFrequencyCalibrationRowLabel = JLabel("RF Frequency Calibration")
     private val externalBatteryControlRowLabel = JLabel("Ext. Bat. Ctrl")
     private val lowBatteryThresholdRowLabel = JLabel("Low Battery Threshold")
     private val transmissionsRowLabel = JLabel("External device being controlled")
@@ -1008,6 +1016,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         arduconEventTypeField.isEditable = false
         startsInField.isEditable = false
         lastsField.isEditable = false
+        rfFrequencyCalibrationField.isEditable = false
         versionInfoField.isEditable = false
         internalBatteryField.isEditable = false
         externalBatteryField.isEditable = false
@@ -1026,6 +1035,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         configureInformationalField(startsInField)
         configureInformationalField(lastsField)
         configureInteractiveSelectionField(lastsField)
+        configureInformationalField(rfFrequencyCalibrationField)
         configureInformationalField(versionInfoField)
         configureInformationalField(internalBatteryField)
         configureInformationalField(externalBatteryField)
@@ -2109,6 +2119,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 row = addRow(section, row, thermalShutdownThresholdRowLabel, thermalShutdownThresholdField)
                 row = addRow(section, row, temperatureCalibrationRowLabel, temperatureCalibrationField)
                 row = addRow(section, row, sessionHistoryView.label, sessionHistoryView.panel)
+                row = addRow(section, row, rfFrequencyCalibrationRowLabel, rfFrequencyCalibrationField)
                 addRow(section, row, "Version", versionInfoField)
             })
             add(Box.createVerticalGlue())
@@ -6471,6 +6482,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 externalBatteryControlSupported = externalBatteryControlSupported,
             )
             updateDeviceDataVisibility(snapshot)
+            setInformationalFieldText(
+                rfFrequencyCalibrationField,
+                RfFrequencyCalibrationSupport.format(
+                    correctionPpb = snapshot.info.rfFrequencyCalibrationPpb,
+                    operatingFrequencyHz = snapshot.settings.defaultFrequencyHz,
+                    supported = snapshot.capabilities.supportsRfFrequencyCalibrationReadback,
+                ),
+                unreadPlaceholder = false,
+            )
             setInformationalFieldText(versionInfoField, DesktopInputSupport.formatReportedVersion(
                 softwareVersion = snapshot.info.softwareVersion,
                 hardwareBuild = snapshot.info.hardwareBuild,
@@ -6622,6 +6642,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         minimumTemperatureField.isVisible = !isArducon
         temperatureCalibrationRowLabel.isVisible = isArducon
         temperatureCalibrationField.isVisible = isArducon
+        rfFrequencyCalibrationRowLabel.isVisible = !isArducon
+        rfFrequencyCalibrationField.isVisible = !isArducon
         revalidate()
         repaint()
     }
@@ -12667,7 +12689,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         val productName = snapshot.info.productName.orEmpty().trim()
         val firmwareVersion = snapshot.info.softwareVersion.orEmpty().trim()
         val hardwareBuild = snapshot.info.hardwareBuild.orEmpty().trim()
-        val snapshotKey = FirmwareUpdateOfferSupport.snapshotKey(snapshot)
+        val residentFirmwareVersion =
+            if (productName.equals(DeviceMode.SIGNALSLINGER.productName, ignoreCase = true) && hardwareBuild.isNotBlank()) {
+                runCatching {
+                    SignalSlingerReleaseCache(desktopSignalSlingerReleaseCacheDirectory())
+                        .latestResidentForHardware(hardwareBuild)
+                        ?.release
+                        ?.version
+                }.getOrNull()
+            } else {
+                null
+            }
+        val snapshotKey = FirmwareUpdateOfferSupport.snapshotKey(snapshot, residentFirmwareVersion)
         if (snapshotKey == lastAutomaticFirmwareOfferSnapshotKey) {
             return
         }
@@ -13630,6 +13663,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             externalBatteryControlSupported = true,
         )
         updateTransmissionsField(isEnabled = true)
+        setInformationalFieldText(rfFrequencyCalibrationField, "Not read")
         setInformationalFieldText(versionInfoField, "Not read")
         setInformationalFieldText(internalBatteryField, "Not read")
         setInformationalFieldText(externalBatteryField, "Not read")

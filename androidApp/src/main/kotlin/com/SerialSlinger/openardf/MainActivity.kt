@@ -88,6 +88,7 @@ import com.openardf.serialslinger.model.SchedulePresentation
 import com.openardf.serialslinger.model.ScheduleDurationGuardSupport
 import com.openardf.serialslinger.model.RelativeScheduleSelection
 import com.openardf.serialslinger.model.RelativeScheduleSupport
+import com.openardf.serialslinger.model.RfFrequencyCalibrationSupport
 import com.openardf.serialslinger.model.StartTimeAdjustmentOption
 import com.openardf.serialslinger.model.StartTimeAdjustmentOptionKind
 import com.openardf.serialslinger.model.StartTimeAdjustmentPlanner
@@ -2064,6 +2065,21 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             deviceDataCard.addView(temperatureCalibrationRow)
         }
         installTemperatureDisplayUnitToggle(currentTemperatureField, currentTemperatureLabelView, currentTemperatureRow)
+        if (!isArducon) {
+            deviceDataCard.addView(
+                compactLabeledRow(
+                    "RF Frequency Calibration",
+                    readOnlyField(
+                        RfFrequencyCalibrationSupport.format(
+                            correctionPpb = loadedInfo?.rfFrequencyCalibrationPpb,
+                            operatingFrequencyHz = loadedSettings.defaultFrequencyHz,
+                            supported = snapshot?.capabilities?.supportsRfFrequencyCalibrationReadback == true,
+                        ),
+                    ),
+                    labelWidthDp = 132,
+                ),
+            )
+        }
         deviceDataCard.addView(
             compactLabeledRow(
                 "Version",
@@ -3302,6 +3318,14 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             appendLine("Hardware build: ${info.hardwareBuild.orUnknown()}")
             appendLine("Bootloader version: ${info.bootloaderVersion.orUnknown()}")
             appendLine("Bootloader protocol: ${(info.bootloaderProtocol ?: info.bootloaderProtocolVersion?.toString()).orUnknown()}")
+            appendLine(
+                "RF frequency calibration: " +
+                    RfFrequencyCalibrationSupport.format(
+                        correctionPpb = info.rfFrequencyCalibrationPpb,
+                        operatingFrequencyHz = settings.defaultFrequencyHz,
+                        supported = capabilities.supportsRfFrequencyCalibrationReadback,
+                    ),
+            )
             appendLine("Product name: ${info.productName.orUnknown()}")
             appendLine("Serial port name: ${info.serialPortName.orUnknown()}")
             appendLine()
@@ -5372,7 +5396,19 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             return
         }
         val snapshot = AndroidSessionController.snapshotUiState().sessionViewState?.state?.snapshot ?: return
-        val snapshotKey = FirmwareUpdateOfferSupport.snapshotKey(snapshot)
+        val hardwareBuild = snapshot.info.hardwareBuild.orEmpty().trim()
+        val residentFirmwareVersion =
+            if (!snapshot.info.productName.equals("Arducon", ignoreCase = true) && hardwareBuild.isNotBlank()) {
+                runCatching {
+                    SignalSlingerReleaseCache(applicationContext.filesDir.resolve("signalslinger-updates"))
+                        .latestResidentForHardware(hardwareBuild)
+                        ?.release
+                        ?.version
+                }.getOrNull()
+            } else {
+                null
+            }
+        val snapshotKey = FirmwareUpdateOfferSupport.snapshotKey(snapshot, residentFirmwareVersion)
         if (snapshotKey == lastAutomaticFirmwareOfferSnapshotKey) {
             return
         }

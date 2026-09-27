@@ -170,6 +170,17 @@ object SignalSlingerFirmwareSupport {
         ),
     )
 
+    private val modern207Profile = modern204Profile.copy(
+        id = "modern-2.0.7+",
+        minimumVersion = SignalSlingerFirmwareVersion(2, 0, 7),
+        capabilities = modern204Profile.capabilities.copy(
+            supportsRfFrequencyCalibrationReadback = true,
+        ),
+        // FRE C without an offset is a read-only status request. Keep RF calibration out of
+        // clone settings because the correction belongs to one physical oscillator.
+        loadCommandsAfterVersion = modern204Profile.loadCommandsAfterVersion + "FRE C",
+    )
+
     private val arduconBaseLoadCommands = listOf(
         "ID",
         "FOX",
@@ -252,6 +263,7 @@ object SignalSlingerFirmwareSupport {
         }
 
         return when {
+            parsedVersion >= SignalSlingerFirmwareVersion(2, 0, 7) -> modern207Profile
             parsedVersion >= SignalSlingerFirmwareVersion(2, 0, 4) -> modern204Profile
             parsedVersion >= SignalSlingerFirmwareVersion(1, 2, 2) -> modern122Profile
             parsedVersion >= SignalSlingerFirmwareVersion(1, 2, 1) -> modern121Profile

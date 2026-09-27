@@ -76,6 +76,17 @@ class SignalSlingerReleaseCache(
             )
         }
 
+        // GitHub can lag a locally imported release. Stop before downloading an older package,
+        // because replacing the board cache would otherwise discard the newer resident release.
+        if (
+            !allowSameVersionReinstall &&
+            !currentFirmwareVersion.isNullOrBlank() &&
+            latestVersion != null &&
+            SignalSlingerFirmwareUpdate.compareVersionStrings(latestVersion, currentFirmwareVersion) <= 0
+        ) {
+            throw SignalSlingerAlreadyCurrentException(currentFirmwareVersion)
+        }
+
         val latest =
             try {
                 downloadLatestForHardware(requestedHardware)
