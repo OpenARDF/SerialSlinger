@@ -182,7 +182,7 @@ object SignalSlingerProtocolCodec {
     private val thermalShutdownModePattern = Regex("""^\*\s*Thermal shutdown:\s*(Enabled|Disabled)$""", RegexOption.IGNORE_CASE)
     private val rfFrequencyCalibrationInfoPattern = Regex("""^\*\s*RF calibration:\s*([+-]?\d+)\s+ppb$""", RegexOption.IGNORE_CASE)
     private val rfFrequencyCalibrationStatusPattern =
-        Regex("""^\*\s*FRE C=([+-]?\d+)\s+Hz\s+\(([+-]?\d+)\s+ppb\)$""", RegexOption.IGNORE_CASE)
+        Regex("""^(?:>\s*FRE C)?\s*\*\s*FRE C=([+-]?\d+)\s+Hz\s+\(([+-]?\d+)\s+ppb\)$""", RegexOption.IGNORE_CASE)
     private val negativeEventStatePatterns = listOf(
         Regex("""^\*\s*GO\s+0:[^;]+;\s*Stopped$""", RegexOption.IGNORE_CASE),
         Regex("""^\*\s*Not scheduled$""", RegexOption.IGNORE_CASE),
@@ -417,6 +417,15 @@ object SignalSlingerProtocolCodec {
             )
         }
 
+        // Firmware 2.0.7 can return the echoed prompt and FRE C response in one serial line.
+        rfFrequencyCalibrationStatusPattern.matchEntire(trimmed)?.let { match ->
+            return DeviceReportUpdate(
+                deviceInfoPatch = DeviceInfoPatch(
+                    rfFrequencyCalibrationPpb = match.groupValues[2].toInt(),
+                ),
+            )
+        }
+
         if (!trimmed.startsWith("*")) {
             return null
         }
@@ -439,14 +448,6 @@ object SignalSlingerProtocolCodec {
                     bootloaderVersion = bootloaderVersion,
                     bootloaderProtocolVersion = bootloaderProtocolVersion,
                     bootloaderProtocol = bootloaderProtocolVersion?.toString(),
-                ),
-            )
-        }
-
-        rfFrequencyCalibrationStatusPattern.matchEntire(trimmed)?.let { match ->
-            return DeviceReportUpdate(
-                deviceInfoPatch = DeviceInfoPatch(
-                    rfFrequencyCalibrationPpb = match.groupValues[2].toInt(),
                 ),
             )
         }
