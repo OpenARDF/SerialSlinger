@@ -109,6 +109,10 @@ object DeviceSessionWorkflow {
     ): DeviceSnapshot {
         val infoPatch = update.deviceInfoPatch
         val appIdentityObserved = infoPatch?.softwareVersion != null || infoPatch?.hardwareBuild != null || infoPatch?.productName != null
+        val appIdentityChanged =
+            (infoPatch?.softwareVersion != null && infoPatch.softwareVersion != info.softwareVersion) ||
+                (infoPatch?.hardwareBuild != null && infoPatch.hardwareBuild != info.hardwareBuild) ||
+                (infoPatch?.productName != null && infoPatch.productName != info.productName)
         val firstIdentityReportLine =
             infoPatch?.identityReportReceived == true && !info.identityReportReceived
         val nextInfo = info.copy(
@@ -123,7 +127,7 @@ object DeviceSessionWorkflow {
             hardwareBuild = infoPatch?.hardwareBuild ?: info.hardwareBuild,
             rfFrequencyCalibrationPpb = when {
                 infoPatch?.rfFrequencyCalibrationPpb != null -> infoPatch.rfFrequencyCalibrationPpb
-                appIdentityObserved -> null
+                appIdentityChanged -> null
                 else -> info.rfFrequencyCalibrationPpb
             },
             appStartAddress = infoPatch?.appStartAddress ?: info.appStartAddress,

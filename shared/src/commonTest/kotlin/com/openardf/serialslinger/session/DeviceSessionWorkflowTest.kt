@@ -93,8 +93,14 @@ class DeviceSessionWorkflowTest {
         assertEquals(1, stateWithBootloader.snapshot?.info?.bootloaderProtocolVersion)
         assertEquals(1389, stateWithBootloader.snapshot?.info?.rfFrequencyCalibrationPpb)
 
-        val reloadedOlderApp = DeviceSessionWorkflow.ingestReportLines(
+        val sameAppIdentity = DeviceSessionWorkflow.ingestReportLines(
             stateWithBootloader,
+            listOf("* INF sw=2.0.2 hw=3.5 app=0x2000 baud=115200"),
+        )
+        assertEquals(1389, sameAppIdentity.snapshot?.info?.rfFrequencyCalibrationPpb)
+
+        val reloadedOlderApp = DeviceSessionWorkflow.ingestReportLines(
+            sameAppIdentity,
             listOf("* SW Ver: 1.2.2 HW Build: 3.5"),
         )
 
