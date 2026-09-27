@@ -256,10 +256,8 @@ fun main() {
         SerialSlingerDesktopFrame().apply {
             installExternalTerminationProtection()
             isVisible = true
-            // Swing otherwise gives the first eligible editor focus, which can select Pattern Text
-            // and make an accidental keypress look like a deliberate settings change.
             SwingUtilities.invokeLater {
-                KeyboardFocusManager.getCurrentKeyboardFocusManager().clearGlobalFocusOwner()
+                requestSafeStartupFocus()
             }
         }
     }
@@ -1259,6 +1257,12 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             ),
         )
         SwingUtilities.invokeLater { maybeShowSerialSlingerUpdateNotice() }
+    }
+
+    fun requestSafeStartupFocus() {
+        // Swing otherwise chooses the first eligible field. A neutral button accepts startup focus
+        // without allowing an accidental keypress to alter device settings.
+        autoDetectButton.requestFocusInWindow()
     }
 
     private fun installDesktopQuitHandler() {
