@@ -257,7 +257,7 @@ fun main() {
             installExternalTerminationProtection()
             isVisible = true
             SwingUtilities.invokeLater {
-                requestSafeStartupFocus()
+                requestFindDeviceFocus()
             }
         }
     }
@@ -909,6 +909,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var automaticFirmwareUpdateCheckInProgress: Boolean = false
     private var automaticFirmwareUpdatePromptVisible: Boolean = false
     private var appMessageDialogDepth: Int = 0
+    private var rawCommandReplyDialog: JDialog? = null
     private var lastAutomaticFirmwareOfferSnapshotKey: String? = null
     private var connectedDeviceIdentityReloadInProgress: Boolean = false
     private var lastConnectedDeviceIdentityProbeAtMs: Long = 0L
@@ -1259,9 +1260,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         SwingUtilities.invokeLater { maybeShowSerialSlingerUpdateNotice() }
     }
 
-    fun requestSafeStartupFocus() {
-        // Swing otherwise chooses the first eligible field. A neutral button accepts startup focus
-        // without allowing an accidental keypress to alter device settings.
+    fun requestFindDeviceFocus() {
+        // A neutral button accepts focus without allowing an accidental keypress to alter settings.
         autoDetectButton.requestFocusInWindow()
     }
 
@@ -3057,6 +3057,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         ) {
             return
         }
+        // Swing continues dispatching USB-monitor events while a modal reply dialog is open.
+        // Close the stale reply immediately so it cannot cover the replacement-device reload
+        // or a firmware update offered after that reload.
+        dismissRawCommandReplyDialog()
         if (backgroundWorkInProgress) {
             Timer(250) {
                 handleConnectedDeviceIdentityChanged(portPath, expectedIdentity, observedIdentity)
@@ -3273,6 +3277,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             return
         }
         knownProbeResults[result.portInfo.systemPortPath] = result
+        if (result.state == PortProbeState.DETECTED && previous?.state != PortProbeState.DETECTED) {
+            dismissRawCommandReplyDialog()
+        }
         if (
             result.state != PortProbeState.DETECTED &&
             result.portInfo.systemPortPath == currentConnectedPortPath &&
@@ -3454,6 +3461,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 onProbeComplete = { result ->
                     knownProbeResults[result.portInfo.systemPortPath] = result
                     SwingUtilities.invokeLater {
+                        if (result.state == PortProbeState.DETECTED) {
+                            dismissRawCommandReplyDialog()
+                        }
                         refreshAvailablePorts(silent = true)
                         selectPort(result.portInfo.systemPortPath)
                         setStatus(
@@ -9626,6 +9636,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             playCompletionBeep()
             showAppMessageDialog(message)
+            // The completion dialog restores its previous focus owner when it closes. Queue this
+            // afterward so Pattern Text or another settings field cannot regain focus.
+            SwingUtilities.invokeLater {
+                requestFindDeviceFocus()
+            }
         }
     }
 
@@ -12110,12 +12125,29 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             JScrollPane(textArea).apply {
                 preferredSize = Dimension(760, 320)
             }
-        JOptionPane.showMessageDialog(
-            this,
+        val optionPane = JOptionPane(
             scrollPane,
-            "Reply From ${activeProductUiProfile().productLabel}",
             JOptionPane.PLAIN_MESSAGE,
+            JOptionPane.DEFAULT_OPTION,
         )
+        val dialog = optionPane.createDialog(this, "Reply From ${activeProductUiProfile().productLabel}")
+        rawCommandReplyDialog?.dispose()
+        rawCommandReplyDialog = dialog
+        try {
+            dialog.isVisible = true
+        } finally {
+            if (rawCommandReplyDialog === dialog) {
+                rawCommandReplyDialog = null
+            }
+            dialog.dispose()
+        }
+    }
+
+    private fun dismissRawCommandReplyDialog() {
+        check(SwingUtilities.isEventDispatchThread())
+        val dialog = rawCommandReplyDialog ?: return
+        rawCommandReplyDialog = null
+        dialog.dispose()
     }
 
     private fun showConnectionIndicator(state: ConnectionIndicatorState, message: String) {
@@ -12644,7 +12676,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             )
             updateAdvancedDeviceDataRefreshTimer()
             SwingUtilities.invokeLater {
-                autoDetectButton.requestFocusInWindow()
+                requestFindDeviceFocus()
             }
             appendLoadLog(
                 title = connection.loadLogTitle,
