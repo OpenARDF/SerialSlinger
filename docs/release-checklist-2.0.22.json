@@ -107,32 +107,32 @@
     {
       "id": "tag-pushed",
       "description": "Create and push the annotated vX.Y.Z release tag at the verified main release commit.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Annotated v2.0.22 was created and pushed at 82246ed0acdf6d87e0d8d92ac6bf9e3cbcf350c8 together with main.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "workflow-published",
       "description": "Watch the jDeploy Release GitHub Actions workflow through publication and record the run ID, conclusion, and duration.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions jDeploy Release run 36503673646 completed successfully in 3m30s and published stable v2.0.22.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "release-verified",
       "description": "Verify the GitHub release is published, non-draft, non-prerelease unless requested, targets the intended commit, and exposes downloadable assets.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub release v2.0.22 is published with draft=false, prerelease=false, target 82246ed0acdf6d87e0d8d92ac6bf9e3cbcf350c8, checked notes, and 14 assets. Fresh downloads matched every GitHub size and SHA-256 digest. The canonical tarball reports serialslinger 2.0.22, Java 17, tag v2.0.22, exact commit, application JAR, and dependencies. Both Mac installers contain matching branded icons, app metadata icon references, and SerialSlinger launchers. Verification is recorded in build/release-evidence/2.0.22/public-verification.json. The Android release bundle passed, but local upload-key signing remains unavailable and Play upload readiness is unverified.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "final-checklist-audit",
       "description": "Run the final checklist guard, commit the post-tag evidence update, and synchronize main and Development_Android without moving the tag.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Final checklist guard will be run immediately before committing this post-tag evidence; main and Development_Android will then be synchronized without moving v2.0.22.",
       "skipReason": "",
       "skipRequestedBy": ""
     }
