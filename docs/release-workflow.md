@@ -113,9 +113,10 @@ just release-checklist docs/release-checklist-X.Y.Z.json pre-tag
 
 8. Commit the release candidate on `Development_Android`, fast-forward `main`,
    record the main-sync evidence, and commit that evidence on `main`.
-9. Set the checklist `sourceCommit` to the verified main-sync commit, then create
-   and push the annotated tag at that exact commit. The hosted workflow rejects
-   any tag, version, checklist, or source-commit mismatch:
+9. Set the checklist `sourceCommit` to the verified main-sync commit and commit
+   only that checklist update. Create the annotated tag at this checklist-only
+   child commit. The hosted workflow requires `sourceCommit` to equal the tagged
+   commit's sole parent and rejects any other file change in the tagged commit:
 
 ```sh
 git tag -a vX.Y.Z -m "SerialSlinger X.Y.Z"

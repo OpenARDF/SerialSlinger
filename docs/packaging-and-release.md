@@ -103,7 +103,7 @@ The intended release flow is:
 8. create `docs/release-notes/vX.Y.Z.md` from [release-notes-template.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-notes-template.md), validate it with `npm run release:notes -- --checklist <checklist.json>`, and provide the Android release-notes section as copyable Play Console text
 9. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
 10. merge the desired release state to `main`
-11. ensure the checklist `sourceCommit` is the exact verified commit, then create and push a tag like `v1.0.93` at that commit
+11. set checklist `sourceCommit` to the exact verified commit, commit only that checklist update, then create and push a tag like `v1.0.93` at the checklist-only child commit
 12. let the GitHub Actions workflow publish the release artifacts
 13. before declaring the deployment complete, update the checklist for the final tag, workflow, release-verification, and final-audit items, then run `npm run release:checklist -- --file <checklist.json> --phase final`
 

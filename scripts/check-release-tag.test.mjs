@@ -14,21 +14,35 @@ const packageJson = { name: "serialslinger", version: "2.1.0" };
 const checklist = {
   release: "v2.1.0",
   version: "2.1.0",
-  sourceCommit: environment.GITHUB_SHA
+  sourceCommit: "fedcba9876543210"
+};
+const tagCommit = {
+  parentSha: checklist.sourceCommit,
+  changedFiles: ["docs/release-checklist-2.1.0.json"]
 };
 
-test("accepts a matching tag, package, checklist, and source commit", () => {
-  assert.equal(validateReleaseTag(environment, packageJson, checklist), "v2.1.0");
+test("accepts a matching tag and checklist-only commit over the verified source", () => {
+  assert.equal(validateReleaseTag(environment, packageJson, checklist, tagCommit), "v2.1.0");
 });
 
 test("rejects a mismatched release identity", () => {
   assert.throws(
-    () => validateReleaseTag({ ...environment, GITHUB_REF_NAME: "v2.1.1" }, packageJson, checklist),
+    () => validateReleaseTag({ ...environment, GITHUB_REF_NAME: "v2.1.1" }, packageJson, checklist, tagCommit),
     /does not match package version/
   );
   assert.throws(
-    () => validateReleaseTag(environment, packageJson, { ...checklist, sourceCommit: "different" }),
+    () => validateReleaseTag(environment, packageJson, { ...checklist, sourceCommit: "different" }, tagCommit),
     /sourceCommit/
+  );
+});
+
+test("rejects tagged checklist commits that include other changes", () => {
+  assert.throws(
+    () => validateReleaseTag(environment, packageJson, checklist, {
+      ...tagCommit,
+      changedFiles: [...tagCommit.changedFiles, "shared/src/commonMain/kotlin/Unexpected.kt"]
+    }),
+    /may change only/
   );
 });
 

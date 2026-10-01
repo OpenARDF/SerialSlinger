@@ -118,6 +118,7 @@ ensure(dependencyTodoText.includes("glob"), "The jDeploy warning waiver must cov
 ensure(dependencyTodoText.includes("inflight"), "The jDeploy warning waiver must cover the transitive inflight notice.");
 ensure(workflowText.includes('tags:\n      - "v*"'), "The jDeploy release workflow is not configured for v* tags.");
 ensure(workflowText.includes("runs-on: macos-26"), "The release workflow must use the pinned macos-26 runner.");
+ensure(workflowText.includes("fetch-depth: 2"), "The release workflow must fetch the tagged checklist commit's parent.");
 ensure(workflowText.includes('node-version: "24"'), "The release workflow must use Node 24.");
 ensure(workflowText.includes("check-release-tag.mjs"), "The release workflow must validate the tag and checklist before publication.");
 ensure(workflowText.includes(":androidApp:lintRelease"), "The release workflow must run Android release lint.");
