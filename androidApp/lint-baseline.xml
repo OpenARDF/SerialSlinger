@@ -15,187 +15,11 @@
     <issue
         id="SetTextI18n"
         message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                        text = &quot;Submitting Fox Role: ${foxRole.uiLabel}&quot;"
-        errorLine2="                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="2595"
-            column="32"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="String literal in `setText` can not be translated. Use Android resources instead."
-        errorLine1="                        text = &quot;Submitting Fox Role: ${foxRole.uiLabel}&quot;"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="2595"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                        text = &quot;Submitting Fox Role: ${foxRole.roleName}&quot;"
-        errorLine2="                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="2658"
-            column="32"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="String literal in `setText` can not be translated. Use Android resources instead."
-        errorLine1="                        text = &quot;Submitting Fox Role: ${foxRole.roleName}&quot;"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="2658"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
-        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4950"
-            column="29"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
-        errorLine2="                            ^">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4950"
-            column="29"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
-        errorLine2="                            ^">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4950"
-            column="29"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
-        errorLine2="                            ^">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4950"
-            column="29"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
-        errorLine2="                            ^">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4950"
-            column="29"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="String literal in `setText` can not be translated. Use Android resources instead."
-        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
-        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4950"
-            column="30"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                                &quot;Current firmware: $version\n&quot; +"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4951"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="String literal in `setText` can not be translated. Use Android resources instead."
-        errorLine1="                                &quot;Current firmware: $version\n&quot; +"
-        errorLine2="                                 ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4951"
-            column="34"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                                &quot;Hardware: $hardware\n\n&quot; +"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4952"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="String literal in `setText` can not be translated. Use Android resources instead."
-        errorLine1="                                &quot;Hardware: $hardware\n\n&quot; +"
-        errorLine2="                                 ~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4952"
-            column="34"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                                &quot;If the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n&quot; +"
-        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4953"
-            column="33"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="String literal in `setText` can not be translated. Use Android resources instead."
-        errorLine1="                                &quot;If the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n&quot; +"
-        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="4953"
-            column="34"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
         errorLine1="                            &quot;Device Time differs noticeably from Android system time.\n\n&quot; +"
         errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8009"
+            line="8010"
             column="29"/>
     </issue>
 
@@ -206,7 +30,7 @@
         errorLine2="                            ^">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8009"
+            line="8010"
             column="29"/>
     </issue>
 
@@ -217,7 +41,7 @@
         errorLine2="                            ^">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8009"
+            line="8010"
             column="29"/>
     </issue>
 
@@ -228,7 +52,7 @@
         errorLine2="                            ^">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8009"
+            line="8010"
             column="29"/>
     </issue>
 
@@ -239,7 +63,7 @@
         errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8009"
+            line="8010"
             column="30"/>
     </issue>
 
@@ -250,7 +74,7 @@
         errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8010"
+            line="8011"
             column="33"/>
     </issue>
 
@@ -261,7 +85,7 @@
         errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8010"
+            line="8011"
             column="34"/>
     </issue>
 
@@ -272,7 +96,7 @@
         errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8011"
+            line="8012"
             column="34"/>
     </issue>
 
@@ -283,7 +107,7 @@
         errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8012"
+            line="8013"
             column="34"/>
     </issue>
 
@@ -294,7 +118,7 @@
         errorLine2="                                        ~~~~~~~~~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8024"
+            line="8025"
             column="41"/>
     </issue>
 
@@ -305,7 +129,7 @@
         errorLine2="                                        ~~~~~~~~~~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8036"
+            line="8037"
             column="41"/>
     </issue>
 
@@ -316,7 +140,7 @@
         errorLine2="                                        ~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8055"
+            line="8056"
             column="41"/>
     </issue>
 
@@ -327,7 +151,7 @@
         errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
-            line="8100"
+            line="8101"
             column="33"/>
     </issue>
 

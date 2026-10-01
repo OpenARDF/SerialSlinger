@@ -2592,7 +2592,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
                 addView(
                     TextView(this@MainActivity).apply {
-                        text = "Submitting Fox Role: ${foxRole.uiLabel}"
+                        text = getString(R.string.submitting_fox_role, foxRole.uiLabel)
                         textSize = 15f
                         setTextColor("#1F2937".toColorInt())
                     },
@@ -2655,7 +2655,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
                 addView(
                     TextView(this@MainActivity).apply {
-                        text = "Submitting Fox Role: ${foxRole.roleName}"
+                        text = getString(R.string.submitting_fox_role, foxRole.roleName)
                         textSize = 15f
                         setTextColor("#1F2937".toColorInt())
                     },
@@ -4947,11 +4947,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 addView(
                     TextView(this@MainActivity).apply {
                         text =
-                            "SerialSlinger will check for the latest update for this SignalSlinger.\n\n" +
-                                "Current firmware: $version\n" +
-                                "Hardware: $hardware\n\n" +
-                                "If the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n" +
-                                forcedHardwareUpdateHelpText(forcedHardwareBoard)
+                            getString(
+                                R.string.firmware_update_confirmation,
+                                version,
+                                hardware,
+                                forcedHardwareUpdateHelpText(forcedHardwareBoard),
+                            )
                         textSize = 15f
                         setTextColor("#1F2937".toColorInt())
                     },

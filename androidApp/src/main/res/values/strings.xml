@@ -6,6 +6,8 @@
     <string name="action_view">View</string>
     <string name="choose_days_to_run_handling">Choose Days To Run handling:</string>
     <string name="choose_event_duration">Choose desired event duration:</string>
+    <string name="firmware_update_confirmation">SerialSlinger will check for the latest update for this SignalSlinger.\n\nCurrent firmware: %1$s\nHardware: %2$s\n\nIf the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n%3$s</string>
+    <string name="submitting_fox_role">Submitting Fox Role: %1$s</string>
     <string name="temperature_calibration_default">Default</string>
     <string name="tap_to_dismiss">Tap to dismiss</string>
     <string name="timed_event_frequency_help">Enter values from 3.50 to 3.70 MHz. Shared values are allowed.</string>
