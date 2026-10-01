@@ -17,7 +17,6 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
-import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -59,6 +58,9 @@ import android.widget.Toast
 import android.widget.TextView
 import android.util.TypedValue
 import androidx.core.content.FileProvider
+import androidx.core.content.edit
+import androidx.core.graphics.drawable.toDrawable
+import androidx.core.graphics.toColorInt
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -720,7 +722,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             return
         }
         lastConnectedProductName = productName
-        uiPreferences.edit().putString(PREF_LAST_CONNECTED_PRODUCT, productName).apply()
+        uiPreferences.edit { putString(PREF_LAST_CONNECTED_PRODUCT, productName) }
         AndroidSessionController.logAppEvent(
             title = "device-preference",
             lines = listOf("Saved last connected product: $productName."),
@@ -965,8 +967,8 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 finishTimeCompact = timedEventSettings.finishTimeCompact,
                 defaultEventLengthMinutes = defaultEventLengthMinutes,
             )
-        val warningColor = Color.parseColor("#9E1C1C")
-        val normalLabelColor = Color.parseColor("#1F1F1F")
+        val warningColor = "#9E1C1C".toColorInt()
+        val normalLabelColor = "#1F1F1F".toColorInt()
         val daysRemainingSummary = displayedDaysToRunRemainingSummaryForUi()
 
         deviceSettingsCard.addView(sectionTitle("$connectedProductLabel Settings"))
@@ -1766,7 +1768,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                     .replace("remaining", "remain")
                             }
                         textSize = 13f
-                        setTextColor(Color.parseColor("#1F2937"))
+                        setTextColor("#1F2937".toColorInt())
                         visibility =
                             if (uiState.scheduleDerivedDataPending || daysRemainingSummary.isNotBlank()) {
                                 View.VISIBLE
@@ -2592,7 +2594,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     TextView(this@MainActivity).apply {
                         text = "Submitting Fox Role: ${foxRole.uiLabel}"
                         textSize = 15f
-                        setTextColor(Color.parseColor("#1F2937"))
+                        setTextColor("#1F2937".toColorInt())
                     },
                     LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f),
                 )
@@ -2655,7 +2657,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     TextView(this@MainActivity).apply {
                         text = "Submitting Fox Role: ${foxRole.roleName}"
                         textSize = 15f
-                        setTextColor(Color.parseColor("#1F2937"))
+                        setTextColor("#1F2937".toColorInt())
                     },
                     LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f),
                 )
@@ -3089,16 +3091,16 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             deviceTimeSkewMillis?.let { abs(it) <= AndroidSessionController.CLOCK_PHASE_WARNING_THRESHOLD_MILLIS } == true
         val deviceTimeColor =
             when {
-                uiState.currentTimeSyncInFlight -> Color.parseColor("#B45309")
-                deviceTimeNotSet -> Color.parseColor("#9E1C1C")
+                uiState.currentTimeSyncInFlight -> "#B45309".toColorInt()
+                deviceTimeNotSet -> "#9E1C1C".toColorInt()
                 deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL -> null
-                deviceTimeSyncFailed -> Color.parseColor("#9E1C1C")
-                automaticOrSemiAutomaticMode && deviceTimeWithinTarget -> Color.parseColor("#166534")
-                automaticOrSemiAutomaticMode -> Color.parseColor("#9E1C1C")
+                deviceTimeSyncFailed -> "#9E1C1C".toColorInt()
+                automaticOrSemiAutomaticMode && deviceTimeWithinTarget -> "#166534".toColorInt()
+                automaticOrSemiAutomaticMode -> "#9E1C1C".toColorInt()
                 else -> null
             }
-        val normalLabelColor = Color.parseColor("#1F1F1F")
-        val normalFieldColor = Color.parseColor("#1F2937")
+        val normalLabelColor = "#1F1F1F".toColorInt()
+        val normalFieldColor = "#1F2937".toColorInt()
         currentTimeLabelView?.text =
             deviceTimeRowLabel(
                 systemNow = systemNow,
@@ -3107,7 +3109,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         currentTimeLabelView?.setTextColor(deviceTimeColor ?: normalLabelColor)
         currentTimeDisplayField?.apply {
             if (uiState.currentTimeSyncInFlight) {
-                setBackgroundColor(Color.parseColor("#B45309"))
+                setBackgroundColor("#B45309".toColorInt())
                 setTextColor(Color.WHITE)
             } else {
                 if (deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL) {
@@ -3444,11 +3446,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         val connectionColor =
             when {
-                thermalWarningActive -> Color.parseColor("#9E1C1C")
-                readingData -> Color.parseColor("#B45309")
-                connectingToDetectedDevice || autoDetectSearchingForHeader -> Color.parseColor("#B45309")
-                uiState.sessionViewState != null -> Color.parseColor("#1F5F2C")
-                else -> Color.parseColor("#9E1C1C")
+                thermalWarningActive -> "#9E1C1C".toColorInt()
+                readingData -> "#B45309".toColorInt()
+                connectingToDetectedDevice || autoDetectSearchingForHeader -> "#B45309".toColorInt()
+                uiState.sessionViewState != null -> "#1F5F2C".toColorInt()
+                else -> "#9E1C1C".toColorInt()
             }
         val connectionClick =
             if (!readingData && !connectingToDetectedDevice && !autoDetectSearchingForHeader) {
@@ -3520,7 +3522,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                         textSize = 15f
                                         gravity = if (isNarrowScreen) Gravity.START else Gravity.END
                                         textAlignment = if (isNarrowScreen) View.TEXT_ALIGNMENT_VIEW_START else View.TEXT_ALIGNMENT_VIEW_END
-                                        setTextColor(if (headerIsError) Color.parseColor("#9E1C1C") else Color.parseColor("#475569"))
+                                        setTextColor(if (headerIsError) "#9E1C1C".toColorInt() else "#475569".toColorInt())
                                         layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
                                         val startPadding = if (isNarrowScreen) 0 else (12 * resources.displayMetrics.density).toInt()
                                         val bottomPadding = (6 * resources.displayMetrics.density).toInt()
@@ -3562,9 +3564,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val density = resources.displayMetrics.density
         val backgroundColor =
             if (isError) {
-                Color.parseColor("#9E1C1C")
+                "#9E1C1C".toColorInt()
             } else {
-                Color.parseColor("#166534")
+                "#166534".toColorInt()
             }
         val popupContent =
             LinearLayout(this).apply {
@@ -3599,7 +3601,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         statusPopupWindow =
             PopupWindow(popupContent, popupWidth, WRAP_CONTENT, false).apply {
                 isOutsideTouchable = true
-                setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
                 elevation = 12 * density
             }
         content.post {
@@ -3641,7 +3643,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     firmwareUpdateStatusView =
                         TextView(this@MainActivity).apply {
                             textSize = 15f
-                            setTextColor(Color.parseColor("#1F2937"))
+                            setTextColor("#1F2937".toColorInt())
                         }
                     addView(firmwareUpdateStatusView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
                     firmwareUpdateProgressBar =
@@ -4171,7 +4173,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val dialogHorizontalPadding = (16 * resources.displayMetrics.density).toInt()
         val previewView =
             sectionBody("").apply {
-                setTextColor(Color.parseColor("#2F5EA6"))
+                setTextColor("#2F5EA6".toColorInt())
                 setTypeface(Typeface.DEFAULT_BOLD)
                 setPadding(dialogHorizontalPadding, 0, dialogHorizontalPadding, (12 * resources.displayMetrics.density).toInt())
             }
@@ -4261,7 +4263,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     TextView(this@MainActivity).apply {
                         text = label
                         textSize = 14f
-                        setTextColor(Color.parseColor("#1F1F1F"))
+                        setTextColor("#1F1F1F".toColorInt())
                     },
                 )
                 addView(field)
@@ -4285,7 +4287,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             TextView(this).apply {
                 text = "Enter values from 3.50 to 3.70 MHz. Shared values are allowed."
                 textSize = 13f
-                setTextColor(Color.parseColor("#5F6368"))
+                setTextColor("#5F6368".toColorInt())
             }
 
         val contentView =
@@ -4356,7 +4358,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val dialogHorizontalPadding = (16 * resources.displayMetrics.density).toInt()
         val previewView =
             sectionBody("").apply {
-                setTextColor(Color.parseColor("#2F5EA6"))
+                setTextColor("#2F5EA6".toColorInt())
                 setTypeface(Typeface.DEFAULT_BOLD)
                 setPadding(dialogHorizontalPadding, 0, dialogHorizontalPadding, (12 * resources.displayMetrics.density).toInt())
             }
@@ -4462,7 +4464,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 autoLinkMask = 0
                 linksClickable = true
                 movementMethod = LinkMovementMethod.getInstance()
-                setTextColor(Color.parseColor("#111827"))
+                setTextColor("#111827".toColorInt())
                 textSize = 15f
             }
         AlertDialog.Builder(this)
@@ -4746,7 +4748,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         if (playSound) {
             primaryView.playSoundEffect(SoundEffectConstants.CLICK)
         }
-        val highlightColor = Color.parseColor("#2F5EA6")
+        val highlightColor = "#2F5EA6".toColorInt()
         listOfNotNull(primaryView, labelView).forEach { view ->
             view.animate().cancel()
             view.animate()
@@ -4896,10 +4898,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     val option = getItem(position)
                     textView.text = option?.label.orEmpty()
                     if (advancedModeEnabled && option?.advancedModeItem == true) {
-                        textView.setTextColor(Color.parseColor("#2F5EA6"))
+                        textView.setTextColor("#2F5EA6".toColorInt())
                         textView.setTypeface(Typeface.DEFAULT_BOLD)
                     } else {
-                        textView.setTextColor(Color.parseColor("#1F1F1F"))
+                        textView.setTextColor("#1F1F1F".toColorInt())
                         textView.setTypeface(Typeface.DEFAULT)
                     }
                     return view
@@ -4951,7 +4953,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 "If the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n" +
                                 forcedHardwareUpdateHelpText(forcedHardwareBoard)
                         textSize = 15f
-                        setTextColor(Color.parseColor("#1F2937"))
+                        setTextColor("#1F2937".toColorInt())
                     },
                     LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT),
                 )
@@ -5353,7 +5355,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun setAutomaticFirmwareUpdatesEnabled(enabled: Boolean) {
         automaticFirmwareUpdatesEnabled = enabled
-        uiPreferences.edit().putBoolean(PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED, enabled).apply()
+        uiPreferences.edit { putBoolean(PREF_AUTOMATIC_FIRMWARE_UPDATES_ENABLED, enabled) }
         AndroidSessionController.recordStatus(
             if (enabled) {
                 "Automatic firmware updates enabled."
@@ -5665,7 +5667,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun setAdvancedModeEnabled(enabled: Boolean) {
         advancedModeEnabled = enabled
-        uiPreferences.edit().putBoolean(PREF_ADVANCED_MODE_ENABLED, enabled).apply()
+        uiPreferences.edit { putBoolean(PREF_ADVANCED_MODE_ENABLED, enabled) }
         if (!enabled && AndroidSessionController.snapshotUiState().temperatureLoggingEnabled) {
             AndroidSessionController.setTemperatureLoggingEnabled(applicationContext, enabled = false)
         }
@@ -5802,7 +5804,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                     id = android.R.id.text1
                                     setCheckMarkDrawable(checkMarkAttribute.resourceId)
                                     textSize = 16f
-                                    setTextColor(Color.parseColor("#1F1F1F"))
+                                    setTextColor("#1F1F1F".toColorInt())
                                     gravity = Gravity.CENTER_VERTICAL
                                     minLines = 2
                                     maxLines = 3
@@ -6298,7 +6300,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             TextView(this).apply {
                 this.text = if (colorizeLogCategories) buildColorizedLogText(text) else text.ifBlank { "<empty>" }
                 textSize = 14f
-                setTextColor(Color.parseColor("#2B2B2B"))
+                setTextColor("#2B2B2B".toColorInt())
                 if (monospace) {
                     typeface = Typeface.MONOSPACE
                 }
@@ -6326,10 +6328,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             builder.append(line)
             val color =
                 when {
-                    line.contains("[${AndroidLogCategory.USER.label}]") -> Color.parseColor("#7A285B")
-                    line.contains("[${AndroidLogCategory.SERIAL.label}]") -> Color.parseColor("#166534")
-                    line.contains("[${AndroidLogCategory.APP.label}]") -> Color.parseColor("#0B3D91")
-                    line.contains("==") -> Color.parseColor("#111827")
+                    line.contains("[${AndroidLogCategory.USER.label}]") -> "#7A285B".toColorInt()
+                    line.contains("[${AndroidLogCategory.SERIAL.label}]") -> "#166534".toColorInt()
+                    line.contains("[${AndroidLogCategory.APP.label}]") -> "#0B3D91".toColorInt()
+                    line.contains("==") -> "#111827".toColorInt()
                     else -> null
                 }
             if (color != null && line.isNotBlank()) {
@@ -6585,7 +6587,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 val textView = view as? TextView ?: return view
                 textView.text = getItem(position)?.toString().orEmpty()
                 textView.setTypeface(Typeface.DEFAULT_BOLD)
-                textView.setTextColor(Color.parseColor("#1F1F1F"))
+                textView.setTextColor("#1F1F1F".toColorInt())
                 textView.gravity = Gravity.CENTER
                 textView.textSize = if (emphasized) {
                     if (selected) 32f else 28f
@@ -6702,7 +6704,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             ).toInt()
         val previewView =
             sectionBody("").apply {
-                setTextColor(Color.parseColor("#2F5EA6"))
+                setTextColor("#2F5EA6".toColorInt())
                 setTypeface(Typeface.DEFAULT_BOLD)
                 setPadding(dialogHorizontalPadding, 0, dialogHorizontalPadding, (12 * resources.displayMetrics.density).toInt())
             }
@@ -6851,7 +6853,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 textView.text = getItem(position)?.toString().orEmpty()
                 textView.setTypeface(Typeface.DEFAULT_BOLD)
                 textView.textSize = if (selected) 32f else 28f
-                textView.setTextColor(Color.parseColor("#1F1F1F"))
+                textView.setTextColor("#1F1F1F".toColorInt())
                 textView.gravity = Gravity.CENTER
                 val verticalPadding = (8 * resources.displayMetrics.density).toInt()
                 val horizontalPadding = (10 * resources.displayMetrics.density).toInt()
@@ -6898,7 +6900,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             this.text = text
             textSize = if (emphasized) 32f else 20f
             setTypeface(Typeface.DEFAULT_BOLD)
-            setTextColor(if (emphasized) Color.parseColor("#1F1F1F") else Color.parseColor("#2F5EA6"))
+            setTextColor(if (emphasized) "#1F1F1F".toColorInt() else "#2F5EA6".toColorInt())
             gravity = Gravity.CENTER_VERTICAL
             layoutParams =
                 LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
@@ -6949,11 +6951,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val alertColor =
             when (TemperatureAlertSupport.alertLevel(temperatureC)) {
                 TemperatureAlertLevel.NORMAL -> null
-                TemperatureAlertLevel.WARNING -> Color.parseColor("#9A3412")
-                TemperatureAlertLevel.DANGER -> Color.parseColor("#9E1C1C")
+                TemperatureAlertLevel.WARNING -> "#9A3412".toColorInt()
+                TemperatureAlertLevel.DANGER -> "#9E1C1C".toColorInt()
             }
-        labelView?.setTextColor(alertColor ?: Color.parseColor("#1F1F1F"))
-        fieldView.setTextColor(alertColor ?: Color.parseColor("#1F2937"))
+        labelView?.setTextColor(alertColor ?: "#1F1F1F".toColorInt())
+        fieldView.setTextColor(alertColor ?: "#1F2937".toColorInt())
     }
 
     private fun configureIndependentTextEditor(editor: EditText) {
@@ -6991,7 +6993,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         TextView(this).apply {
             this.text = text
             textSize = textSizeSp
-            setTextColor(Color.parseColor("#1F2937"))
+            setTextColor("#1F2937".toColorInt())
             if (singleLine) {
                 setSingleLine(true)
             } else {
@@ -7058,19 +7060,19 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         isClickable = enabledForInteraction
         if (enabledForInteraction && emphasizedInputStyle) {
             setBackgroundColor(Color.WHITE)
-            setTextColor(Color.parseColor("#1F2937"))
+            setTextColor("#1F2937".toColorInt())
             alpha = 1f
         } else if (enabledForInteraction) {
             background = null
-            setTextColor(Color.parseColor("#4B5563"))
+            setTextColor("#4B5563".toColorInt())
             alpha = 1f
         } else {
             if (emphasizedInputStyle) {
-                setBackgroundColor(Color.parseColor("#E5E7EB"))
+                setBackgroundColor("#E5E7EB".toColorInt())
             } else {
                 background = null
             }
-            setTextColor(Color.parseColor("#9CA3AF"))
+            setTextColor("#9CA3AF".toColorInt())
             alpha = 1f
         }
     }
@@ -7208,7 +7210,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val dialogHorizontalPadding = (16 * resources.displayMetrics.density).toInt()
         val previewView =
             sectionBody("").apply {
-                setTextColor(Color.parseColor("#2F5EA6"))
+                setTextColor("#2F5EA6".toColorInt())
                 setTypeface(Typeface.DEFAULT_BOLD)
                 setPadding(dialogHorizontalPadding, 0, dialogHorizontalPadding, (12 * resources.displayMetrics.density).toInt())
             }
@@ -7291,27 +7293,29 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun saveDiagnosticsExpandedPreference() {
-        uiPreferences.edit().putBoolean(PREF_DIAGNOSTICS_EXPANDED, developerDiagnosticsExpanded).apply()
+        uiPreferences.edit { putBoolean(PREF_DIAGNOSTICS_EXPANDED, developerDiagnosticsExpanded) }
     }
 
     private fun saveRawSerialVisiblePreference() {
-        uiPreferences.edit().putBoolean(PREF_RAW_SERIAL_VISIBLE, rawSerialVisible).apply()
+        uiPreferences.edit { putBoolean(PREF_RAW_SERIAL_VISIBLE, rawSerialVisible) }
     }
 
     private fun saveSystemTimeVisiblePreference() {
-        uiPreferences.edit().putBoolean(PREF_SYSTEM_TIME_VISIBLE, systemTimeVisible).apply()
+        uiPreferences.edit { putBoolean(PREF_SYSTEM_TIME_VISIBLE, systemTimeVisible) }
     }
 
     private fun saveDeviceDataVisiblePreference() {
-        uiPreferences.edit().putBoolean(PREF_DEVICE_DATA_VISIBLE, deviceDataVisible).apply()
+        uiPreferences.edit { putBoolean(PREF_DEVICE_DATA_VISIBLE, deviceDataVisible) }
     }
 
     private fun saveScheduleTimeInputModePreference() {
-        uiPreferences.edit().putString(PREF_SCHEDULE_TIME_INPUT_MODE, scheduleTimeInputMode.name).apply()
+        uiPreferences.edit { putString(PREF_SCHEDULE_TIME_INPUT_MODE, scheduleTimeInputMode.name) }
     }
 
     private fun saveDefaultEventLengthPreference() {
-        uiPreferences.edit().putInt(PREF_DEFAULT_EVENT_LENGTH_MINUTES, defaultEventLengthMinutes.coerceIn(10, 24 * 60)).apply()
+        uiPreferences.edit {
+            putInt(PREF_DEFAULT_EVENT_LENGTH_MINUTES, defaultEventLengthMinutes.coerceIn(10, 24 * 60))
+        }
     }
 
     private fun loadTimedEventDefaultFrequenciesPreference(): TimedEventDefaultFrequencies {
@@ -7329,12 +7333,12 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private fun saveTimedEventDefaultFrequenciesPreference() {
         val sanitizedDefaults = FrequencySupport.sanitizeTimedEventDefaultFrequencies(timedEventDefaultFrequencies)
         timedEventDefaultFrequencies = sanitizedDefaults
-        uiPreferences.edit()
-            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_1_HZ, sanitizedDefaults.frequency1Hz)
-            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_2_HZ, sanitizedDefaults.frequency2Hz)
-            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_3_HZ, sanitizedDefaults.frequency3Hz)
-            .putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_B_HZ, sanitizedDefaults.frequencyBHz)
-            .apply()
+        uiPreferences.edit {
+            putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_1_HZ, sanitizedDefaults.frequency1Hz)
+            putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_2_HZ, sanitizedDefaults.frequency2Hz)
+            putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_3_HZ, sanitizedDefaults.frequency3Hz)
+            putLong(PREF_TIMED_EVENT_DEFAULT_FREQUENCY_B_HZ, sanitizedDefaults.frequencyBHz)
+        }
     }
 
     private fun timedEventDefaultFrequencyText(frequencyHz: Long): String {
@@ -7710,18 +7714,18 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun saveFrequencyDisplayUnitPreference() {
-        uiPreferences.edit().putString(PREF_FREQUENCY_DISPLAY_UNIT, frequencyDisplayUnit.name).apply()
+        uiPreferences.edit { putString(PREF_FREQUENCY_DISPLAY_UNIT, frequencyDisplayUnit.name) }
     }
 
     private fun saveTemperatureDisplayUnitPreference() {
-        uiPreferences.edit().putString(PREF_TEMPERATURE_DISPLAY_UNIT, temperatureDisplayUnit.name).apply()
+        uiPreferences.edit { putString(PREF_TEMPERATURE_DISPLAY_UNIT, temperatureDisplayUnit.name) }
     }
 
     private fun saveDeviceTimeSetModePreference() {
-        uiPreferences.edit()
-            .putString(PREF_DEVICE_TIME_SET_MODE, deviceTimeSetMode.name)
-            .putBoolean(PREF_DEVICE_TIME_SET_MODE_MIGRATED, true)
-            .apply()
+        uiPreferences.edit {
+            putString(PREF_DEVICE_TIME_SET_MODE, deviceTimeSetMode.name)
+            putBoolean(PREF_DEVICE_TIME_SET_MODE_MIGRATED, true)
+        }
     }
 
     private fun loadDeviceTimeSetModePreference(rawValue: String?): AndroidDeviceTimeSetMode {
@@ -7730,10 +7734,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 if (uiPreferences.getBoolean(PREF_DEVICE_TIME_SET_MODE_MIGRATED, false)) {
                     AndroidDeviceTimeSetMode.AUTOMATIC
                 } else {
-                    uiPreferences.edit()
-                        .putString(PREF_DEVICE_TIME_SET_MODE, AndroidDeviceTimeSetMode.SEMI_AUTOMATIC.name)
-                        .putBoolean(PREF_DEVICE_TIME_SET_MODE_MIGRATED, true)
-                        .apply()
+                    uiPreferences.edit {
+                        putString(PREF_DEVICE_TIME_SET_MODE, AndroidDeviceTimeSetMode.SEMI_AUTOMATIC.name)
+                        putBoolean(PREF_DEVICE_TIME_SET_MODE_MIGRATED, true)
+                    }
                     AndroidDeviceTimeSetMode.SEMI_AUTOMATIC
                 }
             }
@@ -7929,7 +7933,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         loadCloneSettingsFromAttachedDevice(currentUiState.latestLoadedDeviceName)
                     }
                 }.apply {
-                    setBackgroundColor(Color.parseColor("#1E40AF"))
+                    setBackgroundColor("#1E40AF".toColorInt())
                     setTextColor(Color.WHITE)
                     contentDescription = presentation.loadContentDescription
                 },
@@ -7969,9 +7973,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun cloneButtonColor(uiState: AndroidUiState = AndroidSessionController.snapshotUiState()): Int {
         return if (uiState.cloneTemplateTimedEventEditsLocked) {
-            Color.parseColor("#B91C1C")
+            "#B91C1C".toColorInt()
         } else {
-            Color.parseColor("#1E40AF")
+            "#1E40AF".toColorInt()
         }
     }
 
@@ -8007,7 +8011,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 "Clone copies the stored timed-event template to the attached device. " +
                                 "Syncing the attached device clock first is strongly recommended."
                         textSize = 15f
-                        setTextColor(Color.parseColor("#1F2937"))
+                        setTextColor("#1F2937".toColorInt())
                     },
                     LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT),
                 )
@@ -8095,7 +8099,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     TextView(this@MainActivity).apply {
                         text = "Cloning timed event settings to the attached device..."
                         textSize = 15f
-                        setTextColor(Color.parseColor("#1F2937"))
+                        setTextColor("#1F2937".toColorInt())
                     },
                     LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f),
                 )
@@ -8197,7 +8201,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         TextView(this).apply {
             this.text = text
             textSize = 15f
-            setTextColor(Color.parseColor("#6F4E00"))
+            setTextColor("#6F4E00".toColorInt())
             setBackgroundColor(0xFFFFF4D6.toInt())
             val horizontalPadding = (12 * resources.displayMetrics.density).toInt()
             val verticalPadding = (10 * resources.displayMetrics.density).toInt()
@@ -8214,7 +8218,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             this.text = text
             textSize = 14f
             setTypeface(Typeface.DEFAULT_BOLD)
-            setTextColor(Color.parseColor("#9E1C1C"))
+            setTextColor("#9E1C1C".toColorInt())
             layoutParams =
                 LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
                     val bottomMargin = (8 * resources.displayMetrics.density).toInt()

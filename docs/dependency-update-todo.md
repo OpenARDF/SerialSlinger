@@ -13,15 +13,6 @@ transitive dependencies of the pinned jDeploy CLI. Do not force an incompatible 
 override that makes the npm tree invalid. Recheck this waiver whenever jDeploy changes or during
 each release dependency review, and remove it when upstream no longer requires those packages.
 
-## AndroidX Core 1.19 migration
-
-Keep AndroidX Core at 1.18.0 until the 1.19 migration is handled as a dedicated lint-cleanup
-slice. Core 1.19 merges the KTX APIs into the main `core` artifact, and a trial update to 1.19.1
-made the release lint gate report 76 new `UseKtx` findings in the existing programmatic Android
-UI. Do not add those findings to the baseline. Convert and review the affected preference,
-graphics, bundle, and view calls, then rerun the normal Android and repository-wide gates before
-accepting the dependency update.
-
 ## Kotlin metadata configuration advisory
 
 The Gradle `:shared:resolvableConfigurations` diagnostic reports that several generated Kotlin

@@ -4,7 +4,7 @@ kotlin = "2.4.20"
 jserialcomm = "2.11.4"
 usb-serial-for-android = "3.11.0"
 desugar-jdk-libs = "2.1.5"
-androidx-core = "1.18.0"
+androidx-core = "1.19.1"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "android-gradle-plugin" }
