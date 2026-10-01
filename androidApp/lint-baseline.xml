@@ -13,20 +13,6 @@
     </issue>
 
     <issue
-        id="UnusedResources"
-        message="The resource `R.mipmap.ic_launcher` appears to be unused">
-        <location
-            file="src/main/res/mipmap-hdpi/ic_launcher.webp"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.mipmap.ic_launcher_round` appears to be unused">
-        <location
-            file="src/main/res/mipmap-hdpi/ic_launcher_round.webp"/>
-    </issue>
-
-    <issue
         id="IconLauncherShape"
         message="Launcher icon used as round icon did not have a circular shape">
         <location

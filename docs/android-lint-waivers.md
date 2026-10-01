@@ -7,7 +7,7 @@ gate. New findings are not accepted into the baseline during ordinary developmen
 The baseline currently covers:
 
 - hard-coded and concatenated English text in the existing programmatic Android UI;
-- legacy launcher icon shape and unused launcher resource findings; and
+- legacy launcher icon shape findings; and
 - the intentional fixed-landscape tablet workflow warning.
 
 Security and accessibility findings are not categorically waived. The ADB automation receiver is
