@@ -71,14 +71,13 @@ git rev-list --left-right --count main...Development_Android
 3. Create and complete the checked release-notes file. The `Android release
    notes` section should be terse and suitable for Play Console.
 4. Run release validation gates serially. Do not run heavy Gradle gates in
-   parallel.
+   parallel. The repository wrappers cover desktop, Android host/unit tests,
+   lint-as-error, the release bundle, release-script tests, jDeploy preflight,
+   and the secret scan.
 
 ```sh
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home npm run jdeploy:release-preflight
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ./gradlew check
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ./gradlew prepareDesktopJdeployBundle verifyDesktopJdeployBundle
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ./gradlew androidApp:compileDebugKotlin
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home ./gradlew printAndroidReleaseSigningStatus :androidApp:bundleRelease
+JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home just release-check
+just secret-check
 ```
 
 5. Run the release-package checks with direct npm commands, not the `just`
@@ -92,9 +91,8 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home npm run
 JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home npm run jdeploy:package
 JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home npm run jdeploy:install-local
 JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home npm run jdeploy:verify-install
-JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home npm run jdeploy:local
+JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home npm run jdeploy:local-smoke
 JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home npm run jdeploy:pack-preview
-gitleaks detect . --no-banner
 git diff --check
 ```
 
@@ -115,7 +113,9 @@ just release-checklist docs/release-checklist-X.Y.Z.json pre-tag
 
 8. Commit the release candidate on `Development_Android`, fast-forward `main`,
    record the main-sync evidence, and commit that evidence on `main`.
-9. Create and push the annotated tag from the verified main-sync commit:
+9. Set the checklist `sourceCommit` to the verified main-sync commit, then create
+   and push the annotated tag at that exact commit. The hosted workflow rejects
+   any tag, version, checklist, or source-commit mismatch:
 
 ```sh
 git tag -a vX.Y.Z -m "SerialSlinger X.Y.Z"

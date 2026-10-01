@@ -77,16 +77,22 @@ The repository includes a macOS-focused GitHub Actions workflow at [.github/work
 
 It:
 
+- uses pinned macOS, Java, Node, and GitHub Action revisions
+- verifies the tag, package version, checklist identity, and checklist source commit agree
+- reruns desktop tests, Android host/unit tests, release lint, release bundling, and jDeploy preflight
+- prepares and publishes with repository-owned, tested scripts rather than a moving third-party action branch
 - publishes jDeploy release artifacts for tags beginning with `v`
 - targets GitHub releases rather than npm publishing
 - refreshes the special `jdeploy` release icon asset
 - repairs the macOS installer wrapper icon after publish so public Mac installers stay branded with the project icon
 
+Pull requests and `Development_Android` pushes run the desktop/Android build-and-test workflow. Separate pinned Linux x64 and Windows x64 workflows install the local jDeploy package and execute its hardware-free version probe through the genuine installed launcher. These automated x64 results can satisfy the corresponding checklist items; ARM64 remains a separately recorded check.
+
 The intended release flow is:
 
 1. increment the shared release label in `build.gradle.kts`, `package.json`, and `package-lock.json` to the next plain `x.y.z` version, with no alphabetical suffix
 2. increment Android `versionCode` in `androidApp/build.gradle.kts` from the previously deployed build
-3. run `npm run jdeploy:release-preflight`
+3. run `just release-check` and `just secret-check`
 4. review platform parity:
    - ask whether any Android app changes in the release should also be carried into the desktop app
    - ask whether any desktop app changes in the release should also be carried into the Android app
@@ -97,7 +103,7 @@ The intended release flow is:
 8. create `docs/release-notes/vX.Y.Z.md` from [release-notes-template.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-notes-template.md), validate it with `npm run release:notes -- --checklist <checklist.json>`, and provide the Android release-notes section as copyable Play Console text
 9. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
 10. merge the desired release state to `main`
-11. create and push a tag like `v1.0.93`
+11. ensure the checklist `sourceCommit` is the exact verified commit, then create and push a tag like `v1.0.93` at that commit
 12. let the GitHub Actions workflow publish the release artifacts
 13. before declaring the deployment complete, update the checklist for the final tag, workflow, release-verification, and final-audit items, then run `npm run release:checklist -- --file <checklist.json> --phase final`
 
@@ -114,7 +120,7 @@ Do not treat cross-platform desktop support as covered by the macOS regression a
 
 The chosen public package identity is `serialslinger`. The shared public and app version line is the current plain `x.y.z` value in `build.gradle.kts`.
 
-The publish guard is still enforced by [scripts/check-jdeploy-publish.mjs](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/scripts/check-jdeploy-publish.mjs) through `package.json`'s `prepublishOnly` hook. A real publish will stop until `SERIALSLINGER_ALLOW_JDEPLOY_PUBLISH=1` is intentionally set.
+The publish guards are enforced by [scripts/check-jdeploy-publish.mjs](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/scripts/check-jdeploy-publish.mjs) through `package.json`'s `prepublishOnly` hook and by the workflow-only `SERIALSLINGER_ALLOW_GITHUB_RELEASE_PUBLISH=1` guard. The jDeploy launcher dependencies are explicitly bundled so GitHub release tarballs remain self-contained.
 
 ## macOS Packaging
 

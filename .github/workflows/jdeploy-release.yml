@@ -14,39 +14,64 @@ concurrency:
 
 jobs:
   publish-macos-release:
-    runs-on: macos-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
+    name: Validate and publish GitHub release installers
+    # Pin the release environment so a future moving-label migration cannot alter a tag build.
+    runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Temurin JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: "17"
           cache: gradle
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
+
+      - name: Print tool versions
+        run: |
+          java -version
+          node --version
+          npm --version
+
+      - name: Verify release tag, checklist, and notes
+        run: node ./scripts/check-release-tag.mjs
 
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build jDeploy desktop bundle
-        run: ./gradlew prepareDesktopJdeployBundle verifyDesktopJdeployBundle
+      - name: Run desktop and Android regression gates
+        run: |
+          ./gradlew \
+            :shared:desktopTest \
+            :shared:testAndroidHostTest \
+            :androidApp:testDebugUnitTest \
+            :androidApp:lintRelease \
+            :androidApp:bundleRelease \
+            prepareDesktopJdeployBundle \
+            verifyDesktopJdeployBundle
 
-      - name: Publish with jDeploy
-        uses: shannah/jdeploy@master
-        with:
-          github_token: ${{ github.token }}
-          deploy_target: github
-          jdeploy_version: "6.1.3"
+      - name: Run jDeploy release preflight
+        run: npm run jdeploy:release-preflight
+
+      - name: Prepare installer assets with the pinned jDeploy CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JDEPLOY_REGISTRY_URL: https://www.jdeploy.com/
+        run: node ./scripts/prepare-jdeploy-github-release.mjs
+
+      - name: Publish jDeploy metadata and installer assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERIALSLINGER_ALLOW_GITHUB_RELEASE_PUBLISH: "1"
+        run: ./scripts/publish-jdeploy-github-release.sh
 
       - name: Upload canonical npm package tarball
         env:
@@ -60,13 +85,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/repair-jdeploy-github-release-macos.sh "${{ github.ref_name }}"
 
-      - name: Publish GitHub release
+      - name: Publish GitHub release with checked notes
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          notes_file="docs/release-notes/${{ github.ref_name }}.md"
-          if [ -f "$notes_file" ]; then
-            gh release edit "${{ github.ref_name }}" --draft=false --notes-file "$notes_file"
-          else
-            gh release edit "${{ github.ref_name }}" --draft=false
-          fi
+        run: gh release edit "${{ github.ref_name }}" --draft=false --notes-file "docs/release-notes/${{ github.ref_name }}.md"

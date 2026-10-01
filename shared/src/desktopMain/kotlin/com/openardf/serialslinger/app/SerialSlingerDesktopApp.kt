@@ -6,6 +6,10 @@ import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.ArduconFoxRole
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
 import com.openardf.serialslinger.model.CloneDeviceIdentitySupport
+import com.openardf.serialslinger.model.CloneTemplateEligibility
+import com.openardf.serialslinger.model.CloneTemplateLoadMode
+import com.openardf.serialslinger.model.CloneWorkflowPresentation
+import com.openardf.serialslinger.model.CloneWorkflowPresentationSupport
 import com.openardf.serialslinger.model.DeviceSettings
 import com.openardf.serialslinger.model.DeviceSnapshot
 import com.openardf.serialslinger.model.EditableDeviceSettings
@@ -248,7 +252,10 @@ internal object DesktopLocalReleaseSelectionSupport {
     )
 }
 
-fun main() {
+fun main(args: Array<String>) {
+    if (DesktopInstalledPackageSmoke.runIfRequested(args)) {
+        return
+    }
     System.setProperty("apple.laf.useScreenMenuBar", shouldUseMacScreenMenuBar().toString())
     System.setProperty("apple.awt.application.name", "SerialSlinger")
     System.setProperty("com.apple.mrj.application.apple.menu.about.name", "SerialSlinger")
@@ -690,6 +697,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private val deviceModeCombo = JComboBox(DefaultComboBoxModel(DeviceMode.entries.toTypedArray()))
     private val autoDetectButton = JButton("Find Device")
     private var cloneSessionTemplateLocked: Boolean = false
+    private val loadCloneTemplateButton = createAccentButton(
+        title = "Load Clone Settings",
+        accentColor = cloneAccentColor,
+        rolloverColor = cloneAccentColor.brighter(),
+    )
     private val submitButton = createAccentButton(
         title = "Clone",
         accentColorProvider = ::cloneButtonAccentColor,
@@ -890,6 +902,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var consecutiveDeviceTimeCheckNoResponseCount: Int = 0
     private var cloneTemplateSettings: DeviceSettings? = null
     private var cloneTemplateSourceDeviceUniqueId: String? = null
+    private var cloneTemplateDaysRemaining: Int? = null
+    private var cloneTemplateSourceProductName: String? = null
     private var clockDisplayTimer: Timer? = null
     private var automaticDeviceTimeSyncTimer: Timer? = null
     private var automaticDeviceTimeSyncFailureSuppressed: Boolean = false
@@ -897,8 +911,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private var lastClockPhaseErrorMillis: Long? = null
     private var autoDetectButtonLongPressTimer: Timer? = null
     private var suppressNextAutoDetectAction: Boolean = false
-    private var cloneButtonLongPressTimer: Timer? = null
-    private var suppressNextCloneAction: Boolean = false
     private var suppressScheduleInteractionUntilMs: Long = 0L
     private var relativeStartDisplaySelectionOverride: DesktopInputSupport.RelativeTimeSelection? = null
     private var relativeFinishDisplaySelectionOverride: DesktopInputSupport.RelativeTimeSelection? = null
@@ -1110,13 +1122,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             autoDetectButton.margin.bottom,
             14,
         )
+        loadCloneTemplateButton.margin = submitButton.margin
         applyButton.margin = submitButton.margin
         val autoDetectPreferredSize = autoDetectButton.preferredSize
-        val clonePreferredSize = submitButton.preferredSize
-        val matchedCloneSize = Dimension(clonePreferredSize.width, autoDetectPreferredSize.height)
-        submitButton.preferredSize = matchedCloneSize
-        submitButton.minimumSize = matchedCloneSize
-        submitButton.maximumSize = matchedCloneSize
         val applyPreferredSize = applyButton.preferredSize
         val matchedApplySize = Dimension(applyPreferredSize.width, autoDetectPreferredSize.height)
         applyButton.preferredSize = matchedApplySize
@@ -1132,15 +1140,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             }
             autoDetectPorts()
         }
-        submitButton.toolTipText = "Click to clone. Press and hold to reload the clone template from the attached device."
-        installCloneButtonLongPressHandler()
-        submitButton.addActionListener {
-            if (suppressNextCloneAction) {
-                suppressNextCloneAction = false
-                return@addActionListener
-            }
-            cloneTimedEventSettings()
-        }
+        loadCloneTemplateButton.addActionListener { reloadCloneTemplateFromAttachedDevice() }
+        submitButton.addActionListener { cloneTimedEventSettings() }
+        updateCloneWorkflowControls()
         applyButton.toolTipText = "Make a change in a field, then click Apply."
         applyButton.addActionListener { commitFocusedEditorThenPendingImmediateEdit() }
         syncTimeButton.addActionListener { syncDeviceTimeToSystem() }
@@ -1346,21 +1348,36 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
     private fun buildToolbar(): JPanel {
         return JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = BorderFactory.createEmptyBorder(12, 12, 0, 12)
-            add(JLabel("Serial Port"))
-            add(Box.createHorizontalStrut(8))
-            add(portComboBox)
-            add(Box.createHorizontalStrut(12))
-            add(JLabel("Device Mode"))
-            add(Box.createHorizontalStrut(8))
-            add(deviceModeCombo)
-            add(Box.createHorizontalStrut(8))
-            add(autoDetectButton)
-            add(Box.createHorizontalStrut(8))
-            add(submitButton)
-            add(Box.createHorizontalStrut(12))
-            add(cloneTemplateLabel)
+            add(
+                JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    add(JLabel("Serial Port"))
+                    add(Box.createHorizontalStrut(8))
+                    add(portComboBox)
+                    add(Box.createHorizontalStrut(12))
+                    add(JLabel("Device Mode"))
+                    add(Box.createHorizontalStrut(8))
+                    add(deviceModeCombo)
+                    add(Box.createHorizontalStrut(8))
+                    add(autoDetectButton)
+                },
+            )
+            add(Box.createVerticalStrut(8))
+            add(
+                JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.X_AXIS)
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    add(loadCloneTemplateButton)
+                    add(Box.createHorizontalStrut(8))
+                    add(submitButton)
+                    add(Box.createHorizontalStrut(12))
+                    add(cloneTemplateLabel)
+                    add(Box.createHorizontalGlue())
+                },
+            )
         }
     }
 
@@ -1965,6 +1982,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         if (cloneTemplateSettings == null) {
             cloneTemplateSourceDeviceUniqueId = loadedSnapshot?.info?.deviceUniqueId
+            cloneTemplateDaysRemaining = loadedSnapshot?.status?.daysRemaining
+            cloneTemplateSourceProductName = loadedSnapshot?.info?.productName
         }
         cloneTemplateSettings = FrequencySupport.applyTimedEventDefaultFrequencies(existingTemplate, defaults)
         setCloneSessionTemplateLocked(false)
@@ -2362,11 +2381,44 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun setCloneSessionTemplateLocked(locked: Boolean) {
-        if (cloneSessionTemplateLocked == locked) {
-            return
-        }
         cloneSessionTemplateLocked = locked
+        updateCloneWorkflowControls()
+    }
+
+    private fun cloneWorkflowPresentation(isBusy: Boolean = backgroundWorkInProgress): CloneWorkflowPresentation {
+        val snapshot = loadedSnapshot
+        val connected = currentTransport != null && currentState?.connectionState == ConnectionState.CONNECTED
+        return CloneWorkflowPresentationSupport.present(
+            templateLoaded = cloneSessionTemplateLocked,
+            canLoadTemplate = !isBusy && connected && snapshot?.capabilities?.supportsScheduling == true,
+            canClone =
+                !isBusy &&
+                    connected &&
+                    cloneTemplateSettings?.let { template ->
+                        CloneTemplateEligibility.hasCompleteTimedEventSettings(
+                            settings = template,
+                            daysRemaining = cloneTemplateDaysRemaining,
+                            productName = cloneTemplateSourceProductName,
+                        )
+                    } == true,
+            templateSettings = cloneTemplateSettings,
+            templateSourceDeviceUniqueId = cloneTemplateSourceDeviceUniqueId,
+            attachedSettings = snapshot?.settings,
+            attachedDeviceUniqueId = snapshot?.info?.deviceUniqueId,
+        )
+    }
+
+    private fun updateCloneWorkflowControls(isBusy: Boolean = backgroundWorkInProgress) {
+        val presentation = cloneWorkflowPresentation(isBusy)
+        loadCloneTemplateButton.text = presentation.loadLabel
+        loadCloneTemplateButton.toolTipText = presentation.loadContentDescription
+        loadCloneTemplateButton.isEnabled = presentation.loadEnabled
+        submitButton.text = presentation.cloneLabel
+        submitButton.toolTipText = presentation.cloneContentDescription
+        submitButton.isEnabled = presentation.cloneEnabled
+        loadCloneTemplateButton.repaint()
         submitButton.repaint()
+        revalidate()
     }
 
     private fun buildCurrentTimeRow(): JPanel {
@@ -2948,6 +3000,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         temperatureResetCommandsSupported = null
         cloneTemplateSettings = null
         cloneTemplateSourceDeviceUniqueId = null
+        cloneTemplateDaysRemaining = null
+        cloneTemplateSourceProductName = null
         setCloneSessionTemplateLocked(false)
         updateCloneTemplateLabel("Clone template not set")
     }
@@ -4133,6 +4187,10 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun cloneTimedEventSettings(skipClockWarning: Boolean = false) {
+        if (!cloneSessionTemplateLocked) {
+            JOptionPane.showMessageDialog(this, "Load Clone Settings from a source device before cloning.")
+            return
+        }
         val transport = currentTransport
         val state = currentState
         val snapshot = loadedSnapshot
@@ -4428,63 +4486,40 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun installCloneButtonLongPressHandler() {
-        submitButton.addMouseListener(
-            object : MouseAdapter() {
-                override fun mousePressed(event: MouseEvent) {
-                    if (event.button != MouseEvent.BUTTON1 || !submitButton.isEnabled) {
-                        return
-                    }
-                    cloneButtonLongPressTimer?.stop()
-                    cloneButtonLongPressTimer = Timer(CLONE_BUTTON_LONG_PRESS_MS) {
-                        cloneButtonLongPressTimer = null
-                        if (
-                            submitButton.model.isPressed &&
-                            submitButton.model.isArmed &&
-                            !backgroundWorkInProgress
-                        ) {
-                            suppressNextCloneAction = true
-                            reloadCloneTemplateFromAttachedDevice()
-                        }
-                    }.apply {
-                        isRepeats = false
-                        start()
-                    }
-                }
-
-                override fun mouseReleased(event: MouseEvent) {
-                    cloneButtonLongPressTimer?.stop()
-                    cloneButtonLongPressTimer = null
-                }
-
-                override fun mouseExited(event: MouseEvent) {
-                    cloneButtonLongPressTimer?.stop()
-                    cloneButtonLongPressTimer = null
-                }
-            },
-        )
-    }
-
-    private fun reloadCloneTemplateFromAttachedDevice() {
+    private fun reloadCloneTemplateFromAttachedDevice(replacementConfirmed: Boolean = false) {
         val portPath = currentConnectedPortPath
         if (portPath == null || currentState?.connectionState != ConnectionState.CONNECTED) {
             JOptionPane.showMessageDialog(this, connectedDeviceRequiredMessage())
             return
         }
+        val presentation = cloneWorkflowPresentation()
+        if (!replacementConfirmed && presentation.loadMode == CloneTemplateLoadMode.REPLACE) {
+            val choice = JOptionPane.showConfirmDialog(
+                this,
+                presentation.replacementConfirmationMessage,
+                "Replace Clone Settings",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+            )
+            if (choice != JOptionPane.YES_OPTION) {
+                setStatus("Clone settings replacement cancelled.")
+                return
+            }
+        }
         when (
             maybeShowCloneClockReminder(
                 message = "Device time is not synchronized with system time.\n\n" +
-                    "Syncing before reloading the clone template is typical protocol and strongly recommended.",
+                    "Syncing before loading clone settings is typical protocol and strongly recommended.",
                 title = "Clone Template Reminder",
-                continueActionLabel = "Continue Reload",
-                syncActionLabel = "Sync then Reload",
+                continueActionLabel = "Continue Load",
+                syncActionLabel = "Sync then Load",
             )
         ) {
             ClockWarningChoice.CONTINUE -> Unit
             ClockWarningChoice.SYNC_THEN_CONTINUE -> {
                 syncDeviceTimeToSystem {
                     if (it) {
-                        Timer(1) { reloadCloneTemplateFromAttachedDevice() }.apply {
+                        Timer(1) { reloadCloneTemplateFromAttachedDevice(replacementConfirmed = true) }.apply {
                             isRepeats = false
                             start()
                         }
@@ -4493,21 +4528,20 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 return
             }
             ClockWarningChoice.CANCEL -> {
-                setStatus("Clone template reload cancelled so device time can be synchronized first.")
+                setStatus("Loading clone settings cancelled so device time can be synchronized first.")
                 return
             }
         }
 
-        setCloneSessionTemplateLocked(false)
         runInBackground(
-            status = "Reloading clone template from attached device...",
+            status = "Loading clone settings from attached device...",
             verifyConnectedIdentity = false,
         ) {
             val refreshedConnection = loadPort(portPath).copy(
-                loadLogTitle = "Clone Template Reload",
+                loadLogTitle = "Load Clone Settings",
                 loadLogLeadEntries = listOf(
                     DesktopLogEntry(
-                        "Reloading clone template from the attached device before updating the template.",
+                        "Loading clone settings from the attached device.",
                         DesktopLogCategory.APP,
                     ),
                 ),
@@ -4515,12 +4549,36 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
             SwingUtilities.invokeLater {
                 applyLoadedConnection(refreshedConnection)
-                refreshedConnection.result.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+                val sourceSnapshot = refreshedConnection.result.state.snapshot
+                val sourceEligible =
+                    sourceSnapshot?.let { snapshot ->
+                        CloneTemplateEligibility.hasCompleteTimedEventSettings(
+                            settings = snapshot.settings,
+                            daysRemaining = snapshot.status.daysRemaining,
+                            productName = snapshot.info.productName,
+                        )
+                    } == true
+                if (!sourceEligible) {
+                    val message =
+                        "Clone settings were not loaded because the attached device has incomplete timed-event settings."
+                    updateCloneWorkflowControls()
+                    setStatus(message)
+                    JOptionPane.showMessageDialog(this, message, "Clone Settings Not Loaded", JOptionPane.WARNING_MESSAGE)
+                    return@invokeLater
+                }
+                val loadedSourceSnapshot = requireNotNull(sourceSnapshot)
+                replaceCloneTemplateFrom(loadedSourceSnapshot)
+                setCloneSessionTemplateLocked(true)
+                val sourceLabel = CloneWorkflowPresentationSupport.deviceLabel(
+                    settings = loadedSourceSnapshot.settings,
+                    deviceUniqueId = loadedSourceSnapshot.info.deviceUniqueId,
+                    fallback = "the attached device",
+                )
                 updateCloneTemplateLabel(
-                    "Clone template reloaded from attached device.",
+                    "Clone settings loaded from $sourceLabel.",
                     Color(0x0B, 0x3D, 0x91),
                 )
-                setStatus("Clone template reloaded from attached device.")
+                setStatus("Clone settings loaded from $sourceLabel.")
             }
         }
     }
@@ -4627,7 +4685,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             loadedSnapshot = renderedState.snapshot
 
             if (updatesTimedEventTemplate && changeSucceeded) {
-                renderedState.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+                renderedState.snapshot?.let(::rememberCloneTemplateFrom)
             }
 
             SwingUtilities.invokeLater {
@@ -5024,7 +5082,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
             currentState = refreshedWithClock.state
             loadedSnapshot = refreshedWithClock.state.snapshot
-            refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+            refreshedWithClock.state.snapshot?.let(::rememberCloneTemplateFrom)
 
             SwingUtilities.invokeLater {
                 refreshClockSample?.second?.let(::applyClockDisplayAnchor)
@@ -5821,7 +5879,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
                 currentState = refreshedWithClock.state
                 loadedSnapshot = refreshedWithClock.state.snapshot
-                refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+                refreshedWithClock.state.snapshot?.let(::rememberCloneTemplateFrom)
 
                 SwingUtilities.invokeLater {
                     relativeFinishDisplaySelectionOverride = effectiveSelection
@@ -6212,7 +6270,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
             currentState = refreshedWithClock.state
             loadedSnapshot = refreshedWithClock.state.snapshot
-            refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+            refreshedWithClock.state.snapshot?.let(::rememberCloneTemplateFrom)
 
             SwingUtilities.invokeLater {
                 clearRelativeScheduleDisplayOverrides()
@@ -6326,7 +6384,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val refreshedWithClock = mergeLoadResults(refreshed, refreshClockSample?.first)
             currentState = refreshedWithClock.state
             loadedSnapshot = refreshedWithClock.state.snapshot
-            refreshedWithClock.state.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+            refreshedWithClock.state.snapshot?.let(::rememberCloneTemplateFrom)
 
             SwingUtilities.invokeLater {
                 relativeStartDisplaySelectionOverride = selection
@@ -6805,6 +6863,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return snapshot.settings
     }
 
+    private fun rememberCloneTemplateFrom(sourceSnapshot: DeviceSnapshot) {
+        rememberCloneTemplateFrom(sourceSnapshot.settings)
+        cloneTemplateDaysRemaining = sourceSnapshot.status.daysRemaining
+        cloneTemplateSourceProductName = sourceSnapshot.info.productName
+    }
+
+    private fun replaceCloneTemplateFrom(sourceSnapshot: DeviceSnapshot) {
+        rememberCloneTemplateFrom(sourceSnapshot)
+        // Only an explicit Load/Replace action may change which unit supplied the template.
+        cloneTemplateSourceDeviceUniqueId = sourceSnapshot.info.deviceUniqueId
+    }
+
     private fun rememberCloneTemplateFrom(sourceSettings: DeviceSettings) {
         val existingTemplate = cloneTemplateSettings
         cloneTemplateSettings = if (existingTemplate == null) {
@@ -6813,6 +6883,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             existingTemplate.copy(
                 stationId = sourceSettings.stationId,
                 eventType = sourceSettings.eventType,
+                foxRole = sourceSettings.foxRole,
+                arduconFoxRoleCode = sourceSettings.arduconFoxRoleCode,
                 idCodeSpeedWpm = sourceSettings.idCodeSpeedWpm,
                 patternCodeSpeedWpm = sourceSettings.patternCodeSpeedWpm,
                 startTimeCompact = sourceSettings.startTimeCompact,
@@ -6824,7 +6896,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 beaconFrequencyHz = sourceSettings.beaconFrequencyHz,
             )
         }
-        cloneTemplateSourceDeviceUniqueId = loadedSnapshot?.info?.deviceUniqueId
     }
 
     private fun updateCloneTemplateLabel(
@@ -6836,11 +6907,16 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     }
 
     private fun cloneTemplateAttachedDeviceStateMessage(): String {
-        return "Clone template locked. Display shows attached device state."
+        val sourceLabel = CloneWorkflowPresentationSupport.deviceLabel(
+            settings = cloneTemplateSettings,
+            deviceUniqueId = cloneTemplateSourceDeviceUniqueId,
+            fallback = "the source device",
+        )
+        return "Clone settings loaded from $sourceLabel. Display shows attached device state."
     }
 
     private fun cloneTemplateCloningInProgressMessage(): String {
-        return "Clone template locked. Cloning in progress. Display will update after attached device refresh completes."
+        return "Clone in progress. Display will update after the attached device refresh completes."
     }
 
     private fun currentConnectedTimedSettings(): DeviceSettings {
@@ -10641,12 +10717,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         } else {
             updateDisplayedClockFields()
         }
-        submitButton.isEnabled =
-            !isBusy &&
-            currentTransport != null &&
-            currentState?.connectionState == ConnectionState.CONNECTED &&
-            cloneTemplateSettings != null
-        submitButton.toolTipText = "Click to clone. Press and hold to reload the clone template from the attached device."
+        updateCloneWorkflowControls(isBusy)
         updateApplyButtonState()
     }
 
@@ -12645,21 +12716,15 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         updateProductSectionTitles(loadedSnapshot)
         temperatureResetCommandsSupported = connection.temperatureResetCommandsSupported
         consecutiveDeviceTimeCheckNoResponseCount = 0
-        setCloneSessionTemplateLocked(false)
-        connection.result.state.snapshot?.settings?.let { loadedSettings ->
-            if (cloneTemplateSettings == null) {
-                rememberCloneTemplateFrom(loadedSettings)
-                updateCloneTemplateLabel(
-                    "Clone template captured from current device.",
-                    Color(0x0B, 0x3D, 0x91),
-                )
-            } else {
-                updateCloneTemplateLabel(
-                    cloneTemplateAttachedDeviceStateMessage(),
-                    Color(0x9A, 0x67, 0x11),
-                )
-            }
+        if (cloneSessionTemplateLocked) {
+            updateCloneTemplateLabel(
+                cloneTemplateAttachedDeviceStateMessage(),
+                Color(0x9A, 0x67, 0x11),
+            )
+        } else {
+            updateCloneTemplateLabel("Clone settings not loaded. Select Load Clone Settings.")
         }
+        updateCloneWorkflowControls()
         autoDetectNoDeviceFound = false
         showConnectionIndicator(ConnectionIndicatorState.CONNECTED, connectionIndicatorText(connection.result.state.snapshot, connection.portPath))
         portMemory.saveLastWorkingPortPath(connection.portPath)
@@ -13529,7 +13594,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
             currentState = nextState
             loadedSnapshot = nextState.snapshot
-            nextState.snapshot?.settings?.let(::rememberCloneTemplateFrom)
+            nextState.snapshot?.let(::rememberCloneTemplateFrom)
 
             SwingUtilities.invokeLater {
                 if (clockRefreshLines.isNotEmpty()) {
@@ -15068,7 +15133,6 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         const val SETTING_LONG_PRESS_TRIGGERED_KEY = "serialslinger.settingLongPressTriggered"
         const val USER_ACTION_LABEL_KEY = "serialslinger.userActionLabel"
         const val AUTO_DETECT_BUTTON_LONG_PRESS_MS = 900
-        const val CLONE_BUTTON_LONG_PRESS_MS = 900
         const val SETTING_TOGGLE_LONG_PRESS_MS = 900
         const val SETTING_TOGGLE_FEEDBACK_MS = 220
         const val SETTING_TOGGLE_ANIMATION_MS = 260

@@ -2,6 +2,8 @@
 package com.SerialSlinger.openardf
 
 import com.openardf.serialslinger.session.SerialTraceEntry
+import com.openardf.serialslinger.session.SessionLogIdentity
+import com.openardf.serialslinger.session.SessionLogIdentitySupport
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -40,10 +42,12 @@ class AndroidSessionLog(
     private val appVersion: String,
     private val platformLabel: String,
 ) {
+    private val identity = SessionLogIdentity(appVersion, platformLabel)
     private val dateFormatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     private val dateTimeFormatter = SimpleDateFormat("yyyy-MM-dd-HHmmss", Locale.US)
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.US)
     private var temperatureLogFile: File? = null
+    private var identityCheckedLogPath: String? = null
 
     fun logDirectory(): File {
         rootDirectory.mkdirs()
@@ -93,8 +97,9 @@ class AndroidSessionLog(
                     entries = listOf(AndroidLogEntry(message = "<no log entries captured yet>")),
                 ),
             )
+            identityCheckedLogPath = file.absolutePath
         } else {
-            ensureHeaderAtTop(file)
+            prepareExistingLogFile(file).takeIf(String::isNotEmpty)?.let(file::appendText)
         }
         return file
     }
@@ -252,10 +257,10 @@ class AndroidSessionLog(
 
     private fun headerTextIfNeeded(file: File): String {
         if (!file.exists() || file.length() == 0L) {
+            identityCheckedLogPath = file.absolutePath
             return renderHeader()
         }
-        ensureHeaderAtTop(file)
-        return ""
+        return prepareExistingLogFile(file)
     }
 
     private fun ensureHeaderAtTop(file: File) {
@@ -270,11 +275,27 @@ class AndroidSessionLog(
     }
 
     private fun renderHeader(): String {
-        return buildString {
-            appendLine("SerialSlinger $appVersion")
-            appendLine("Platform: $platformLabel")
-            appendLine()
+        return identity.headerText
+    }
+
+    private fun prepareExistingLogFile(file: File): String {
+        if (identityCheckedLogPath == file.absolutePath) {
+            return ""
         }
+        ensureHeaderAtTop(file)
+        val marker = sessionIdentityMarkerIfNeeded(file.readText())
+        identityCheckedLogPath = file.absolutePath
+        return marker
+    }
+
+    private fun sessionIdentityMarkerIfNeeded(existingText: String): String {
+        if (!SessionLogIdentitySupport.needsSessionMarker(existingText, identity)) {
+            return ""
+        }
+        return renderSection(
+            title = "Application Session",
+            entries = listOf(AndroidLogEntry(identity.sessionMarkerMessage)),
+        )
     }
 
     private fun temperatureLogFiles(): List<File> {

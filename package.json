@@ -1,6 +1,6 @@
 {
   "name": "serialslinger",
-  "version": "2.0.22",
+  "version": "2.0.22-d",
   "description": "Desktop configuration tool for SignalSlinger devices.",
   "author": "OpenARDF",
   "homepage": "https://github.com/OpenARDF/SerialSlinger",
@@ -22,9 +22,10 @@
     "prejdeploy:install-local": "npm run jdeploy:prepare",
     "prejdeploy:local": "npm run jdeploy:prepare",
     "jdeploy:package": "node ./scripts/jdeploy-run.mjs package",
-    "jdeploy:install-local": "node ./scripts/jdeploy-run.mjs install -y",
+    "jdeploy:install-local": "node ./scripts/jdeploy-run.mjs install --native -y",
     "jdeploy:verify-install": "node ./scripts/jdeploy-run.mjs verify-installation --package-json=package.json --verbose",
     "jdeploy:local": "node ./scripts/jdeploy-run.mjs run --install",
+    "jdeploy:local-smoke": "node ./scripts/jdeploy-local-smoke.mjs",
     "jdeploy:pack-preview": "npm run jdeploy:package && npm pack --dry-run --ignore-scripts",
     "jdeploy:release-preflight": "node ./scripts/check-jdeploy-release-ready.mjs",
     "release:checklist": "node ./scripts/check-release-checklist.mjs",
@@ -33,10 +34,22 @@
     "prepublishOnly": "node ./scripts/check-jdeploy-publish.mjs"
   },
   "dependencies": {
-    "shelljs": "^0.8.4"
+    "node-fetch": "^2.7.0",
+    "shelljs": "^0.10.0",
+    "tar": "^7.5.22",
+    "yauzl": "^3.3.2"
   },
+  "overrides": {
+    "brace-expansion": "1.1.21"
+  },
+  "bundledDependencies": [
+    "node-fetch",
+    "shelljs",
+    "tar",
+    "yauzl"
+  ],
   "devDependencies": {
-    "jdeploy": "6.1.3"
+    "jdeploy": "6.1.7"
   },
   "jdeploy": {
     "jar": "shared/build/jdeploy/SerialSlinger-jdeploy.jar",

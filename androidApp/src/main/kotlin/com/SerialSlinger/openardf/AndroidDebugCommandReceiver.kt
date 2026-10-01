@@ -70,6 +70,20 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
                     pendingResult.finish()
                 }
             }
+            ACTION_LOAD_CLONE_SETTINGS -> {
+                val pendingResult = goAsync()
+                val requestedDeviceName = intent.getStringExtra(EXTRA_DEVICE_NAME)
+                AndroidSessionController.reloadCloneTemplateFromAttachedDevice(
+                    context = context,
+                    requestedDeviceName = requestedDeviceName,
+                    requireExactDevice = requestedDeviceName != null,
+                    source = "adb",
+                ) { result ->
+                    pendingResult.resultCode = if (result.isSuccess) resultOk else resultCanceled
+                    pendingResult.resultData = AndroidSessionController.debugStateSummary()
+                    pendingResult.finish()
+                }
+            }
             ACTION_ARDUCON_RECOVERY_UPDATE -> {
                 resultCode = resultCanceled
                 resultData = "Arducon updates must be started from the running Arducon app with UPD. Hardware-reset recovery is not supported."
@@ -582,6 +596,7 @@ class AndroidDebugCommandReceiver : BroadcastReceiver() {
         const val ACTION_CLEAR_LOG = "com.SerialSlinger.openardf.DEBUG_CLEAR_LOG"
         const val ACTION_LOAD = "com.SerialSlinger.openardf.DEBUG_LOAD"
         const val ACTION_LOAD_EMULATOR = "com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR"
+        const val ACTION_LOAD_CLONE_SETTINGS = "com.SerialSlinger.openardf.DEBUG_LOAD_CLONE_SETTINGS"
         const val ACTION_ARDUCON_UPDATE = "com.SerialSlinger.openardf.DEBUG_ARDUCON_UPDATE"
         const val ACTION_ARDUCON_RECOVERY_UPDATE = "com.SerialSlinger.openardf.DEBUG_ARDUCON_RECOVERY_UPDATE"
         const val ACTION_SET_EVENT_TYPE = "com.SerialSlinger.openardf.DEBUG_SET_EVENT_TYPE"

@@ -65,6 +65,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.openardf.serialslinger.model.ArduconFoxRole
 import com.openardf.serialslinger.model.DeviceCapabilities
 import com.openardf.serialslinger.model.ChampionshipSettingsSupport
+import com.openardf.serialslinger.model.CloneWorkflowPresentation
+import com.openardf.serialslinger.model.CloneWorkflowPresentationSupport
 import com.openardf.serialslinger.model.ConnectionState
 import com.openardf.serialslinger.model.DeviceInfo
 import com.openardf.serialslinger.model.DeviceSnapshot
@@ -218,7 +220,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     private var startTimeFinishAdjustmentDialogOpen: Boolean = false
     private var lastsDurationDialogOpen: Boolean = false
     private var multiDayDurationGuardDialogOpen: Boolean = false
-    private var cloneTemplateLocked: Boolean = false
     private var timelyReplyWarningDialogOpen: Boolean = false
     private var eventPauseDialogOpen: Boolean = false
     private var startupDeviceStatusDialogOpen: Boolean = false
@@ -680,7 +681,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             AndroidSessionController.recordStatus("SignalSlinger update is already in progress.", isError = false)
             return
         }
-        clearCloneSessionTemplateLock()
         autoDetectSearchingForHeader = true
         AndroidSessionController.recordStatus("Searching for device...", isError = true)
         scheduleAutoDetect(
@@ -2354,7 +2354,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun runTimedEventSettingsChangeWithCloneTemplateGuard(action: () -> Unit) {
-        if (!cloneTemplateLocked) {
+        if (!AndroidSessionController.snapshotUiState().cloneTemplateTimedEventEditsLocked) {
             action()
             return
         }
@@ -2363,11 +2363,11 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             AlertDialog.Builder(this)
                 .setTitle("Clone Template Set")
                 .setMessage(
-                    "The cloning template has already been set by pressing Clone.\n\n" +
-                        "Changing Timed Event Settings now will update the template used for the next clone.",
+                    "Clone settings have been loaded from a source fox.\n\n" +
+                        "Changing Timed Event Settings will clear that loaded state. " +
+                        "Press Load Clone Settings again after making changes.",
                 )
-                .setPositiveButton("Change Event Settings") { _, _ ->
-                    cloneTemplateLocked = false
+                .setPositiveButton("Change Settings") { _, _ ->
                     AndroidSessionController.allowCloneTemplateTimedEventEdits()
                     action()
                 }
@@ -2506,7 +2506,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
     private fun installTimedEventSettingsPickerOpenGuard(view: View) {
         view.installTapOnlyClick { touchedView ->
-            if (cloneTemplateLocked) {
+            if (AndroidSessionController.snapshotUiState().cloneTemplateTimedEventEditsLocked) {
                 runTimedEventSettingsChangeWithCloneTemplateGuard {
                     touchedView.post { touchedView.performClick() }
                 }
@@ -2516,9 +2516,15 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
     }
 
+    // This listener gates focus while a clone template is protected; ordinary EditText click
+    // handling remains intact because every event outside that guard is returned to the view.
+    @SuppressLint("ClickableViewAccessibility")
     private fun installTimedEventSettingsTextEditGuard(editor: EditText) {
         editor.setOnTouchListener { _, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN && cloneTemplateLocked) {
+            if (
+                event.actionMasked == MotionEvent.ACTION_DOWN &&
+                AndroidSessionController.snapshotUiState().cloneTemplateTimedEventEditsLocked
+            ) {
                 runTimedEventSettingsChangeWithCloneTemplateGuard {
                     editor.requestFocus()
                     editor.setSelection(editor.text?.length ?: 0)
@@ -3477,7 +3483,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                             }
                             addView(
                                 TextView(this@MainActivity).apply {
-                                    text = "SerialSlinger:"
+                                    text = AndroidHeaderPresentation.appTitle(appVersionLabel())
                                     setTypeface(Typeface.DEFAULT_BOLD)
                                     textSize = 18f
                                     layoutParams =
@@ -3499,16 +3505,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                                 },
                             )
                         },
-                    )
-                    addView(
-                        headerCloneButton(uiState).apply {
-                            if (isNarrowScreen) {
-                                layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-                                    topMargin = (8 * resources.displayMetrics.density).toInt()
-                                    bottomMargin = (8 * resources.displayMetrics.density).toInt()
-                                }
-                            }
-                        }
                     )
                     addView(
                         LinearLayout(this@MainActivity).apply {
@@ -3537,6 +3533,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     )
                 },
             )
+            addView(headerCloneControls(uiState))
             addView(
                 LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -7908,80 +7905,81 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         }
     }
 
-    private fun headerCloneButton(uiState: AndroidUiState): Button =
-        Button(this).apply {
-            text = "Clone"
-            setBackgroundColor(cloneButtonColor(uiState))
-            setTextColor(Color.WHITE)
-            isEnabled = uiState.canClone
-            alpha = if (uiState.canClone) 1f else 0.55f
-            layoutParams =
-                LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
-                    val horizontalMargin = (8 * resources.displayMetrics.density).toInt()
-                    marginStart = horizontalMargin
-                    marginEnd = horizontalMargin
-                }
-            setOnClickListener {
-                maybeRunCloneWithClockWarning(
-                    uiState = AndroidSessionController.snapshotUiState(),
-                    requestedDeviceName = uiState.latestLoadedDeviceName,
-                )
-            }
-            contentDescription = "Clone timed event settings to attached device"
-            installLongPressGesture(this, allowShortTap = true) {
-                if (!isEnabled) {
-                    return@installLongPressGesture
-                }
-                animateFeedback(this, null, playSound = true)
-                clockDisplayHandler.postDelayed(
-                    {
-                        AndroidSessionController.reloadCloneTemplateFromAttachedDevice(
-                            context = applicationContext,
-                            requestedDeviceName = uiState.latestLoadedDeviceName,
-                        )
-                        clearCloneSessionTemplateLock()
-                    },
-                    220L,
-                )
-            }
-        }
+    private fun cloneWorkflowPresentation(uiState: AndroidUiState): CloneWorkflowPresentation {
+        val snapshot = uiState.sessionViewState?.state?.snapshot
+        return CloneWorkflowPresentationSupport.present(
+            templateLoaded = uiState.cloneTemplateTimedEventEditsLocked,
+            canLoadTemplate = snapshot?.capabilities?.supportsScheduling == true && !uiState.probeInFlight,
+            canClone = uiState.canClone,
+            templateSettings = uiState.cloneTemplateSettings,
+            templateSourceDeviceUniqueId = uiState.cloneTemplateSourceDeviceUniqueId,
+            attachedSettings = snapshot?.settings,
+            attachedDeviceUniqueId = snapshot?.info?.deviceUniqueId,
+        )
+    }
 
-    private fun cloneButton(latestLoadedDeviceName: String?): Button =
-        weightedButton("Clone") {
-            maybeRunCloneWithClockWarning(
-                uiState = AndroidSessionController.snapshotUiState(),
-                requestedDeviceName = latestLoadedDeviceName,
+    private fun headerCloneControls(uiState: AndroidUiState): LinearLayout {
+        val presentation = cloneWorkflowPresentation(uiState)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(
+                weightedButton(presentation.loadLabel, enabled = presentation.loadEnabled) {
+                    val currentUiState = AndroidSessionController.snapshotUiState()
+                    confirmCloneTemplateReplacement(cloneWorkflowPresentation(currentUiState)) {
+                        loadCloneSettingsFromAttachedDevice(currentUiState.latestLoadedDeviceName)
+                    }
+                }.apply {
+                    setBackgroundColor(Color.parseColor("#1E40AF"))
+                    setTextColor(Color.WHITE)
+                    contentDescription = presentation.loadContentDescription
+                },
             )
-        }.apply {
-            setBackgroundColor(cloneButtonColor())
-            setTextColor(Color.WHITE)
-            contentDescription = "Clone timed event settings to attached device"
-            installLongPressGesture(this, allowShortTap = true) {
-                animateFeedback(this, null, playSound = true)
-                clockDisplayHandler.postDelayed(
-                    {
-                        AndroidSessionController.reloadCloneTemplateFromAttachedDevice(
-                            context = applicationContext,
-                            requestedDeviceName = latestLoadedDeviceName,
-                        )
-                        clearCloneSessionTemplateLock()
-                    },
-                    220L,
-                )
-            }
+            addView(
+                weightedButton(presentation.cloneLabel, enabled = presentation.cloneEnabled) {
+                    val currentUiState = AndroidSessionController.snapshotUiState()
+                    maybeRunCloneWithClockWarning(
+                        uiState = currentUiState,
+                        requestedDeviceName = currentUiState.latestLoadedDeviceName,
+                    )
+                }.apply {
+                    setBackgroundColor(cloneButtonColor(uiState))
+                    setTextColor(Color.WHITE)
+                    contentDescription = presentation.cloneContentDescription
+                },
+            )
         }
+    }
+
+    private fun confirmCloneTemplateReplacement(
+        presentation: CloneWorkflowPresentation,
+        onConfirmed: () -> Unit,
+    ) {
+        val message = presentation.replacementConfirmationMessage
+        if (message == null) {
+            onConfirmed()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Replace Clone Settings")
+            .setMessage(message)
+            .setPositiveButton("Replace") { _, _ -> onConfirmed() }
+            .setNegativeButton("Cancel", null)
+            .showLogged("Replace Clone Settings")
+    }
 
     private fun cloneButtonColor(uiState: AndroidUiState = AndroidSessionController.snapshotUiState()): Int {
-        return if (cloneTemplateLocked || uiState.cloneTemplateTimedEventEditsLocked) {
+        return if (uiState.cloneTemplateTimedEventEditsLocked) {
             Color.parseColor("#B91C1C")
         } else {
             Color.parseColor("#1E40AF")
         }
     }
 
-    private fun clearCloneSessionTemplateLock() {
-        cloneTemplateLocked = false
-        AndroidSessionController.allowCloneTemplateTimedEventEdits()
+    private fun loadCloneSettingsFromAttachedDevice(requestedDeviceName: String?) {
+        AndroidSessionController.reloadCloneTemplateFromAttachedDevice(
+            context = applicationContext,
+            requestedDeviceName = requestedDeviceName,
+        )
     }
 
     private fun maybeRunCloneWithClockWarning(
@@ -8076,7 +8074,6 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
     }
 
     private fun runCloneWithStatusModal(requestedDeviceName: String?) {
-        cloneTemplateLocked = true
         AndroidSessionController.lockCloneTemplateTimedEventEdits()
         val padding = (20 * resources.displayMetrics.density).toInt()
         val spacing = (12 * resources.displayMetrics.density).toInt()

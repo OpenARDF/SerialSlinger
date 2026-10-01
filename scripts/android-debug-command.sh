@@ -17,6 +17,7 @@ Usage:
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] clear-log
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] load
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] load-emulator
+  ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] load-clone-settings
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] arducon-update [version]
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-event-type <value>
   ./scripts/android-debug-command.sh [--serial <adb-serial>] [--device-name <usb-device-name>] set-fox-role <value>
@@ -150,6 +151,9 @@ load)
 	;;
 load-emulator)
 	ACTION="com.SerialSlinger.openardf.DEBUG_LOAD_EMULATOR"
+	;;
+load-clone-settings)
+	ACTION="com.SerialSlinger.openardf.DEBUG_LOAD_CLONE_SETTINGS"
 	;;
 arducon-update)
 	ACTION="com.SerialSlinger.openardf.DEBUG_ARDUCON_UPDATE"

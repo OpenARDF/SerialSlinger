@@ -1,0 +1,90 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "baseBranchPatterns": [
+    "Development_Android"
+  ],
+  "enabledManagers": [
+    "github-actions",
+    "gradle",
+    "gradle-wrapper",
+    "npm"
+  ],
+  "timezone": "America/New_York",
+  "schedule": [
+    "* 0-4 1-7,15-21 * 1"
+  ],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Dependency Update Dashboard",
+  "dependencyDashboardApproval": true,
+  "automerge": false,
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 1,
+  "packageRules": [
+    {
+      "description": [
+        "Keep non-major Android build-system updates together for compatibility review."
+      ],
+      "groupName": "Android build system",
+      "matchPackageNames": [
+        "gradle",
+        "com.android.application",
+        "com.android.kotlin.multiplatform.library",
+        "com.android.tools.build:gradle"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "minor",
+        "patch",
+        "pin"
+      ]
+    },
+    {
+      "description": [
+        "Keep non-major Kotlin updates together for multiplatform compatibility review."
+      ],
+      "groupName": "Kotlin multiplatform",
+      "matchPackageNames": [
+        "org.jetbrains.kotlin*"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "minor",
+        "patch",
+        "pin"
+      ]
+    },
+    {
+      "description": [
+        "Keep non-major AndroidX updates reviewable as one compatibility family."
+      ],
+      "groupName": "AndroidX",
+      "matchPackageNames": [
+        "androidx.*"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "minor",
+        "patch",
+        "pin"
+      ]
+    },
+    {
+      "description": [
+        "Review GitHub Actions digest updates together while preserving immutable pins."
+      ],
+      "groupName": "GitHub Actions",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "minor",
+        "patch",
+        "pin"
+      ]
+    }
+  ]
+}

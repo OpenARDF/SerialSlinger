@@ -1,0 +1,73 @@
+name: Build and test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main, Development_Android]
+  push:
+    branches: [Development_Android]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-and-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Desktop, Android, lint, and release-script gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Set the checkout initialization branch
+        run: git config --global init.defaultBranch main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          log-accepted-android-sdk-licenses: false
+          packages: ''
+      - name: Install npm and Android dependencies
+        run: |
+          npm ci
+          # cmdline-tools 22 deprecates sdkmanager in favor of this Android CLI command.
+          android sdk install platform-tools platforms/android-37.0
+      - name: Run desktop and Android gates
+        run: |
+          ./gradlew \
+            :shared:compileKotlinDesktop \
+            :shared:desktopTest \
+            :shared:testAndroidHostTest \
+            :androidApp:testDebugUnitTest \
+            :androidApp:assembleDebug \
+            :androidApp:lintRelease \
+            :androidApp:bundleRelease
+      - name: Run release-script tests
+        run: |
+          node --test \
+            scripts/check-release-tag.test.mjs \
+            scripts/jdeploy-local-smoke.test.mjs \
+            scripts/prepare-jdeploy-github-release.test.mjs \
+            scripts/publish-jdeploy-github-release.test.mjs
+      - name: Stop Gradle before saving the setup cache
+        if: always()
+        run: ./gradlew --stop
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-and-test-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            androidApp/build/reports/**
+            shared/build/reports/**

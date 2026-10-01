@@ -97,29 +97,36 @@ kotlin {
 val generateDesktopVersionSource = tasks.register("generateDesktopVersionSource") {
     description = "Generates desktop version constants from the Gradle build version."
 
-    inputs.property("desktopDisplayVersion", desktopDisplayVersion)
-    inputs.property("desktopPackageVersion", desktopPackageVersion)
-    inputs.property("desktopProjectUrl", desktopProjectUrl)
-    inputs.property("desktopLicenseLabel", desktopLicenseLabel)
-    inputs.property("desktopLicenseUrl", desktopLicenseUrl)
-    inputs.property("desktopBuildDateUtc", desktopBuildDateUtc)
+    inputs.properties(
+        mapOf(
+            "desktopDisplayVersion" to desktopDisplayVersion,
+            "desktopPackageVersion" to desktopPackageVersion,
+            "desktopProjectUrl" to desktopProjectUrl,
+            "desktopLicenseLabel" to desktopLicenseLabel,
+            "desktopLicenseUrl" to desktopLicenseUrl,
+            "desktopBuildDateUtc" to desktopBuildDateUtc,
+        ),
+    )
     outputs.dir(generatedDesktopVersionDir)
 
     doLast {
+        // Resolve only declared task inputs and outputs here so Gradle can serialize this task for
+        // the configuration cache without retaining a reference to the Kotlin build script.
+        val values = inputs.properties
         val outputFile =
-            generatedDesktopVersionDir.get().file("com/openardf/serialslinger/app/SerialSlingerVersion.kt").asFile
+            outputs.files.singleFile.resolve("com/openardf/serialslinger/app/SerialSlingerVersion.kt")
         outputFile.parentFile.mkdirs()
         outputFile.writeText(
             """
             package com.openardf.serialslinger.app
 
             object SerialSlingerVersion {
-                const val displayVersion = "$desktopDisplayVersion"
-                const val packageVersion = "$desktopPackageVersion"
-                const val buildDateUtc = "$desktopBuildDateUtc"
-                const val projectUrl = "$desktopProjectUrl"
-                const val licenseLabel = "$desktopLicenseLabel"
-                const val licenseUrl = "$desktopLicenseUrl"
+                const val displayVersion = "${values.getValue("desktopDisplayVersion")}"
+                const val packageVersion = "${values.getValue("desktopPackageVersion")}"
+                const val buildDateUtc = "${values.getValue("desktopBuildDateUtc")}"
+                const val projectUrl = "${values.getValue("desktopProjectUrl")}"
+                const val licenseLabel = "${values.getValue("desktopLicenseLabel")}"
+                const val licenseUrl = "${values.getValue("desktopLicenseUrl")}"
             }
             """.trimIndent(),
         )
@@ -318,18 +325,28 @@ val desktopJdeployJar = tasks.register<Jar>("desktopJdeployJar") {
 
     from(desktopJarTask.map { zipTree(it.archiveFile) })
 
-    doFirst {
-        val runtimeClasspathEntries =
-            desktopMainCompilation.runtimeDependencyFiles.files
-                .map { "libs/${it.name}" }
+    // Declared inputs keep the manifest reproducible and configuration-cache safe.
+    inputs.property(
+        "jdeployRuntimeClasspath",
+        desktopMainCompilation.runtimeDependencyFiles.elements.map { runtimeFiles ->
+            runtimeFiles
+                .map { "libs/${it.asFile.name}" }
                 .sorted()
                 .joinToString(" ")
+        },
+    )
+    inputs.property("jdeployMainClass", desktopMainClass)
+    inputs.property("jdeployImplementationTitle", desktopAppName)
+    inputs.property("jdeployImplementationVersion", desktopPackageVersion)
+
+    doFirst {
+        val declaredInputs = inputs.properties
 
         manifest.attributes(
-            "Main-Class" to desktopMainClass,
-            "Class-Path" to runtimeClasspathEntries,
-            "Implementation-Title" to desktopAppName,
-            "Implementation-Version" to desktopPackageVersion,
+            "Main-Class" to declaredInputs.getValue("jdeployMainClass"),
+            "Class-Path" to declaredInputs.getValue("jdeployRuntimeClasspath"),
+            "Implementation-Title" to declaredInputs.getValue("jdeployImplementationTitle"),
+            "Implementation-Version" to declaredInputs.getValue("jdeployImplementationVersion"),
         )
     }
 }
@@ -348,8 +365,12 @@ tasks.register("verifyDesktopJdeployBundle") {
 
     dependsOn(tasks.named("prepareDesktopJdeployBundle"))
 
+    inputs.file(desktopJdeployJar.flatMap { it.archiveFile }).withPropertyName("jdeployJar")
+    inputs.property("expectedMainClass", desktopMainClass)
+
     doLast {
-        val jarFile = desktopJdeployJar.get().archiveFile.get().asFile
+        val jarFile = inputs.files.singleFile
+        val expectedMainClass = inputs.properties.getValue("expectedMainClass").toString()
         require(jarFile.isFile) {
             "Expected jDeploy jar at ${jarFile.absolutePath}"
         }
@@ -358,8 +379,8 @@ tasks.register("verifyDesktopJdeployBundle") {
             val manifest = archive.manifest ?: error("Generated jDeploy jar is missing a manifest.")
             val attributes = manifest.mainAttributes
             val mainClass = attributes.getValue("Main-Class")
-            require(mainClass == desktopMainClass) {
-                "Expected Main-Class=$desktopMainClass but found ${mainClass ?: "<missing>"}"
+            require(mainClass == expectedMainClass) {
+                "Expected Main-Class=$expectedMainClass but found ${mainClass ?: "<missing>"}"
             }
 
             val classPathEntries =

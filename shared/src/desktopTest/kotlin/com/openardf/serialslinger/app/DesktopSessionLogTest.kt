@@ -78,6 +78,34 @@ class DesktopSessionLogTest {
     }
 
     @Test
+    fun appendsCurrentIdentityOnceWhenDailyLogStartedUnderEarlierVersion() {
+        val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
+        val clock = Clock.fixed(Instant.parse("2026-04-10T14:22:33Z"), ZoneId.of("UTC"))
+        val oldLog = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = clock,
+            appVersion = "2.0.17a",
+            platformLabel = "TestOS 1.0",
+        )
+        oldLog.appendPlainSection("Existing", listOf("old"))
+
+        val currentLog = DesktopSessionLog(
+            rootDirectory = tempDirectory,
+            clock = clock,
+            appVersion = "2.0.22b",
+            platformLabel = "TestOS 1.0",
+        )
+        currentLog.appendPlainSection("New", listOf("new"))
+        currentLog.appendPlainSection("Later", listOf("later"))
+
+        val text = Files.readString(currentLog.currentLogFile())
+        val marker = "Session identity: SerialSlinger 2.0.22b; Platform: TestOS 1.0"
+        assertTrue(text.startsWith("SerialSlinger 2.0.17a\nPlatform: TestOS 1.0\n\n"))
+        assertEquals(1, text.windowed(marker.length).count { it == marker })
+        assertTrue(text.indexOf(marker) < text.indexOf("== New =="))
+    }
+
+    @Test
     fun backfillsMissingLogHeaderAtTopOfExistingCurrentDayLog() {
         val tempDirectory = Files.createTempDirectory("serialslinger-log-test")
         val log = DesktopSessionLog(

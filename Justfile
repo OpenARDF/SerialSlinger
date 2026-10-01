@@ -16,8 +16,24 @@ compile:
 test:
     {{gradle}} shared:desktopTest
 
-# Run the normal local validation gate.
-check: compile test
+# Run Android host/unit tests and build the debug application.
+android-check:
+    {{gradle}} :shared:testAndroidHostTest :androidApp:testDebugUnitTest :androidApp:assembleDebug
+
+# Treat new Android lint findings as failures and verify the release bundle.
+android-release-check:
+    {{gradle}} :androidApp:lintRelease :androidApp:bundleRelease
+
+# Run repository-owned Node workflow and packaging tests.
+scripts-test:
+    node --test \
+        scripts/check-release-tag.test.mjs \
+        scripts/jdeploy-local-smoke.test.mjs \
+        scripts/prepare-jdeploy-github-release.test.mjs \
+        scripts/publish-jdeploy-github-release.test.mjs
+
+# Run the normal local validation gate across desktop, Android, and release scripts.
+check: compile test android-check android-release-check scripts-test
 
 # Increment the local test-build suffix and align package metadata.
 local-version-bump:
@@ -67,6 +83,10 @@ jdeploy-verify-install:
 jdeploy-local: local-version-bump
     npm run jdeploy:local
 
+# Install and probe the genuine local jDeploy application without serial hardware.
+jdeploy-local-smoke:
+    npm run jdeploy:local-smoke
+
 # Preview the npm and jDeploy package payload.
 jdeploy-pack-preview: local-version-bump
     npm run jdeploy:pack-preview
@@ -74,6 +94,13 @@ jdeploy-pack-preview: local-version-bump
 # Run the jDeploy release preflight gate.
 jdeploy-preflight:
     npm run jdeploy:release-preflight
+
+# Run every automatable release gate; hardware checks remain controlled by the checklist.
+release-check: check jdeploy-preflight
+
+# Scan tracked history and the current worktree before a sensitive push or release.
+secret-check:
+    gitleaks detect --source . --no-banner
 
 # Check a release checklist phase.
 release-checklist file phase="pre-tag":

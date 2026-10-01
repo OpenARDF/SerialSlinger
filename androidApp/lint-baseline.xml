@@ -1,0 +1,526 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 9.2.1" type="baseline" client="gradle" dependencies="false" name="AGP (9.2.1)" variant="all" version="9.2.1">
+
+    <issue
+        id="DiscouragedApi"
+        message="Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios."
+        errorLine1="            android:screenOrientation=&quot;sensorLandscape&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="36"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.mipmap.ic_launcher` appears to be unused">
+        <location
+            file="src/main/res/mipmap-hdpi/ic_launcher.webp"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.mipmap.ic_launcher_round` appears to be unused">
+        <location
+            file="src/main/res/mipmap-hdpi/ic_launcher_round.webp"/>
+    </issue>
+
+    <issue
+        id="IconLauncherShape"
+        message="Launcher icon used as round icon did not have a circular shape">
+        <location
+            file="src/main/res/mipmap-hdpi/ic_logo_round.png"/>
+    </issue>
+
+    <issue
+        id="IconLauncherShape"
+        message="Launcher icon used as round icon did not have a circular shape">
+        <location
+            file="src/main/res/mipmap-mdpi/ic_logo_round.png"/>
+    </issue>
+
+    <issue
+        id="IconLauncherShape"
+        message="Launcher icon used as round icon did not have a circular shape">
+        <location
+            file="src/main/res/mipmap-xhdpi/ic_logo_round.png"/>
+    </issue>
+
+    <issue
+        id="IconLauncherShape"
+        message="Launcher icon used as round icon did not have a circular shape">
+        <location
+            file="src/main/res/mipmap-xxhdpi/ic_logo_round.png"/>
+    </issue>
+
+    <issue
+        id="IconLauncherShape"
+        message="Launcher icon used as round icon did not have a circular shape">
+        <location
+            file="src/main/res/mipmap-xxxhdpi/ic_logo_round.png"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                text = &quot;View history details&quot;"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="1798"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                        text = &quot;Submitting Fox Role: ${foxRole.uiLabel}&quot;"
+        errorLine2="                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="2593"
+            column="32"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        text = &quot;Submitting Fox Role: ${foxRole.uiLabel}&quot;"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="2593"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                        text = &quot;Submitting Fox Role: ${foxRole.roleName}&quot;"
+        errorLine2="                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="2656"
+            column="32"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        text = &quot;Submitting Fox Role: ${foxRole.roleName}&quot;"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="2656"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        text = &quot;Tap to dismiss&quot;"
+        errorLine2="                                ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="3589"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                text = &quot;Enter values from 3.50 to 3.70 MHz. Shared values are allowed.&quot;"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4286"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4948"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
+        errorLine2="                            ^">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4948"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
+        errorLine2="                            ^">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4948"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
+        errorLine2="                            ^">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4948"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
+        errorLine2="                            ^">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4948"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                            &quot;SerialSlinger will check for the latest update for this SignalSlinger.\n\n&quot; +"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4948"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                                &quot;Current firmware: $version\n&quot; +"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4949"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                                &quot;Current firmware: $version\n&quot; +"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4949"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                                &quot;Hardware: $hardware\n\n&quot; +"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4950"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                                &quot;Hardware: $hardware\n\n&quot; +"
+        errorLine2="                                 ~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4950"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                                &quot;If the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n&quot; +"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4951"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                                &quot;If the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n&quot; +"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="4951"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        val viewButton = Button(this).apply { text = &quot;View&quot; }"
+        errorLine2="                                                      ~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="5826"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        val sendButton = Button(this).apply { text = &quot;Send&quot; }"
+        errorLine2="                                                      ~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="5827"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        val deleteButton = Button(this).apply { text = &quot;Delete&quot; }"
+        errorLine2="                                                        ~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="5828"
+            column="57"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        val selectAllButton = Button(this).apply { text = &quot;Select All&quot; }"
+        errorLine2="                                                           ~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="5829"
+            column="60"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Number formatting does not take into account locale settings. Consider using `String.format` instead."
+        errorLine1="                setText(initialValue.toString())"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="6100"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Number formatting does not take into account locale settings. Consider using `String.format` instead."
+        errorLine1="            calibrationField.setText(value.coerceIn(minimum, maximum).toString())"
+        errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="6111"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                text = &quot;Default&quot;"
+        errorLine2="                        ~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="6136"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Number formatting does not take into account locale settings. Consider using `String.format` instead."
+        errorLine1="                textView.text = getItem(position)?.toString().orEmpty()"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="6851"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                            text = &quot;Choose desired event duration:&quot;"
+        errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="7444"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        text = &quot;Choose Days To Run handling:&quot;"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="7550"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            &quot;Device Time differs noticeably from Android system time.\n\n&quot; +"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8005"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            &quot;Device Time differs noticeably from Android system time.\n\n&quot; +"
+        errorLine2="                            ^">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8005"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            &quot;Device Time differs noticeably from Android system time.\n\n&quot; +"
+        errorLine2="                            ^">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8005"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                            &quot;Device Time differs noticeably from Android system time.\n\n&quot; +"
+        errorLine2="                            ^">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8005"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                            &quot;Device Time differs noticeably from Android system time.\n\n&quot; +"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8005"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                                &quot;Measured phase error: $phaseSummary\n\n&quot; +"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8006"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                                &quot;Measured phase error: $phaseSummary\n\n&quot; +"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8006"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                                &quot;Clone copies the stored timed-event template to the attached device. &quot; +"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8007"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                                &quot;Syncing the attached device clock first is strongly recommended.&quot;"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8008"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                                text = &quot;Continue Clone&quot;"
+        errorLine2="                                        ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8020"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                                text = &quot;Sync then Clone&quot;"
+        errorLine2="                                        ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8032"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                                text = &quot;Cancel&quot;"
+        errorLine2="                                        ~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8051"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                        text = &quot;Cloning timed event settings to the attached device...&quot;"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/com/SerialSlinger/openardf/MainActivity.kt"
+            line="8096"
+            column="33"/>
+    </issue>
+
+</issues>

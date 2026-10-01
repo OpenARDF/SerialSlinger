@@ -27,6 +27,7 @@ import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.CloneTemplateEligibility
 import com.openardf.serialslinger.model.CloneDeviceIdentitySupport
+import com.openardf.serialslinger.model.CloneWorkflowPresentationSupport
 import com.openardf.serialslinger.model.SchedulePresentation
 import com.openardf.serialslinger.model.ScheduleSubmitSupport
 import com.openardf.serialslinger.model.SettingKey
@@ -92,6 +93,7 @@ data class AndroidUiState(
     val latestLoadedTargetLabel: String?,
     val latestLoadedDeviceName: String?,
     val cloneTemplateSettings: DeviceSettings?,
+    val cloneTemplateSourceDeviceUniqueId: String?,
     val cloneTemplateDaysRemaining: Int?,
     val draftStationId: String?,
     val draftEventType: String?,
@@ -380,6 +382,7 @@ object AndroidSessionController {
                 latestLoadedTargetLabel = latestLoadedTarget?.label,
                 latestLoadedDeviceName = latestLoadedDeviceName,
                 cloneTemplateSettings = cloneTemplateSettings,
+                cloneTemplateSourceDeviceUniqueId = cloneTemplateSourceDeviceUniqueId,
                 cloneTemplateDaysRemaining = cloneTemplateDaysRemaining,
                 draftStationId = draftStationId,
                 draftEventType = draftEventType,
@@ -859,24 +862,69 @@ object AndroidSessionController {
     fun reloadCloneTemplateFromAttachedDevice(
         context: Context,
         requestedDeviceName: String? = null,
+        requireExactDevice: Boolean = false,
         source: String = "ui",
         onComplete: ((Result<DeviceLoadResult>) -> Unit)? = null,
     ) {
         runProbe(
             context = context,
-            requestedDeviceName = requestedDeviceName,
+            requestedDeviceName = requestedDeviceName.takeUnless { requireExactDevice },
+            requestedTargets =
+                if (requireExactDevice && requestedDeviceName != null) {
+                    listOf(AndroidConnectionTarget.Usb(requestedDeviceName))
+                } else {
+                    null
+                },
             source = source,
         ) { result ->
+            val effectiveResult =
+                result.fold(
+                    onSuccess = { loadResult ->
+                        val snapshot = loadResult.state.snapshot
+                        if (
+                            snapshot != null &&
+                            CloneTemplateEligibility.hasCompleteTimedEventSettings(
+                                settings = snapshot.settings,
+                                daysRemaining = snapshot.status.daysRemaining,
+                                productName = snapshot.info.productName,
+                            )
+                        ) {
+                            Result.success(loadResult)
+                        } else {
+                            Result.failure(
+                                IllegalStateException(
+                                    "Clone settings were not loaded because the attached device has incomplete timed-event settings.",
+                                ),
+                            )
+                        }
+                    },
+                    onFailure = { Result.failure(it) },
+                )
             synchronized(this) {
-                result.getOrNull()?.state?.snapshot?.let(::rememberCloneTemplateFrom)
-                if (result.isSuccess) {
-                    latestSubmitSummary = "Clone template reloaded from attached device."
-                    statusText = "Clone template reloaded from attached device."
+                effectiveResult.getOrNull()?.state?.snapshot?.let(::rememberCloneTemplateFrom)
+                if (effectiveResult.isSuccess) {
+                    cloneTemplateTimedEventEditsLocked = true
+                    val sourceLabel =
+                        CloneWorkflowPresentationSupport.deviceLabel(
+                            settings = cloneTemplateSettings,
+                            deviceUniqueId = cloneTemplateSourceDeviceUniqueId,
+                            fallback = "attached device",
+                        )
+                    latestSubmitSummary = "Clone settings loaded from $sourceLabel."
+                    statusText = "Clone settings loaded from $sourceLabel."
                     statusIsError = false
+                } else {
+                    // A failed replacement must leave the previously loaded template usable.
+                    val message =
+                        effectiveResult.exceptionOrNull()?.message
+                            ?: "Clone settings could not be loaded from the attached device."
+                    latestSubmitSummary = message
+                    statusText = message
+                    statusIsError = true
                 }
             }
             notifyListeners()
-            onComplete?.invoke(result)
+            onComplete?.invoke(effectiveResult)
         }
     }
 
@@ -1461,7 +1509,13 @@ object AndroidSessionController {
                         ?: Result.failure(
                             IllegalStateException(
                                 buildString {
-                                    appendLine("No emulator serial path responded successfully.")
+                                    val failureLead =
+                                        if (requestedTargets.all { it is AndroidConnectionTarget.DirectSerial }) {
+                                            "No emulator serial path responded successfully."
+                                        } else {
+                                            "No requested serial target responded successfully."
+                                        }
+                                    appendLine(failureLead)
                                     append(attemptSummaries.joinToString("\n"))
                                 }.trim(),
                             ),
@@ -1490,7 +1544,7 @@ object AndroidSessionController {
                         traceEntries = displayedLoadResult.traceEntries,
                     )
                     resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    cloneTemplateTimedEventEditsLocked = false
+                    // Reading a clone target must not silently disarm the explicitly loaded source template.
                     if (cloneTemplateSettings == null) {
                         displayedLoadResult.state.snapshot?.let(::rememberCloneTemplateFrom)
                     }
@@ -4669,6 +4723,19 @@ object AndroidSessionController {
             appendLine("loadedTarget=${uiState.latestLoadedTargetLabel ?: "<none>"}")
             appendLine("softwareVersion=${snapshot?.info?.softwareVersion ?: "<none>"}")
             appendLine("stationId=${snapshot?.settings?.stationId ?: "<none>"}")
+            appendLine("cloneTemplateLoaded=${uiState.cloneTemplateTimedEventEditsLocked}")
+            appendLine("cloneTemplateSourceUid=${uiState.cloneTemplateSourceDeviceUniqueId ?: "<none>"}")
+            appendLine(
+                "cloneTemplateSourceLabel=" +
+                    CloneWorkflowPresentationSupport.deviceLabel(
+                        settings = uiState.cloneTemplateSettings,
+                        deviceUniqueId = uiState.cloneTemplateSourceDeviceUniqueId,
+                        fallback = "<none>",
+                    ),
+            )
+            appendLine("cloneTemplateStart=${uiState.cloneTemplateSettings?.startTimeCompact ?: "<none>"}")
+            appendLine("cloneTemplateFinish=${uiState.cloneTemplateSettings?.finishTimeCompact ?: "<none>"}")
+            appendLine("cloneTemplateDays=${uiState.cloneTemplateSettings?.daysToRun ?: "<none>"}")
             appendLine("currentLogFile=${currentLogFile ?: "<none>"}")
             appendLine("timeWorkflowNotice=${uiState.timeWorkflowNotice ?: "<none>"}")
             appendLine("latestProbe=${uiState.latestProbeSummary.replace('\n', ' ')}")

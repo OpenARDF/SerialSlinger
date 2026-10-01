@@ -18,6 +18,14 @@ if (!fs.existsSync(packageJsonPath)) {
 }
 
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+const requiredLauncherDependencies = ["node-fetch", "shelljs", "tar", "yauzl"];
+const bundledDependencies = packageJson.bundledDependencies || packageJson.bundleDependencies || [];
+
+for (const dependencyName of requiredLauncherDependencies) {
+  if (!packageJson.dependencies?.[dependencyName] || !bundledDependencies.includes(dependencyName)) {
+    fail(`Launcher dependency '${dependencyName}' must be declared and bundled before publishing.`);
+  }
+}
 
 if (!fs.existsSync(iconPath)) {
   fail("icon.png is missing. Restore the baseline jDeploy icon before publishing.");

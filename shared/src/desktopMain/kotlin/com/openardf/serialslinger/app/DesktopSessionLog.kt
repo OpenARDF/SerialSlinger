@@ -1,5 +1,7 @@
 package com.openardf.serialslinger.app
 
+import com.openardf.serialslinger.session.SessionLogIdentity
+import com.openardf.serialslinger.session.SessionLogIdentitySupport
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -104,11 +106,13 @@ class DesktopSessionLog(
     private val appVersion: String = SerialSlingerVersion.displayVersion,
     private val platformLabel: String = defaultPlatformLabel(),
 ) {
+    private val identity = SessionLogIdentity(appVersion, platformLabel)
     private val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
     private val dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private val writeLock = Any()
     private var temperatureLogFile: Path? = null
+    private var identityCheckedLogFile: Path? = null
 
     fun logDirectory(): Path {
         Files.createDirectories(rootDirectory)
@@ -168,8 +172,9 @@ class DesktopSessionLog(
         val file = currentLogFile()
         if (!Files.exists(file)) {
             Files.writeString(file, renderHeader(), StandardOpenOption.CREATE_NEW)
+            identityCheckedLogFile = file
         } else {
-            ensureHeaderAtTop(file)
+            prepareExistingLogFile(file).takeIf(String::isNotEmpty)?.let { marker -> appendToFile(file, marker) }
         }
         return file
     }
@@ -338,10 +343,10 @@ class DesktopSessionLog(
 
     private fun headerTextIfNeeded(file: Path): String {
         if (!Files.exists(file) || Files.size(file) == 0L) {
+            identityCheckedLogFile = file
             return renderHeader()
         }
-        ensureHeaderAtTop(file)
-        return ""
+        return prepareExistingLogFile(file)
     }
 
     private fun ensureHeaderAtTop(file: Path) {
@@ -356,11 +361,27 @@ class DesktopSessionLog(
     }
 
     private fun renderHeader(): String {
-        return buildString {
-            appendLine("SerialSlinger $appVersion")
-            appendLine("Platform: $platformLabel")
-            appendLine()
+        return identity.headerText
+    }
+
+    private fun prepareExistingLogFile(file: Path): String {
+        if (identityCheckedLogFile == file) {
+            return ""
         }
+        ensureHeaderAtTop(file)
+        val marker = sessionIdentityMarkerIfNeeded(Files.readString(file))
+        identityCheckedLogFile = file
+        return marker
+    }
+
+    private fun sessionIdentityMarkerIfNeeded(existingText: String): String {
+        if (!SessionLogIdentitySupport.needsSessionMarker(existingText, identity)) {
+            return ""
+        }
+        return renderSection(
+            title = "Application Session",
+            entries = listOf(DesktopLogEntry(identity.sessionMarkerMessage, DesktopLogCategory.APP, clock.millis())),
+        )
     }
 
     private fun csvEscape(value: String): String {
