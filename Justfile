@@ -23,10 +23,17 @@ android-check:
 # Treat new Android lint findings as failures and verify the release bundle.
 android-release-check:
     {{gradle}} :androidApp:lintRelease :androidApp:bundleRelease
+    just android-native-compat-check
+
+# Verify the AAB's 16 KB packaging request and every packaged 64-bit ELF load alignment.
+android-native-compat-check bundle="androidApp/build/outputs/bundle/release/androidApp-release.aab":
+    node --test scripts/check-android-native-compatibility.test.mjs
+    node scripts/check-android-native-compatibility.mjs {{quote(bundle)}}
 
 # Run repository-owned Node workflow and packaging tests.
 scripts-test:
     node --test \
+        scripts/check-android-native-compatibility.test.mjs \
         scripts/check-release-tag.test.mjs \
         scripts/jdeploy-local-smoke.test.mjs \
         scripts/prepare-jdeploy-github-release.test.mjs \

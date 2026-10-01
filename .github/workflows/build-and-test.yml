@@ -54,10 +54,13 @@ jobs:
       - name: Run release-script tests
         run: |
           node --test \
+            scripts/check-android-native-compatibility.test.mjs \
             scripts/check-release-tag.test.mjs \
             scripts/jdeploy-local-smoke.test.mjs \
             scripts/prepare-jdeploy-github-release.test.mjs \
             scripts/publish-jdeploy-github-release.test.mjs
+          node scripts/check-android-native-compatibility.mjs \
+            androidApp/build/outputs/bundle/release/androidApp-release.aab
       - name: Stop Gradle before saving the setup cache
         if: always()
         run: ./gradlew --stop

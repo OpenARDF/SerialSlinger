@@ -70,8 +70,8 @@ android {
     }
 
     lint {
-        // New warnings fail the build; the checked baseline is limited to reviewed legacy UI,
-        // launcher-icon, and fixed-landscape findings documented in docs/android-lint-waivers.md.
+        // New warnings fail the build; the checked baseline is limited to the fixed-landscape
+        // finding documented in docs/android-lint-waivers.md.
         warningsAsErrors = true
         baseline = file("lint-baseline.xml")
     }
