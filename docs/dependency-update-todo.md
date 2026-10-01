@@ -12,6 +12,8 @@ This is a narrow waiver for npm's `glob` and `inflight` deprecation notices whil
 transitive dependencies of the pinned jDeploy CLI. Do not force an incompatible dependency
 override that makes the npm tree invalid. Recheck this waiver whenever jDeploy changes or during
 each release dependency review, and remove it when upstream no longer requires those packages.
+The local release gate and both hosted build and publication workflows still require
+`npm audit --audit-level=low` to report zero known vulnerabilities.
 
 ## Kotlin metadata configuration advisory
 

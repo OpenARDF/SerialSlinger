@@ -72,7 +72,8 @@ git rev-list --left-right --count main...Development_Android
    notes` section should be terse and suitable for Play Console.
 4. Run release validation gates serially. Do not run heavy Gradle gates in
    parallel. The repository wrappers cover desktop, Android host/unit tests,
-   lint-as-error, the release bundle, release-script tests, jDeploy preflight,
+   lint-as-error, 16 KB bundle compatibility, the release bundle,
+   release-script tests, a zero-vulnerability npm audit, jDeploy preflight,
    and the secret scan.
 
 ```sh

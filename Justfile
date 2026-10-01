@@ -39,6 +39,10 @@ scripts-test:
         scripts/prepare-jdeploy-github-release.test.mjs \
         scripts/publish-jdeploy-github-release.test.mjs
 
+# Reject known vulnerabilities anywhere in the npm dependency tree.
+dependency-audit:
+    npm audit --audit-level=low
+
 # Run the normal local validation gate across desktop, Android, and release scripts.
 check: compile test android-check android-release-check scripts-test
 
@@ -103,7 +107,7 @@ jdeploy-preflight:
     npm run jdeploy:release-preflight
 
 # Run every automatable release gate; hardware checks remain controlled by the checklist.
-release-check: check jdeploy-preflight
+release-check: check dependency-audit jdeploy-preflight
 
 # Scan tracked history and the current worktree before a sensitive push or release.
 secret-check:

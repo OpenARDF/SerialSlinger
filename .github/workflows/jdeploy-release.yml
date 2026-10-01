@@ -50,6 +50,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=low
+
       - name: Run desktop and Android regression gates
         run: |
           ./gradlew \

@@ -41,6 +41,8 @@ jobs:
           npm ci
           # cmdline-tools 22 deprecates sdkmanager in favor of this Android CLI command.
           android sdk install platform-tools platforms/android-37.0
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=low
       - name: Run desktop and Android gates
         run: |
           ./gradlew \
