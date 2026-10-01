@@ -43,50 +43,50 @@
     {
       "id": "android-regression",
       "description": "Run the Android tablet regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly waived the destructive Android tablet and attached SignalSlinger hardware regression for v2.0.23 on 2026-10-01; automated Android tests, debug assembly, lint, and signed release bundle passed.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "desktop-regression",
       "description": "Run the macOS desktop UI regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly waived the macOS real-transmitter UI regression for v2.0.23 on 2026-10-01; the locally installed macOS arm64 jDeploy application passed installation verification and its installed-package smoke probe.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "windows-intel-x64-smoke",
       "description": "Install and launch the packaged Windows Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions Windows x64 installed desktop smoke run 36900557174 succeeded for release-candidate commit 3fbe07aaf14a92ce89b264fb200fac4257ae1262 on 2026-10-01.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "windows-arm64-smoke",
       "description": "Install and launch the packaged Windows ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly waived the Windows ARM64 installed-package smoke for v2.0.23 on 2026-10-01 because no Windows ARM64 host was available; Windows x64 installed smoke passed.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "linux-intel-x64-smoke",
       "description": "Install and launch the packaged Linux Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions Linux x64 installed desktop smoke run 36900557179 succeeded for release-candidate commit 3fbe07aaf14a92ce89b264fb200fac4257ae1262 on 2026-10-01.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "linux-arm64-smoke",
       "description": "Install and launch the packaged Linux ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "Charles explicitly waived the Linux ARM64 installed-package smoke for v2.0.23 on 2026-10-01 because no Linux ARM64 host was available; Linux x64 installed smoke passed.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "android-release-notes",
