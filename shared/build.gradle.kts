@@ -49,35 +49,35 @@ kotlin {
             implementation(kotlin("test"))
         }
 
-        val jvmSharedMain by creating {
+        val jvmSharedMain = create("jvmSharedMain") {
             kotlin.srcDir("src/jvmSharedMain/kotlin")
             dependsOn(commonMain.get())
         }
 
-        val iosMain by creating {
+        val iosMain = create("iosMain") {
             dependsOn(commonMain.get())
         }
 
-        val iosX64Main by getting {
+        getByName("iosX64Main") {
             dependsOn(iosMain)
         }
 
-        val iosArm64Main by getting {
+        getByName("iosArm64Main") {
             dependsOn(iosMain)
         }
 
-        val iosSimulatorArm64Main by getting {
+        getByName("iosSimulatorArm64Main") {
             dependsOn(iosMain)
         }
 
-        val androidMain by getting {
+        getByName("androidMain") {
             dependsOn(jvmSharedMain)
             dependencies {
                 implementation(libs.usbserialandroid)
             }
         }
 
-        val desktopMain by getting {
+        getByName("desktopMain") {
             kotlin.srcDir(generatedDesktopVersionDir)
             dependsOn(jvmSharedMain)
 
@@ -86,7 +86,7 @@ kotlin {
             }
         }
 
-        val desktopTest by getting {
+        getByName("desktopTest") {
             dependencies {
                 implementation(kotlin("test"))
             }
