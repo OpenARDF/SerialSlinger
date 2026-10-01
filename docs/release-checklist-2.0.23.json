@@ -99,8 +99,8 @@
     {
       "id": "merged-to-main",
       "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Validated release candidate was fast-forwarded to main at 1a1fd3865bf74826dd5df331bb29a5347b9d4fc6; main and Development_Android contained the same source and completed checklist evidence before tag preparation.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
