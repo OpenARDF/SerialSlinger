@@ -8006,11 +8006,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 setPadding(padding, padding / 2, padding, 0)
                 addView(
                     TextView(this@MainActivity).apply {
-                        text =
-                            "Device Time differs noticeably from Android system time.\n\n" +
-                                "Measured phase error: $phaseSummary\n\n" +
-                                "Clone copies the stored timed-event template to the attached device. " +
-                                "Syncing the attached device clock first is strongly recommended."
+                        text = getString(R.string.clone_clock_warning, phaseSummary)
                         textSize = 15f
                         setTextColor("#1F2937".toColorInt())
                     },
@@ -8022,7 +8018,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         setPadding(0, padding, 0, 0)
                         addView(
                             Button(this@MainActivity).apply {
-                                text = "Continue Clone"
+                                text = getString(R.string.clone_continue)
                                 setOnClickListener {
                                     dialog.dismiss()
                                     runCloneWithStatusModal(requestedDeviceName)
@@ -8034,7 +8030,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         )
                         addView(
                             Button(this@MainActivity).apply {
-                                text = "Sync then Clone"
+                                text = getString(R.string.clone_sync_then_continue)
                                 setOnClickListener {
                                     dialog.dismiss()
                                     AndroidSessionController.runCurrentTimeSystemSync(
@@ -8053,7 +8049,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         )
                         addView(
                             Button(this@MainActivity).apply {
-                                text = "Cancel"
+                                text = getString(R.string.action_cancel)
                                 setOnClickListener {
                                     dialog.dismiss()
                                 }
@@ -8098,7 +8094,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
                 addView(
                     TextView(this@MainActivity).apply {
-                        text = "Cloning timed event settings to the attached device..."
+                        text = getString(R.string.clone_in_progress)
                         textSize = 15f
                         setTextColor("#1F2937".toColorInt())
                     },

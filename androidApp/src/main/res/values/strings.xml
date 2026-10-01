@@ -1,11 +1,16 @@
 <resources>
     <string name="app_name">SerialSlinger</string>
     <string name="action_delete">Delete</string>
+    <string name="action_cancel">Cancel</string>
     <string name="action_select_all">Select All</string>
     <string name="action_send">Send</string>
     <string name="action_view">View</string>
     <string name="choose_days_to_run_handling">Choose Days To Run handling:</string>
     <string name="choose_event_duration">Choose desired event duration:</string>
+    <string name="clone_clock_warning">Device Time differs noticeably from Android system time.\n\nMeasured phase error: %1$s\n\nClone copies the stored timed-event template to the attached device. Syncing the attached device clock first is strongly recommended.</string>
+    <string name="clone_continue">Continue Clone</string>
+    <string name="clone_in_progress">Cloning timed event settings to the attached device&#8230;</string>
+    <string name="clone_sync_then_continue">Sync then Clone</string>
     <string name="firmware_update_confirmation">SerialSlinger will check for the latest update for this SignalSlinger.\n\nCurrent firmware: %1$s\nHardware: %2$s\n\nIf the latest update cannot be downloaded, SerialSlinger can use a resident update file when one is available.\n\n%3$s</string>
     <string name="submitting_fox_role">Submitting Fox Role: %1$s</string>
     <string name="temperature_calibration_default">Default</string>
