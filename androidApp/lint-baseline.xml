@@ -13,41 +13,6 @@
     </issue>
 
     <issue
-        id="IconLauncherShape"
-        message="Launcher icon used as round icon did not have a circular shape">
-        <location
-            file="src/main/res/mipmap-hdpi/ic_logo_round.png"/>
-    </issue>
-
-    <issue
-        id="IconLauncherShape"
-        message="Launcher icon used as round icon did not have a circular shape">
-        <location
-            file="src/main/res/mipmap-mdpi/ic_logo_round.png"/>
-    </issue>
-
-    <issue
-        id="IconLauncherShape"
-        message="Launcher icon used as round icon did not have a circular shape">
-        <location
-            file="src/main/res/mipmap-xhdpi/ic_logo_round.png"/>
-    </issue>
-
-    <issue
-        id="IconLauncherShape"
-        message="Launcher icon used as round icon did not have a circular shape">
-        <location
-            file="src/main/res/mipmap-xxhdpi/ic_logo_round.png"/>
-    </issue>
-
-    <issue
-        id="IconLauncherShape"
-        message="Launcher icon used as round icon did not have a circular shape">
-        <location
-            file="src/main/res/mipmap-xxxhdpi/ic_logo_round.png"/>
-    </issue>
-
-    <issue
         id="SetTextI18n"
         message="String literal in `setText` can not be translated. Use Android resources instead."
         errorLine1="                text = &quot;View history details&quot;"

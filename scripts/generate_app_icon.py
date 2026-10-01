@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import io
 import math
 import struct
 import shutil
 import subprocess
 import zlib
 from pathlib import Path
-
-from PIL import Image
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ANDROID_RES_DIR = ROOT / "androidApp" / "src" / "main" / "res"
@@ -153,6 +149,19 @@ def stroke_rounded_rect(canvas: Canvas, inset: float, radius: float, width: floa
                 canvas.blend_pixel(x, y, color)
 
 
+def mask_circle(canvas: Canvas) -> None:
+    center = canvas.size / 2.0
+    radius = canvas.size / 2.0
+    for y in range(canvas.size):
+        for x in range(canvas.size):
+            distance = math.hypot(x + 0.5 - center, y + 0.5 - center)
+            coverage = clamp01(radius + 0.5 - distance)
+            if coverage < 1.0:
+                index = canvas._index(x, y)
+                red, green, blue, alpha = canvas.pixels[index]
+                canvas.pixels[index] = (red, green, blue, round(alpha * coverage))
+
+
 def draw_circle(canvas: Canvas, center_x: float, center_y: float, radius: float, color: tuple[int, int, int, int]) -> None:
     start_x = max(0, math.floor(center_x - radius - 1))
     end_x = min(canvas.size, math.ceil(center_x + radius + 1))
@@ -264,7 +273,7 @@ def draw_connector_pins(
         draw_circle(canvas, center[0], center[1], pin_radius, PIN)
 
 
-def render_icon(size: int, fill_launcher_shape: bool = False) -> bytes:
+def render_icon(size: int, fill_launcher_shape: bool = False, circular_mask: bool = False) -> bytes:
     supersample = 2 if size <= 256 else 1
     work_size = size * supersample
     canvas = Canvas(work_size)
@@ -337,6 +346,9 @@ def render_icon(size: int, fill_launcher_shape: bool = False) -> bytes:
     draw_circle(canvas, accent_center[0], accent_center[1], work_size * 0.043, rgba(45, 199, 178, 72))
     draw_circle(canvas, accent_center[0], accent_center[1], work_size * 0.018, rgba(245, 180, 72, 245))
 
+    if circular_mask:
+        mask_circle(canvas)
+
     return encode_png(canvas.downsample(supersample))
 
 
@@ -373,12 +385,6 @@ def write_png(path: Path, size: int, fill_launcher_shape: bool = False) -> bytes
 def write_png_bytes(path: Path, png_bytes: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(png_bytes)
-
-
-def write_webp_from_png_bytes(path: Path, png_bytes: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with Image.open(io.BytesIO(png_bytes)) as image:
-        image.save(path, "WEBP", quality=95, method=6)
 
 
 def resize_png(source: Path, target: Path, size: int) -> None:
@@ -439,6 +445,7 @@ def write_android_adaptive_icon_xml(path: Path) -> None:
         """<adaptive-icon xmlns:android=\"http://schemas.android.com/apk/res/android\">\n"""
         """    <background android:drawable=\"@color/ic_logo\" />\n"""
         """    <foreground android:drawable=\"@mipmap/ic_runner_foreground\" />\n"""
+        """    <monochrome android:drawable=\"@mipmap/ic_runner_foreground\" />\n"""
         """</adaptive-icon>\n""",
         encoding="utf-8",
     )
@@ -474,11 +481,9 @@ def write_android_icons() -> None:
     for folder, size in density_sizes.items():
         out_dir = ANDROID_RES_DIR / folder
         full_icon = render_icon(size)
-        round_icon = render_icon(size, fill_launcher_shape=True)
+        round_icon = render_icon(size, fill_launcher_shape=True, circular_mask=True)
         write_png_bytes(out_dir / "ic_logo.png", full_icon)
         write_png_bytes(out_dir / "ic_logo_round.png", round_icon)
-        write_webp_from_png_bytes(out_dir / "ic_launcher.webp", full_icon)
-        write_webp_from_png_bytes(out_dir / "ic_launcher_round.webp", round_icon)
 
     for folder, size in foreground_sizes.items():
         write_png_bytes(
@@ -487,7 +492,7 @@ def write_android_icons() -> None:
         )
 
     anydpi_dir = ANDROID_RES_DIR / "mipmap-anydpi-v26"
-    for filename in ("ic_launcher.xml", "ic_launcher_round.xml", "ic_logo.xml", "ic_logo_round.xml"):
+    for filename in ("ic_logo.xml", "ic_logo_round.xml"):
         write_android_adaptive_icon_xml(anydpi_dir / filename)
     write_android_color_resource(ANDROID_RES_DIR / "values" / "ic_logo.xml")
 
