@@ -1797,7 +1797,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         if (advancedModeEnabled) loadedStatus?.let { status ->
             deviceSettingsCard.addView(sectionBody("Session history\n" + JvmTimeSupport.describeSessionHistory(status.sessionHistory)))
             deviceSettingsCard.addView(Button(this).apply {
-                text = "View history details"
+                text = getString(R.string.view_history_details)
                 setOnClickListener {
                     showLargeTextDialog("Transmitter run history", JvmTimeSupport.describeSessionHistoryDetails(status.sessionHistory))
                 }
@@ -3588,7 +3588,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 )
                 addView(
                     TextView(this@MainActivity).apply {
-                        text = "Tap to dismiss"
+                        text = getString(R.string.tap_to_dismiss)
                         textSize = 13f
                         setTextColor(Color.WHITE)
                         alpha = 0.82f
@@ -4285,7 +4285,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val frequencyBField = frequencyField(currentDefaults.frequencyBHz)
         val helperText =
             TextView(this).apply {
-                text = "Enter values from 3.50 to 3.70 MHz. Shared values are allowed."
+                text = getString(R.string.timed_event_frequency_help)
                 textSize = 13f
                 setTextColor("#5F6368".toColorInt())
             }
@@ -5825,10 +5825,10 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                         listHeight,
                     )
             }
-        val viewButton = Button(this).apply { text = "View" }
-        val sendButton = Button(this).apply { text = "Send" }
-        val deleteButton = Button(this).apply { text = "Delete" }
-        val selectAllButton = Button(this).apply { text = "Select All" }
+        val viewButton = Button(this).apply { text = getString(R.string.action_view) }
+        val sendButton = Button(this).apply { text = getString(R.string.action_send) }
+        val deleteButton = Button(this).apply { text = getString(R.string.action_delete) }
+        val selectAllButton = Button(this).apply { text = getString(R.string.action_select_all) }
         fun buttonLayoutParams(): LinearLayout.LayoutParams =
             LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
                 val margin = (4 * density).toInt()
@@ -6099,7 +6099,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 setSelectAllOnFocus(true)
                 textSize = 20f
                 gravity = Gravity.CENTER
-                setText(initialValue.toString())
+                setText(getString(R.string.integer_value, initialValue))
                 layoutParams =
                     LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
                         leftMargin = rowGap
@@ -6110,7 +6110,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             calibrationField.text.toString().trim().toIntOrNull()
 
         fun setCalibration(value: Int) {
-            calibrationField.setText(value.coerceIn(minimum, maximum).toString())
+            calibrationField.setText(getString(R.string.integer_value, value.coerceIn(minimum, maximum)))
             calibrationField.selectAll()
         }
 
@@ -6135,7 +6135,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             }
         val resetButton =
             Button(this).apply {
-                text = "Default"
+                text = getString(R.string.temperature_calibration_default)
                 setOnClickListener { setCalibration(TemperatureCalibrationSupport.defaultCalibration) }
             }
         val content =
@@ -6850,7 +6850,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
 
             private fun digitSpinnerText(view: View, position: Int, selected: Boolean): View {
                 val textView = view as? TextView ?: return view
-                textView.text = getItem(position)?.toString().orEmpty()
+                textView.text = getItem(position)?.let { getString(R.string.integer_value, it) }.orEmpty()
                 textView.setTypeface(Typeface.DEFAULT_BOLD)
                 textView.textSize = if (selected) 32f else 28f
                 textView.setTextColor("#1F1F1F".toColorInt())
@@ -7445,7 +7445,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                     setPadding(horizontalPadding, verticalPadding, horizontalPadding, 0)
                     addView(
                         TextView(this@MainActivity).apply {
-                            text = "Choose desired event duration:"
+                            text = getString(R.string.choose_event_duration)
                             textSize = 15f
                             val bottomPadding = (12 * resources.displayMetrics.density).toInt()
                             setPadding(0, 0, 0, bottomPadding)
@@ -7551,7 +7551,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
                 setPadding(horizontalPadding, verticalPadding, horizontalPadding, 0)
                 addView(
                     TextView(this@MainActivity).apply {
-                        text = "Choose Days To Run handling:"
+                        text = getString(R.string.choose_days_to_run_handling)
                         textSize = 15f
                         val bottomPadding = (12 * resources.displayMetrics.density).toInt()
                         setPadding(0, 0, 0, bottomPadding)

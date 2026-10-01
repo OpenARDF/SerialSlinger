@@ -1,3 +1,14 @@
 <resources>
     <string name="app_name">SerialSlinger</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_select_all">Select All</string>
+    <string name="action_send">Send</string>
+    <string name="action_view">View</string>
+    <string name="choose_days_to_run_handling">Choose Days To Run handling:</string>
+    <string name="choose_event_duration">Choose desired event duration:</string>
+    <string name="temperature_calibration_default">Default</string>
+    <string name="tap_to_dismiss">Tap to dismiss</string>
+    <string name="timed_event_frequency_help">Enter values from 3.50 to 3.70 MHz. Shared values are allowed.</string>
+    <string name="integer_value" translatable="false">%1$d</string>
+    <string name="view_history_details">View history details</string>
 </resources>
