@@ -92,9 +92,11 @@ dependencies {
 tasks.register("printAndroidReleaseSigningStatus") {
     group = "help"
     description = "Prints whether the Android release signing inputs are available."
+    inputs.property("signingConfigured", hasCompleteReleaseSigningConfig)
 
     doLast {
-        if (hasCompleteReleaseSigningConfig) {
+        val signingConfigured = inputs.properties.getValue("signingConfigured") as Boolean
+        if (signingConfigured) {
             logger.lifecycle("Android release signing is configured.")
         } else {
             logger.lifecycle(
