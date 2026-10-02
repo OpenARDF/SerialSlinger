@@ -44,8 +44,8 @@
     {
       "id": "android-native-compatibility",
       "description": "Verify 16 KB AAB packaging and ELF alignment, then record the successful hosted Android 15 16 KB emulator run.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Local AAB verification confirmed 16 KB packaging alignment and no packaged 64-bit native libraries; hosted Android native compatibility run 36946205627 passed Android 15 16 KB emulator install, launch, process-survival, and crash-buffer gates for exact candidate 00bb9e13c7f63eda7ddfba73caa31e3aa3bc6c2e.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
@@ -53,7 +53,7 @@
       "id": "dependency-audit",
       "description": "Run the production dependency audit at low severity and record zero known vulnerabilities.",
       "status": "done",
-      "evidence": "npm audit --audit-level=low passed with zero vulnerabilities locally in just release-check on 2026-10-01; hosted confirmation is required before tagging.",
+      "evidence": "npm audit --audit-level=low passed with zero vulnerabilities locally and in exact-candidate Build and test run 36946205633 on 2026-10-01.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
@@ -61,7 +61,7 @@
       "id": "static-analysis",
       "description": "Run actionlint, ShellCheck, shfmt check mode, and git diff --check with no unwaived findings.",
       "status": "done",
-      "evidence": "actionlint 1.7.12, ShellCheck, shfmt check mode, release-script tests, and git diff --check passed locally with no unwaived findings on 2026-10-01; hosted build/test run 36944538607 also passed the static gate.",
+      "evidence": "actionlint 1.7.12, ShellCheck, shfmt check mode, release-script tests, and git diff --check passed locally and in exact-candidate Build and test run 36946205633 with no unwaived findings.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
@@ -92,8 +92,8 @@
     {
       "id": "desktop-regression",
       "description": "Run the macOS desktop UI regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Packaged macOS app-image SerialSlinger 2.0.24 (PID 40072) exercised /dev/cu.usbserial-ABSCDL93 on 2026-10-01: connected/loaded SignalSlinger 2.0.7 HW 3.4 BL0.13; submitted Days To Run 3->4 with readback; applied relative start-time change 08:00->09:00 while preserving 6-hour duration and 4 days; disabled the event; automatic clock synchronization verified (+0.206s phase error); raw VER and live session-log response passed; clone template loaded and same-device clone remained disabled. Session evidence is in /Users/charlesscharlau/Documents/SerialSlinger/logs/serialslinger-2026-10-01.log at 20:42-21:07. After closing the UI, desktop smoke CLI restored and independently read back the acceptable state: NZ0I, Classic Fox 1 MOE, 20/8 WPM, 2026-10-15 08:00-14:00, 3 days, enabled with 3 remaining, 3.8 V threshold, external battery control and transmitter enabled.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
@@ -108,34 +108,34 @@
     {
       "id": "windows-intel-x64-smoke",
       "description": "Install and launch the packaged Windows Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Hosted Windows x64 installed desktop smoke run 36946205634 installed and launched exact candidate 00bb9e13c7f63eda7ddfba73caa31e3aa3bc6c2e successfully.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "windows-arm64-smoke",
       "description": "Install and launch the packaged Windows ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "No Windows ARM64 host is available in this release session; Charles Scharlau explicitly approved reporting this check as skipped on 2026-10-01.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "linux-intel-x64-smoke",
       "description": "Install and launch the packaged Linux Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Hosted Linux x64 installed desktop smoke run 36946205604 installed and launched exact candidate 00bb9e13c7f63eda7ddfba73caa31e3aa3bc6c2e successfully.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "linux-arm64-smoke",
       "description": "Install and launch the packaged Linux ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
+      "status": "skipped",
       "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
+      "skipReason": "No Linux ARM64 host is available in this release session; Charles Scharlau explicitly approved reporting this check as skipped on 2026-10-01.",
+      "skipRequestedBy": "Charles Scharlau"
     },
     {
       "id": "android-release-notes",
