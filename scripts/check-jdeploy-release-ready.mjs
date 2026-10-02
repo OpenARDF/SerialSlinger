@@ -9,11 +9,13 @@ const repoRoot = process.cwd();
 const packageJsonPath = path.join(repoRoot, "package.json");
 const packageLockPath = path.join(repoRoot, "package-lock.json");
 const buildGradlePath = path.join(repoRoot, "build.gradle.kts");
+const justfilePath = path.join(repoRoot, "Justfile");
 const workflowPath = path.join(repoRoot, ".github", "workflows", "jdeploy-release.yml");
 const buildWorkflowPath = path.join(repoRoot, ".github", "workflows", "build-and-test.yml");
 const linuxSmokeWorkflowPath = path.join(repoRoot, ".github", "workflows", "linux-desktop-smoke.yml");
 const windowsSmokeWorkflowPath = path.join(repoRoot, ".github", "workflows", "windows-desktop-smoke.yml");
 const dependencyTodoPath = path.join(repoRoot, "docs", "dependency-update-todo.md");
+const androidRegressionPath = path.join(repoRoot, "scripts", "android-regression.sh");
 
 function fail(message) {
   console.error(message);
@@ -87,11 +89,13 @@ function runGradle(args) {
 const packageJson = JSON.parse(readFile(packageJsonPath, "package.json is missing."));
 const packageLock = JSON.parse(readFile(packageLockPath, "package-lock.json is missing."));
 const buildGradleText = readFile(buildGradlePath, "build.gradle.kts is missing.");
+const justfileText = readFile(justfilePath, "Justfile is missing.");
 const workflowText = readFile(workflowPath, "The jDeploy release workflow is missing.");
 const buildWorkflowText = readFile(buildWorkflowPath, "The build-and-test workflow is missing.");
 const linuxSmokeWorkflowText = readFile(linuxSmokeWorkflowPath, "The Linux installed-package workflow is missing.");
 const windowsSmokeWorkflowText = readFile(windowsSmokeWorkflowPath, "The Windows installed-package workflow is missing.");
 const dependencyTodoText = readFile(dependencyTodoPath, "The dependency warning waiver is missing.");
+const androidRegressionText = readFile(androidRegressionPath, "The Android hardware regression script is missing.");
 
 const gradleVersions = extractGradleVersions(buildGradleText);
 const expectedTag = `v${packageJson.version}`;
@@ -135,9 +139,24 @@ ensure(workflowText.includes("--notes-file"), "The jDeploy workflow must publish
 ensure(buildWorkflowText.includes(":shared:desktopTest"), "The build workflow must run desktop tests.");
 ensure(buildWorkflowText.includes(":shared:testAndroidHostTest"), "The build workflow must run Android host tests.");
 ensure(buildWorkflowText.includes(":androidApp:testDebugUnitTest"), "The build workflow must run Android application tests.");
+ensure(buildWorkflowText.includes(":androidApp:assembleDebugAndroidTest"), "The build workflow must assemble Android instrumentation tests.");
 ensure(buildWorkflowText.includes(":androidApp:lintRelease"), "The build workflow must run Android release lint.");
 ensure(buildWorkflowText.includes(":androidApp:bundleRelease"), "The build workflow must build the Android release bundle.");
 ensure(buildWorkflowText.includes("node --test"), "The build workflow must run release-script tests.");
+ensure(buildWorkflowText.includes("scripts/static-check.sh"), "The build workflow must run static repository checks.");
+ensure(
+  buildWorkflowText.includes("scripts/check-android-instrumentation-results.test.mjs"),
+  "The build workflow must test the Android instrumentation result guard.",
+);
+ensure(
+  justfileText.includes("node scripts/check-android-instrumentation-results.mjs"),
+  "The Android instrumentation recipe must reject empty or incomplete device results.",
+);
+ensure(androidRegressionText.includes("restore_on_exit"), "The Android hardware regression must restore settings after failures.");
+ensure(
+  androidRegressionText.includes("same unit that supplied the clone template"),
+  "The Android hardware regression must verify same-device clone protection.",
+);
 
 ensure(linuxSmokeWorkflowText.includes("runs-on: ubuntu-24.04"), "The Linux smoke must use the pinned Ubuntu 24.04 runner.");
 ensure(linuxSmokeWorkflowText.includes("init.defaultBranch main"), "The Linux smoke must avoid checkout initialization warnings.");
@@ -156,11 +175,23 @@ ensure(
 );
 for (const scriptName of [
   "check-release-tag.mjs",
+  "check-release-checklist.mjs",
   "jdeploy-local-smoke.mjs",
   "prepare-jdeploy-github-release.mjs",
   "publish-jdeploy-github-release.sh",
 ]) {
   ensure(fs.existsSync(path.join(repoRoot, "scripts", scriptName)), `Required release script is missing: ${scriptName}`);
+}
+for (const requiredPath of [
+  "scripts/static-check.sh",
+  "scripts/verify-android-signing.sh",
+  "scripts/build-signed-bundle.sh",
+  "scripts/check-android-instrumentation-results.mjs",
+  "scripts/check-android-instrumentation-results.test.mjs",
+  "docs/android-upload-certificate.sha256",
+  "docs/release-checklist-template.json",
+]) {
+  ensure(fs.existsSync(path.join(repoRoot, requiredPath)), `Required release gate file is missing: ${requiredPath}`);
 }
 const macosRepairScript = readFile(
   path.join(repoRoot, "scripts", "repair-jdeploy-github-release-macos.sh"),
@@ -182,6 +213,8 @@ ensure(
 );
 
 for (const testScript of [
+  "scripts/check-android-instrumentation-results.test.mjs",
+  "scripts/check-release-checklist.test.mjs",
   "scripts/check-release-tag.test.mjs",
   "scripts/jdeploy-local-smoke.test.mjs",
   "scripts/prepare-jdeploy-github-release.test.mjs",

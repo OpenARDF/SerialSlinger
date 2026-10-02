@@ -73,8 +73,8 @@ git rev-list --left-right --count main...Development_Android
 4. Run release validation gates serially. Do not run heavy Gradle gates in
    parallel. The repository wrappers cover desktop, Android host/unit tests,
    lint-as-error, 16 KB bundle compatibility, the release bundle,
-   release-script tests, a zero-vulnerability npm audit, jDeploy preflight,
-   and the secret scan.
+   release-script tests, actionlint, ShellCheck, shfmt, Git whitespace checks,
+   a zero-vulnerability npm audit, jDeploy preflight, and the secret scan.
 
 ```sh
 JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home just release-check
@@ -97,24 +97,31 @@ JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home npm run
 git diff --check
 ```
 
-6. Record hardware validation:
-   - Android tablet regression on real hardware, or explicit evidence that
-     hardware testing already passed for this release.
+6. Build and verify the Play-upload-ready Android bundle. `just
+   android-signing-check` requires the existing upload keystore, its credentials,
+   and the expected Play upload-certificate SHA-256 fingerprint. An unsigned AAB
+   does not satisfy this gate.
+7. Record physical and packaged acceptance separately:
+   - complete Android instrumentation suite on a physical device, including the
+     device model, Android version, test count, and result
+   - destructive Android attached-SignalSlinger regression with the approved
+     target and final readback, or an explicit waiver with requester
    - macOS desktop regression on real hardware, or explicit evidence that
      hardware testing already passed for this release.
+   - macOS native jDeploy install and isolated installed-package probe
    - Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64 packaged
      smokes when hosts are available. Record skipped checks with requester and
      concrete reason.
-7. Run the release-notes and pre-tag checklist guards:
+8. Run the release-notes and pre-tag checklist guards:
 
 ```sh
 just release-notes-check docs/release-checklist-X.Y.Z.json
 just release-checklist docs/release-checklist-X.Y.Z.json pre-tag
 ```
 
-8. Commit the release candidate on `Development_Android`, fast-forward `main`,
+9. Commit the release candidate on `Development_Android`, fast-forward `main`,
    record the main-sync evidence, and commit that evidence on `main`.
-9. Set the checklist `sourceCommit` to the verified main-sync commit and commit
+10. Set the checklist `sourceCommit` to the verified main-sync commit and commit
    only that checklist update. Create the annotated tag at this checklist-only
    child commit. The hosted workflow requires `sourceCommit` to equal the tagged
    commit's sole parent and rejects any other file change in the tagged commit:
@@ -124,21 +131,21 @@ git tag -a vX.Y.Z -m "SerialSlinger X.Y.Z"
 git push origin main vX.Y.Z
 ```
 
-10. Watch the GitHub Actions `jDeploy Release` workflow through completion:
+11. Watch the GitHub Actions `jDeploy Release` workflow through completion:
 
 ```sh
 gh run list --workflow "jDeploy Release" --limit 5
 gh run watch <run-id> --exit-status
 ```
 
-11. Verify the release:
+12. Verify the release:
 
 ```sh
 gh release view vX.Y.Z --json tagName,targetCommitish,isDraft,isPrerelease,publishedAt,url,assets
 curl -L -I https://github.com/OpenARDF/SerialSlinger/releases/download/vX.Y.Z/serialslinger-X.Y.Z.tgz
 ```
 
-12. Record final checklist evidence, run the final checklist guard, commit the
+13. Record final checklist evidence, run the final checklist guard, commit the
     post-tag evidence update, push `main`, fast-forward `Development_Android` to
     the same commit, push it, and leave `Development_Android` checked out.
 
@@ -151,5 +158,6 @@ curl -L -I https://github.com/OpenARDF/SerialSlinger/releases/download/vX.Y.Z/se
   uses it as the GitHub release body.
 - GitHub release assets, not npm registry publication, are the release target.
 - Android upload-key signing is machine-specific. `:androidApp:bundleRelease`
-  should run during release validation, but Play upload readiness depends on
-  local `keystore.properties` or `SERIALSLINGER_UPLOAD_*` environment variables.
+  may create an unsigned artifact when credentials are absent, so only
+  `just android-signing-check` establishes Play-upload readiness by verifying
+  both the JAR signature and the expected upload-certificate fingerprint.

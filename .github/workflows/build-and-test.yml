@@ -41,6 +41,11 @@ jobs:
           npm ci
           # cmdline-tools 22 deprecates sdkmanager in favor of this Android CLI command.
           android sdk install platform-tools platforms/android-37.0
+      - name: Install pinned static-analysis tools
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          go install mvdan.cc/sh/v3/cmd/shfmt@v3.12.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Audit npm dependencies
         run: npm audit --audit-level=low
       - name: Run desktop and Android gates
@@ -51,12 +56,17 @@ jobs:
             :shared:testAndroidHostTest \
             :androidApp:testDebugUnitTest \
             :androidApp:assembleDebug \
+            :androidApp:assembleDebugAndroidTest \
             :androidApp:lintRelease \
             :androidApp:bundleRelease
+      - name: Run static repository checks
+        run: ./scripts/static-check.sh
       - name: Run release-script tests
         run: |
           node --test \
             scripts/check-android-native-compatibility.test.mjs \
+            scripts/check-android-instrumentation-results.test.mjs \
+            scripts/check-release-checklist.test.mjs \
             scripts/check-release-tag.test.mjs \
             scripts/jdeploy-local-smoke.test.mjs \
             scripts/prepare-jdeploy-github-release.test.mjs \

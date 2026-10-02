@@ -5,6 +5,9 @@ jserialcomm = "2.11.4"
 usb-serial-for-android = "3.11.0"
 desugar-jdk-libs = "2.1.5"
 androidx-core = "1.19.1"
+androidx-test-core = "1.7.0"
+androidx-test-ext = "1.3.0"
+androidx-test-runner = "1.7.0"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "android-gradle-plugin" }
@@ -16,3 +19,6 @@ jserialcomm = { group = "com.fazecast", name = "jSerialComm", version.ref = "jse
 usbserialandroid = { group = "com.github.mik3y", name = "usb-serial-for-android", version.ref = "usb-serial-for-android" }
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar-jdk-libs" }
 androidx-core = { group = "androidx.core", name = "core", version.ref = "androidx-core" }
+androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidx-test-core" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidx-test-ext" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidx-test-runner" }

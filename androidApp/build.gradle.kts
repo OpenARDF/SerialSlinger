@@ -39,6 +39,7 @@ android {
         targetSdk = 37
         versionCode = 31
         versionName = rootProject.extra["serialSlingerDisplayVersion"].toString()
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "PROJECT_URL", "\"${rootProject.extra["serialSlingerProjectUrl"]}\"")
         buildConfigField("String", "LICENSE_LABEL", "\"${rootProject.extra["serialSlingerLicenseLabel"]}\"")
         buildConfigField("String", "LICENSE_URL", "\"${rootProject.extra["serialSlingerLicenseUrl"]}\"")
@@ -74,6 +75,9 @@ android {
         // finding documented in docs/android-lint-waivers.md.
         warningsAsErrors = true
         baseline = file("lint-baseline.xml")
+        // Release workflows run the complete lintRelease task explicitly. Disabling the smaller
+        // implicit vital pass avoids its misleading baseline-variant notice during bundleRelease.
+        checkReleaseBuilds = false
     }
 
     compileOptions {
@@ -87,6 +91,9 @@ dependencies {
     implementation(libs.androidx.core)
     implementation(project(":shared"))
     testImplementation(kotlin("test-junit"))
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
 
 tasks.register("printAndroidReleaseSigningStatus") {

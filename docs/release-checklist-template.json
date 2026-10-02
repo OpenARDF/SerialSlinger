@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 2,
   "release": "vX.Y.Z",
   "previousRelease": "vX.Y.Z",
   "repository": "OpenARDF/SerialSlinger",
@@ -33,6 +34,38 @@
       "skipRequestedBy": ""
     },
     {
+      "id": "android-signing",
+      "description": "Build the release AAB with the Play upload key, verify its JAR signature, and confirm its SHA-256 certificate fingerprint matches the expected upload certificate.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-native-compatibility",
+      "description": "Verify 16 KB AAB packaging and ELF alignment, then record the successful hosted Android 15 16 KB emulator run.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "dependency-audit",
+      "description": "Run the production dependency audit at low severity and record zero known vulnerabilities.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "static-analysis",
+      "description": "Run actionlint, ShellCheck, shfmt check mode, and git diff --check with no unwaived findings.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
       "id": "platform-parity-review",
       "description": "Review Android, desktop, and shared changes for parity; either carry behavior across platforms or record why a platform-specific difference is intentional.",
       "status": "pending",
@@ -41,8 +74,16 @@
       "skipRequestedBy": ""
     },
     {
+      "id": "android-instrumentation",
+      "description": "Run the complete Android instrumentation suite on a physical device and record its model, Android version, test count, and result.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
       "id": "android-regression",
-      "description": "Run the Android tablet regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
+      "description": "Run the destructive Android attached-SignalSlinger regression with approved target, restored settings, post-test readback, and either same-device clone-protection evidence or an actual clone to a distinct target; otherwise record an explicit waiver with requester.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -51,6 +92,14 @@
     {
       "id": "desktop-regression",
       "description": "Run the macOS desktop UI regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "macos-installed-smoke",
+      "description": "Install the release candidate through jDeploy on macOS and run the isolated installed-package probe through the genuine native launcher.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",

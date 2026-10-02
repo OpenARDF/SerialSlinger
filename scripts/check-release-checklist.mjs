@@ -6,9 +6,15 @@ const phases = {
     "version-aligned",
     "android-version-code",
     "release-preflight",
+    "android-signing",
+    "android-native-compatibility",
+    "dependency-audit",
+    "static-analysis",
     "platform-parity-review",
+    "android-instrumentation",
     "android-regression",
     "desktop-regression",
+    "macos-installed-smoke",
     "windows-intel-x64-smoke",
     "windows-arm64-smoke",
     "linux-intel-x64-smoke",
@@ -24,9 +30,15 @@ const phases = {
     "version-aligned",
     "android-version-code",
     "release-preflight",
+    "android-signing",
+    "android-native-compatibility",
+    "dependency-audit",
+    "static-analysis",
     "platform-parity-review",
+    "android-instrumentation",
     "android-regression",
     "desktop-regression",
+    "macos-installed-smoke",
     "windows-intel-x64-smoke",
     "windows-arm64-smoke",
     "linux-intel-x64-smoke",
@@ -38,9 +50,15 @@ const phases = {
     "version-aligned",
     "android-version-code",
     "release-preflight",
+    "android-signing",
+    "android-native-compatibility",
+    "dependency-audit",
+    "static-analysis",
     "platform-parity-review",
+    "android-instrumentation",
     "android-regression",
     "desktop-regression",
+    "macos-installed-smoke",
     "windows-intel-x64-smoke",
     "windows-arm64-smoke",
     "linux-intel-x64-smoke",
@@ -53,6 +71,15 @@ const phases = {
     "final-checklist-audit",
   ],
 };
+
+const hardenedChecklistItems = new Set([
+  "android-signing",
+  "android-native-compatibility",
+  "dependency-audit",
+  "static-analysis",
+  "android-instrumentation",
+  "macos-installed-smoke",
+]);
 
 function usage() {
   console.error([
@@ -96,6 +123,15 @@ function nonBlank(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function requiresHardenedSchema(version) {
+  const match = typeof version === "string" ? version.match(/^(\d+)\.(\d+)\.(\d+)$/) : null;
+  if (!match) return false;
+  const numeric = match.slice(1).map(Number);
+  return numeric[0] > 2 ||
+    (numeric[0] === 2 && numeric[1] > 0) ||
+    (numeric[0] === 2 && numeric[1] === 0 && numeric[2] >= 24);
+}
+
 const args = parseArgs(process.argv.slice(2));
 if (!args.file) {
   usage();
@@ -124,6 +160,9 @@ const itemById = new Map(checklist.items.map((item) => [item.id, item]));
 const failures = [];
 
 if (args.phase === "template") {
+  if (checklist.schemaVersion !== 2) {
+    failures.push("template: schemaVersion must be 2.");
+  }
   if (checklist.version !== "x.y.z") {
     failures.push("template: version must be x.y.z.");
   }
@@ -138,7 +177,17 @@ if (args.phase === "template") {
   }
 }
 
-for (const id of phases[args.phase]) {
+if (args.phase !== "template" && requiresHardenedSchema(checklist.version) && checklist.schemaVersion !== 2) {
+  failures.push("schemaVersion 2 is required for SerialSlinger 2.0.24 and later.");
+}
+
+const hardenedSchemaApplies = args.phase === "template" || checklist.schemaVersion === 2 || requiresHardenedSchema(checklist.version);
+const requiredItems =
+  hardenedSchemaApplies
+    ? phases[args.phase]
+    : phases[args.phase].filter((id) => !hardenedChecklistItems.has(id));
+
+for (const id of requiredItems) {
   const item = itemById.get(id);
   if (!item) {
     failures.push(`Missing checklist item: ${id}`);

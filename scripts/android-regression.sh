@@ -136,6 +136,19 @@ snapshot_value() {
 	awk -F= -v key="$key" '$1 == key { print $2; exit }' "$snapshot_file"
 }
 
+verify_snapshot_value() {
+	local key="$1"
+	local expected="$2"
+	local snapshot_file="$3"
+	local actual
+	actual="$(snapshot_value "$key" "$snapshot_file")"
+	if [[ "$actual" != "$expected" ]]; then
+		record_fail "restore-verify-$key" "expected=$expected actual=$actual"
+		return 1
+	fi
+	record_pass "restore-verify-$key" "value=$actual"
+}
+
 future_compact_minutes() {
 	local minutes="$1"
 	node -e '
@@ -168,6 +181,104 @@ process.stdout.write(
 '
 }
 
+RESTORE_ARMED=false
+RESTORE_RUNNING=false
+
+run_restore_command() {
+	local name="$1"
+	shift
+	local output_file="$OUTPUT_DIR/${name// /-}.txt"
+	if run_debug_command "$@" >"$output_file" 2>&1; then
+		record_pass "$name" "$output_file"
+	else
+		record_fail "$name" "$output_file"
+		return 1
+	fi
+}
+
+restore_original_settings() {
+	local restore_failed=0
+	local restore_time
+	local restored_snapshot="$OUTPUT_DIR/restore-get-snapshot.txt"
+	local restored_event="$OUTPUT_DIR/restore-query-event.txt"
+
+	restore_time="$(current_compact_time)"
+	run_restore_command "restore-load" load || restore_failed=1
+	run_restore_command "restore-station-id" set-station-id "$ORIGINAL_STATION_ID" || restore_failed=1
+	run_restore_command "restore-id-speed" set-id-speed "$ORIGINAL_ID_SPEED" || restore_failed=1
+	run_restore_command "restore-pattern-speed" set-pattern-speed "$ORIGINAL_PATTERN_SPEED" || restore_failed=1
+	run_restore_command "restore-event-type" set-event-type "$ORIGINAL_EVENT_TYPE" || restore_failed=1
+	run_restore_command "restore-fox-role" set-fox-role "$ORIGINAL_FOX_ROLE" || restore_failed=1
+	run_restore_command "restore-time-sequence" set-time-sequence \
+		"$restore_time" "$ORIGINAL_START_TIME" "$ORIGINAL_FINISH_TIME" "$ORIGINAL_DAYS_TO_RUN" || restore_failed=1
+	run_restore_command "restore-get-snapshot" get-snapshot || restore_failed=1
+
+	if [[ -f "$restored_snapshot" ]]; then
+		verify_snapshot_value stationId "$ORIGINAL_STATION_ID" "$restored_snapshot" || restore_failed=1
+		verify_snapshot_value eventType "$ORIGINAL_EVENT_TYPE" "$restored_snapshot" || restore_failed=1
+		verify_snapshot_value foxRole "$ORIGINAL_FOX_ROLE" "$restored_snapshot" || restore_failed=1
+		verify_snapshot_value idCodeSpeedWpm "$ORIGINAL_ID_SPEED" "$restored_snapshot" || restore_failed=1
+		verify_snapshot_value patternCodeSpeedWpm "$ORIGINAL_PATTERN_SPEED" "$restored_snapshot" || restore_failed=1
+		verify_snapshot_value startTime "$ORIGINAL_START_TIME" "$restored_snapshot" || restore_failed=1
+		verify_snapshot_value finishTime "$ORIGINAL_FINISH_TIME" "$restored_snapshot" || restore_failed=1
+		verify_snapshot_value daysToRun "$ORIGINAL_DAYS_TO_RUN" "$restored_snapshot" || restore_failed=1
+	fi
+
+	if [[ "$ORIGINAL_EVENT_ENABLED" == "true" ]]; then
+		run_restore_command "restore-event-state" raw-command "GO 1" || restore_failed=1
+	else
+		run_restore_command "restore-event-state" raw-command "GO 0" || restore_failed=1
+	fi
+	run_restore_command "restore-query-event" raw-command "EVT" || restore_failed=1
+	run_restore_command "restore-query-clock" raw-command "CLK" || restore_failed=1
+	run_restore_command "restore-query-station-id" raw-command "ID" || restore_failed=1
+	run_restore_command "restore-query-fox-role" raw-command "FOX" || restore_failed=1
+	run_restore_command "restore-query-id-speed" raw-command "SPD I" || restore_failed=1
+	run_restore_command "restore-query-pattern-speed" raw-command "SPD P" || restore_failed=1
+
+	if [[ "$ORIGINAL_EVENT_ENABLED" == "true" ]]; then
+		if ! rg -q "enabled=1|User launched|Time remaining|Running forever|On the air" "$restored_event"; then
+			record_fail "restore-verify-event-state" "running event not confirmed"
+			restore_failed=1
+		else
+			record_pass "restore-verify-event-state" "running event confirmed"
+		fi
+	elif ! rg -q "enabled=0|Not scheduled|Stopped|will not run|Event start disabled" "$restored_event"; then
+		record_fail "restore-verify-event-state" "stopped event not confirmed"
+		restore_failed=1
+	else
+		record_pass "restore-verify-event-state" "stopped event confirmed"
+	fi
+
+	return "$restore_failed"
+}
+
+restore_on_exit() {
+	local regression_status=$?
+	trap - EXIT
+	if [[ "$RESTORE_ARMED" == "true" && "$RESTORE_RUNNING" == "false" ]]; then
+		RESTORE_RUNNING=true
+		if ! restore_original_settings; then
+			regression_status=1
+		fi
+	fi
+	exit "$regression_status"
+}
+
+run_clone_step() {
+	local output_file="$OUTPUT_DIR/normal-clone.txt"
+	if run_debug_command clone-wait >"$output_file" 2>&1; then
+		record_pass "normal-clone" "$output_file"
+	elif rg -q "same unit that supplied the clone template" "$output_file"; then
+		record_pass "normal-clone" "self-clone protection confirmed in $output_file"
+	else
+		record_fail "normal-clone" "$output_file"
+		echo "Regression step failed: normal-clone" >&2
+		echo "Output: $output_file" >&2
+		exit 1
+	fi
+}
+
 adb "${ADB_ARGS[@]}" shell am force-stop "$APP_ID" >/dev/null || true
 adb "${ADB_ARGS[@]}" shell "run-as $APP_ID rm -f shared_prefs/serialslinger_android_ui.xml" >/dev/null 2>&1 || true
 adb "${ADB_ARGS[@]}" shell am start -n "$APP_ID/$MAIN_ACTIVITY" >/dev/null
@@ -187,11 +298,25 @@ SNAPSHOT_FILE="$OUTPUT_DIR/normal-get-snapshot.txt"
 ORIGINAL_STATION_ID="$(snapshot_value stationId "$SNAPSHOT_FILE")"
 ORIGINAL_ID_SPEED="$(snapshot_value idCodeSpeedWpm "$SNAPSHOT_FILE")"
 ORIGINAL_PATTERN_SPEED="$(snapshot_value patternCodeSpeedWpm "$SNAPSHOT_FILE")"
+ORIGINAL_EVENT_TYPE="$(snapshot_value eventType "$SNAPSHOT_FILE")"
+ORIGINAL_FOX_ROLE="$(snapshot_value foxRole "$SNAPSHOT_FILE")"
+ORIGINAL_START_TIME="$(snapshot_value startTime "$SNAPSHOT_FILE")"
+ORIGINAL_FINISH_TIME="$(snapshot_value finishTime "$SNAPSHOT_FILE")"
+ORIGINAL_DAYS_TO_RUN="$(snapshot_value daysToRun "$SNAPSHOT_FILE")"
+ORIGINAL_EVENT_ENABLED="$(snapshot_value eventEnabled "$SNAPSHOT_FILE")"
 
-if [ -z "$ORIGINAL_STATION_ID" ]; then
-	echo "Could not read stationId from $SNAPSHOT_FILE." >&2
-	exit 1
-fi
+for required_key in \
+	ORIGINAL_STATION_ID ORIGINAL_ID_SPEED ORIGINAL_PATTERN_SPEED ORIGINAL_EVENT_TYPE \
+	ORIGINAL_FOX_ROLE ORIGINAL_START_TIME ORIGINAL_FINISH_TIME ORIGINAL_DAYS_TO_RUN \
+	ORIGINAL_EVENT_ENABLED; do
+	if [[ -z "${!required_key}" ]]; then
+		echo "Could not read $required_key from $SNAPSHOT_FILE." >&2
+		exit 1
+	fi
+done
+
+RESTORE_ARMED=true
+trap restore_on_exit EXIT
 
 REGRESSION_STATION_ID="REGTST1"
 if [ "$ORIGINAL_STATION_ID" = "$REGRESSION_STATION_ID" ]; then
@@ -229,8 +354,18 @@ run_step "normal-raw-go-0" run_debug_command raw-command "GO 0"
 run_step "normal-raw-clk-t" run_debug_command raw-command "CLK T"
 
 run_step "normal-log-export" run_debug_command get-log
-run_step "normal-clone" run_debug_command clone-wait
+run_clone_step
 run_step "normal-final-load" load_with_retry "$OUTPUT_DIR/normal-final-load.txt"
+
+RESTORE_RUNNING=true
+if ! restore_original_settings; then
+	echo "Regression completed, but restoring the original SignalSlinger settings failed." >&2
+	echo "Summary: $SUMMARY_FILE" >&2
+	exit 1
+fi
+RESTORE_RUNNING=false
+RESTORE_ARMED=false
+trap - EXIT
 
 if rg -q "statusIsError=true|failed verification|did not provide timely replies|No reply received|Exception|FATAL" "$OUTPUT_DIR"; then
 	record_fail "scan-output" "failure text found under $OUTPUT_DIR"

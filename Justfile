@@ -18,7 +18,12 @@ test:
 
 # Run Android host/unit tests and build the debug application.
 android-check:
-    {{gradle}} :shared:testAndroidHostTest :androidApp:testDebugUnitTest :androidApp:assembleDebug
+    {{gradle}} :shared:testAndroidHostTest :androidApp:testDebugUnitTest :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest
+
+# Install and run the complete Android instrumentation suite on every connected device.
+android-instrumentation:
+    {{gradle}} :androidApp:connectedDebugAndroidTest
+    node scripts/check-android-instrumentation-results.mjs
 
 # Treat new Android lint findings as failures and verify the release bundle.
 android-release-check:
@@ -30,21 +35,31 @@ android-native-compat-check bundle="androidApp/build/outputs/bundle/release/andr
     node --test scripts/check-android-native-compatibility.test.mjs
     node scripts/check-android-native-compatibility.mjs {{quote(bundle)}}
 
+# Build a signed release AAB and verify it against the configured Play upload certificate.
+android-signing-check:
+    ./scripts/build-signed-bundle.sh
+
 # Run repository-owned Node workflow and packaging tests.
 scripts-test:
     node --test \
         scripts/check-android-native-compatibility.test.mjs \
+        scripts/check-android-instrumentation-results.test.mjs \
+        scripts/check-release-checklist.test.mjs \
         scripts/check-release-tag.test.mjs \
         scripts/jdeploy-local-smoke.test.mjs \
         scripts/prepare-jdeploy-github-release.test.mjs \
         scripts/publish-jdeploy-github-release.test.mjs
 
+# Validate workflows, portable shell, shell formatting, and Git whitespace.
+static-check:
+    ./scripts/static-check.sh
+
 # Reject known vulnerabilities anywhere in the npm dependency tree.
 dependency-audit:
     npm audit --audit-level=low
 
-# Run the normal local validation gate across desktop, Android, and release scripts.
-check: compile test android-check android-release-check scripts-test
+# Run the normal local validation gate across desktop, Android, release scripts, and static analysis.
+check: compile test android-check android-release-check scripts-test static-check
 
 # Increment the local test-build suffix and align package metadata.
 local-version-bump:
@@ -96,6 +111,11 @@ jdeploy-local: local-version-bump
 
 # Install and probe the genuine local jDeploy application without serial hardware.
 jdeploy-local-smoke:
+    npm run jdeploy:local-smoke
+
+# Install and probe the genuine local jDeploy application on macOS.
+macos-installed-smoke:
+    @test "$(uname -s)" = "Darwin" || { echo "macos-installed-smoke requires macOS." >&2; exit 1; }
     npm run jdeploy:local-smoke
 
 # Preview the npm and jDeploy package payload.

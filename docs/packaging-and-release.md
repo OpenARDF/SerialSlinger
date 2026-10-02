@@ -97,23 +97,26 @@ The intended release flow is:
    - ask whether any Android app changes in the release should also be carried into the desktop app
    - ask whether any desktop app changes in the release should also be carried into the Android app
    - either carry the needed changes across or explicitly record why no cross-platform change is needed
-5. run the automated Android tablet regression: `./scripts/android-regression.sh --serial <adb-serial>`
-6. run the desktop app regression series on macOS with a real attached SignalSlinger
-7. run packaged desktop smoke checks on Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64 when hosts are available, recording concrete evidence for each architecture or an explicit skip reason and requester
-8. create `docs/release-notes/vX.Y.Z.md` from [release-notes-template.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-notes-template.md), validate it with `npm run release:notes -- --checklist <checklist.json>`, and provide the Android release-notes section as copyable Play Console text
-9. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
-10. merge the desired release state to `main`
-11. set checklist `sourceCommit` to the exact verified commit, commit only that checklist update, then create and push a tag like `v1.0.93` at the checklist-only child commit
-12. let the GitHub Actions workflow publish the release artifacts
-13. before declaring the deployment complete, update the checklist for the final tag, workflow, release-verification, and final-audit items, then run `npm run release:checklist -- --file <checklist.json> --phase final`
+5. run `just android-signing-check`; record the signed AAB and matching Play upload-certificate fingerprint
+6. run `just android-instrumentation` on a physical Android device and record the device/OS/test-count evidence
+7. with explicit destructive-write approval, run `./scripts/android-regression.sh --serial <adb-serial>` against the named attached SignalSlinger and record its final readback
+8. run the desktop app regression series on macOS with a real attached SignalSlinger
+9. run `just macos-installed-smoke`, then run packaged desktop smoke checks on Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64 when hosts are available, recording concrete evidence for each architecture or an explicit skip reason and requester
+10. create `docs/release-notes/vX.Y.Z.md` from [release-notes-template.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-notes-template.md), validate it with `npm run release:notes -- --checklist <checklist.json>`, and provide the Android release-notes section as copyable Play Console text
+11. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
+12. merge the desired release state to `main`
+13. set checklist `sourceCommit` to the exact verified commit, commit only that checklist update, then create and push a tag like `v1.0.93` at the checklist-only child commit
+14. let the GitHub Actions workflow publish the release artifacts
+15. before declaring the deployment complete, update the checklist for the final tag, workflow, release-verification, and final-audit items, then run `npm run release:checklist -- --file <checklist.json> --phase final`
 
 The release checklist gate is mandatory unless the user specifically asks to skip an item. A skipped item must be recorded in the checklist with both a concrete reason and the requester.
 
 Keep desktop and Android releases in sync by default. Do not run a separate Android-only release flow with different versioning, tests, or parity checks unless that difference is explicitly requested for the release.
 
-Do not push a normal public release tag until both real-device regression passes have completed:
+Do not push a normal public release tag until physical instrumentation and both real-device regression passes have completed:
 
-- automated Android tablet regression on a real attached SignalSlinger test device. The regression is destructive to the attached device settings and starts from normal Android UI mode before exercising normal-mode load, setting submit, schedule, raw command, log, and clone paths.
+- complete Android instrumentation on a physical Android device. This is a non-destructive app/lifecycle gate and does not replace attached-transmitter acceptance.
+- automated Android regression on a real attached SignalSlinger test device. The regression is destructive to the attached device settings and starts from normal Android UI mode before exercising normal-mode load, setting submit, schedule, raw command, log, and clone paths. Obtain explicit target and write-risk approval before running it. The helper snapshots and restores the original identity, event profile, speeds, schedule, and running state even when a step fails, then records direct final readback. With one attached unit, the required clone-path evidence is safe rejection of a same-device clone; an actual clone write requires a distinct target unit.
 - desktop app regression on macOS with the SerialSlinger desktop UI launched against a real attached SignalSlinger. The pass should exercise the actual app window, not only the desktop smoke CLI: connect/load, normal-mode setting edits and submit, relative start-time scheduling, disable event, sync/set time, raw command/log behavior, clone where appropriate, and post-test CLI readback to confirm the device is left in a known acceptable state. Before GUI automation, close any installed SerialSlinger app, launch the checkout with Gradle, and confirm the tested window/log session shows the intended version, process ID, and launch directory so installed-app sessions do not contaminate the regression log.
 
 Do not treat cross-platform desktop support as covered by the macOS regression alone. The release checklist must include packaged-app smoke items for Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64. If one of those architectures cannot be tested for a specific release, record it as a skipped checklist item with the concrete reason and the requester who accepted the risk. Linux install/run has been demonstrated, so a skipped Linux smoke item is an evidence gap for that release, not a statement that Linux is unsupported or only aspirational.
@@ -179,14 +182,16 @@ The recommended local setup is:
    - `storePassword`
    - `keyAlias`
    - `keyPassword`
+   - optional `certificateSha256` only when intentionally overriding the checked
+     [Play upload-certificate fingerprint](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/android-upload-certificate.sha256)
 
 The real `keystore.properties` file is ignored by git and should not be committed.
 
 Useful commands:
 
 - `./gradlew printAndroidReleaseSigningStatus`
-- `./gradlew :androidApp:bundleRelease`
+- `just android-signing-check`
 
-If signing inputs are present, `bundleRelease` produces a signed release bundle. If they are absent, Gradle still builds the release bundle, but it will not be configured with the local upload key.
+`scripts/build-signed-bundle.sh` prefers the ignored local `keystore.properties` file when its password fields are complete. When either password is absent or blank on macOS, it defaults the keystore path and alias to the established SerialSlinger upload-key locations and reads the shared PKCS#12 store/key password from the `SerialSlingerUploadStorePassword` login-Keychain service without printing it. `SERIALSLINGER_UPLOAD_KEY_PASSWORD` remains available if a future keystore uses a separate private-key password. The checked certificate fingerprint was independently matched to Play Console on October 1, 2026. The final verification rejects unsigned AABs and certificates that do not match that fingerprint. A plain `bundleRelease` can still produce an unsigned bundle when signing inputs are absent and therefore is not proof of Play-upload readiness.
 
 For normal releases, use the same shared release flow above before building or uploading an Android bundle. That means the shared release label and Android `versionCode` move together, platform parity is reviewed, and the Android tablet regression remains part of the release gate. Only diverge from the jDeploy release procedure when a release is intentionally scoped to Android and that exception is recorded.
