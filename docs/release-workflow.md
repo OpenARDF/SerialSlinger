@@ -7,6 +7,12 @@ assume the repository root unless stated otherwise.
 
 - `main` is the stable release branch.
 - `Development1` is the active development branch.
+- Start each development slice from a clean, synchronized `Development1` on a
+  focused `codex/<feature>` topic branch. Merge the topic branch back through a
+  pull request after the required build-and-test gate passes; formal approving
+  reviews are optional for the single-maintainer workflow.
+- Protected branches require linear history and reject force pushes and
+  deletion. GitHub automatically deletes merged remote topic branches.
 - A full deployment synchronizes `main` and `Development1` to the same final
   release-evidence commit, then leaves `Development1` checked out.
 - Before making release changes, confirm the current branch and working tree.
