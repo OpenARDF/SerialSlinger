@@ -37,7 +37,7 @@ android {
         applicationId = "com.SerialSlinger.openardf"
         minSdk = 24
         targetSdk = 37
-        versionCode = 31
+        versionCode = 32
         versionName = rootProject.extra["serialSlingerDisplayVersion"].toString()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "PROJECT_URL", "\"${rootProject.extra["serialSlingerProjectUrl"]}\"")

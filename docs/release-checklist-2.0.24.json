@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 2,
+  "release": "v2.0.24",
+  "previousRelease": "v2.0.23",
+  "repository": "OpenARDF/SerialSlinger",
+  "channel": "stable",
+  "sourceCommit": "",
+  "version": "2.0.24",
+  "androidVersionCode": "32",
+  "releaseNotesFile": "docs/release-notes/v2.0.24.md",
+  "items": [
+    {
+      "id": "version-aligned",
+      "description": "Confirm the shared desktop/jDeploy version, npm package version, package-lock version, and Android versionName all resolve to the same plain x.y.z release label.",
+      "status": "done",
+      "evidence": "build.gradle.kts, package.json, package-lock.json, Android versionName, jDeploy preflight, and npm pack preview all resolve to plain 2.0.24 with no test suffix on 2026-10-01.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-version-code",
+      "description": "Increment androidApp/build.gradle.kts versionCode from the previously deployed Android build.",
+      "status": "done",
+      "evidence": "androidApp/build.gradle.kts increments versionCode from published v2.0.23 code 31 to v2.0.24 code 32; release bundle completed on 2026-10-01.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-preflight",
+      "description": "Run the jDeploy release preflight and record the package version, target tag, workflow target, and desktop bundle verification evidence.",
+      "status": "done",
+      "evidence": "npm run jdeploy:release-preflight passed for serialslinger@2.0.24, Gradle display/package 2.0.24, target v2.0.24, GitHub Releases, and a prepared/verified desktop bundle; direct package, native install, verification, installed smoke, and pack preview also passed on 2026-10-01.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-signing",
+      "description": "Build the release AAB with the Play upload key, verify its JAR signature, and confirm its SHA-256 certificate fingerprint matches the expected upload certificate.",
+      "status": "done",
+      "evidence": "just android-signing-check built androidApp-release.aab, verified its JAR signature, and matched Play upload certificate SHA-256 17:3F:9A:DB:77:7F:B7:44:15:97:7E:07:6A:54:8C:29:02:DC:0F:D7:4F:27:CF:8C:F4:02:17:82:5C:27:51:17 on 2026-10-01.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-native-compatibility",
+      "description": "Verify 16 KB AAB packaging and ELF alignment, then record the successful hosted Android 15 16 KB emulator run.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "dependency-audit",
+      "description": "Run the production dependency audit at low severity and record zero known vulnerabilities.",
+      "status": "done",
+      "evidence": "npm audit --audit-level=low passed with zero vulnerabilities locally in just release-check on 2026-10-01; hosted confirmation is required before tagging.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "static-analysis",
+      "description": "Run actionlint, ShellCheck, shfmt check mode, and git diff --check with no unwaived findings.",
+      "status": "done",
+      "evidence": "actionlint 1.7.12, ShellCheck, shfmt check mode, release-script tests, and git diff --check passed locally with no unwaived findings on 2026-10-01; hosted build/test run 36944538607 also passed the static gate.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "platform-parity-review",
+      "description": "Review Android, desktop, and shared changes for parity; either carry behavior across platforms or record why a platform-specific difference is intentional.",
+      "status": "done",
+      "evidence": "Reviewed v2.0.23..candidate: shared Gradle/Kotlin and release validation changes cover both platforms; round icons, Android resource extraction, AndroidX/USB libraries, signing, instrumentation, and 16 KB checks are intentionally Android-specific OS UI, USB, packaging, or device-test concerns and do not require desktop duplicates.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-instrumentation",
+      "description": "Run the complete Android instrumentation suite on a physical device and record its model, Android version, test count, and result.",
+      "status": "done",
+      "evidence": "Complete physical instrumentation passed on Moto g 5G (2024), Android 15: 4 tests, 0 failures, 0 errors, 0 skipped. Evidence: androidApp/build/outputs/androidTest-results/connected/debug/TEST-moto g 5G - 2024 - 15.xml on 2026-10-01.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-regression",
+      "description": "Run the destructive Android attached-SignalSlinger regression with approved target, restored settings, post-test readback, and either same-device clone-protection evidence or an actual clone to a distinct target; otherwise record an explicit waiver with requester.",
+      "status": "done",
+      "evidence": "User-approved bounded regression on Moto g 5G (2024) with attached SignalSlinger FTDI ABSCDL93 passed settings, scheduling, raw commands, log export, and same-device clone protection; original NZ0I/CLASSIC FOX 1/20 WPM/8 WPM/Oct 15 08:00-14:00 3-day schedule/running state was restored and directly read back. Evidence: build/android-regression/20261001-195025/summary.tsv. Subsequent candidate changes are version metadata, instrumentation, and release workflow only.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "desktop-regression",
+      "description": "Run the macOS desktop UI regression on a real attached device, or record the explicit hardware-test pass evidence supplied for this release.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "macos-installed-smoke",
+      "description": "Install the release candidate through jDeploy on macOS and run the isolated installed-package probe through the genuine native launcher.",
+      "status": "done",
+      "evidence": "Direct serialslinger@2.0.24 jDeploy native install to /Users/charlesscharlau/Applications/SerialSlinger.app passed three installation checks and the isolated installed-package smoke through the genuine native launcher on macOS ARM64 on 2026-10-01.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-intel-x64-smoke",
+      "description": "Install and launch the packaged Windows Intel x64 app, or record an explicit skipped-check waiver with requester.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "windows-arm64-smoke",
+      "description": "Install and launch the packaged Windows ARM64 app, or record an explicit skipped-check waiver with requester.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "linux-intel-x64-smoke",
+      "description": "Install and launch the packaged Linux Intel x64 app, or record an explicit skipped-check waiver with requester.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "linux-arm64-smoke",
+      "description": "Install and launch the packaged Linux ARM64 app, or record an explicit skipped-check waiver with requester.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "android-release-notes",
+      "description": "Create and validate checked release notes, then provide terse Play Console Android notes from the Android release notes section.",
+      "status": "done",
+      "evidence": "docs/release-notes/v2.0.24.md passed the release-notes validator on 2026-10-01; its Android section is Play Console-ready and under 500 characters.",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "merged-to-main",
+      "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "tag-pushed",
+      "description": "Create and push the annotated vX.Y.Z release tag at the verified main release commit.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "workflow-published",
+      "description": "Watch the jDeploy Release GitHub Actions workflow through publication and record the run ID, conclusion, and duration.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "release-verified",
+      "description": "Verify the GitHub release is published, non-draft, non-prerelease unless requested, targets the intended commit, and exposes downloadable assets.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    },
+    {
+      "id": "final-checklist-audit",
+      "description": "Run the final checklist guard, commit the post-tag evidence update, and synchronize main and Development_Android without moving the tag.",
+      "status": "pending",
+      "evidence": "",
+      "skipReason": "",
+      "skipRequestedBy": ""
+    }
+  ]
+}

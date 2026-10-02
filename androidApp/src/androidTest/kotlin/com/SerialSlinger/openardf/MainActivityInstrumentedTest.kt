@@ -13,7 +13,6 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,30 +22,48 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MainActivityInstrumentedTest {
     @Test
-    fun disconnectedStartupShowsSafeOperatorActions() {
+    fun startupShowsSafeOperatorActions() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 val texts = activity.window.decorView.allTextViews()
                 assertTrue(texts.any { it.text.toString().startsWith("SerialSlinger ${BuildConfig.VERSION_NAME}") })
-                assertTrue(texts.any { it.text.toString() == "Reload Device Data" })
-                assertTrue(texts.any { it.text.toString().contains("Connect a supported device") })
 
                 val settings = texts.filterIsInstance<Button>().single { it.text.toString() == "Settings" }
                 val tools = texts.filterIsInstance<Button>().single { it.text.toString() == "Tools" }
-                assertFalse("Settings must stay locked until device data is available", settings.isEnabled)
                 assertTrue("Hardware-free diagnostic tools must remain reachable", tools.isEnabled)
+
+                // A physical-device run may begin disconnected, while USB discovery is in flight,
+                // or with a supported transmitter already loaded. Every state must keep the
+                // operator on a recognizable, safe surface.
+                val labels = texts.map { it.text.toString() }
+                val startupStatusIsVisible =
+                    labels.any {
+                        it in
+                            setOf(
+                                "Reload Device Data",
+                                "Connecting to device...",
+                                "Searching for device...",
+                                "Reading data...",
+                            )
+                    } || labels.contains("Connected Device")
+                assertTrue("Startup must expose a connection status or loaded-device summary", startupStatusIsVisible)
+                assertTrue(
+                    "Settings must stay locked until a loaded device summary is available",
+                    !settings.isEnabled || labels.contains("Connected Device"),
+                )
             }
         }
     }
 
     @Test
-    fun disconnectedSurfaceSurvivesActivityRecreation() {
+    fun operatorSurfaceSurvivesActivityRecreation() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.recreate()
             scenario.onActivity { activity ->
-                val texts = activity.window.decorView.allTextViews().map { it.text.toString() }
-                assertTrue(texts.contains("Reload Device Data"))
-                assertTrue(texts.contains("Tools"))
+                val texts = activity.window.decorView.allTextViews()
+                assertTrue(texts.any { it.text.toString().startsWith("SerialSlinger ${BuildConfig.VERSION_NAME}") })
+                assertTrue(texts.filterIsInstance<Button>().any { it.text.toString() == "Settings" })
+                assertTrue(texts.filterIsInstance<Button>().single { it.text.toString() == "Tools" }.isEnabled)
             }
         }
     }
