@@ -87,7 +87,8 @@ jobs:
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == ''
         with:
-          distribution: temurin
+          # Temurin does not publish Java 17 for Windows ARM64; Microsoft does.
+          distribution: microsoft
           java-version: "17"
           cache: gradle
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -135,11 +136,18 @@ jobs:
           foreach ($arguments in @('--jdeploy:update', '--jdeploy:command=install')) {
             $process = Start-Process -FilePath $installer.FullName -ArgumentList $arguments -Wait -PassThru
             if ($process.ExitCode -ne 0) {
+              Get-ChildItem "$HOME\.jdeploy\log" -File -Recurse -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                  Write-Host "===== $($_.FullName) ====="
+                  Get-Content $_.FullName -Tail 200
+                }
               throw "Installer command $arguments exited $($process.ExitCode)."
             }
           }
           $packageVersion = $env:RELEASE_TAG.Substring(1)
-          node scripts/jdeploy-local-smoke.mjs --probe-only $packageVersion
+          node scripts/jdeploy-local-smoke.mjs `
+            --probe-only $packageVersion `
+            --source https://github.com/OpenARDF/SerialSlinger
       - name: Stop Gradle before saving the setup cache
         if: always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == '')
         run: .\gradlew.bat --stop
@@ -151,6 +159,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: |
-            ${{ env.HOME }}\.jdeploy\log\**
-            ${{ env.APPDATA }}\SerialSlinger\logs\**
+            ~\.jdeploy\log\**
+            ~\AppData\Roaming\SerialSlinger\logs\**
             shared\build\reports\**

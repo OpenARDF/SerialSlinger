@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +24,11 @@ function run(command, args) {
   execFileSync(command, args, { stdio: "inherit" });
 }
 
-export function localInstallPath(runtimePlatform = platform(), userHome = homedir()) {
+export function localInstallPath(
+  runtimePlatform = platform(),
+  userHome = homedir(),
+  packageSource = null
+) {
   if (runtimePlatform === "darwin") {
     return join(
       userHome,
@@ -34,11 +39,15 @@ export function localInstallPath(runtimePlatform = platform(), userHome = homedi
       "Client4JLauncher"
     );
   }
+  // jDeploy qualifies GitHub-backed install directories with the MD5 of the package source.
+  const packageDirectory = packageSource == null
+    ? "serialslinger"
+    : `${createHash("md5").update(packageSource).digest("hex")}.serialslinger`;
   if (runtimePlatform === "win32") {
-    return join(userHome, ".jdeploy", "apps", "serialslinger", "SerialSlinger.exe");
+    return join(userHome, ".jdeploy", "apps", packageDirectory, "SerialSlinger.exe");
   }
   if (runtimePlatform === "linux") {
-    return join(userHome, ".jdeploy", "apps", "serialslinger", "serialslinger");
+    return join(userHome, ".jdeploy", "apps", packageDirectory, "serialslinger");
   }
   return null;
 }
@@ -76,12 +85,26 @@ function runInstalledProbe(installPath, evidencePath) {
 
 export function parseSmokeArguments(args) {
   if (args.length === 0) {
-    return { probeOnlyVersion: null };
+    return { probeOnlyVersion: null, packageSource: null };
   }
   if (args.length === 2 && args[0] === "--probe-only" && /^\d+\.\d+\.\d+$/.test(args[1])) {
-    return { probeOnlyVersion: args[1] };
+    return { probeOnlyVersion: args[1], packageSource: null };
   }
-  throw new Error("Usage: jdeploy-local-smoke.mjs [--probe-only <major.minor.patch>]");
+  if (
+    args.length === 4
+    && args[0] === "--probe-only"
+    && /^\d+\.\d+\.\d+$/.test(args[1])
+    && args[2] === "--source"
+  ) {
+    const packageSource = new URL(args[3]);
+    if (packageSource.protocol !== "https:") {
+      throw new Error("The installed package source must use HTTPS.");
+    }
+    return { probeOnlyVersion: args[1], packageSource: packageSource.href.replace(/\/$/, "") };
+  }
+  throw new Error(
+    "Usage: jdeploy-local-smoke.mjs [--probe-only <major.minor.patch> [--source <https-url>]]"
+  );
 }
 
 function main() {
@@ -97,7 +120,7 @@ function main() {
     run(npmCommand(), ["run", "jdeploy:verify-install"]);
   }
 
-  const installPath = localInstallPath();
+  const installPath = localInstallPath(platform(), homedir(), options.packageSource);
   if (installPath == null) {
     console.log("SerialSlinger local jDeploy install verified; executable probe is unsupported on this platform.");
     return;
