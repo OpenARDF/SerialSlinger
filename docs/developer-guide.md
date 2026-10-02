@@ -98,7 +98,7 @@ Current supported platforms are:
 - Linux
 - Android
 
-The desktop app has been demonstrated to install and run on Linux; release validation should continue recording architecture-specific packaged-app smoke evidence for Linux Intel x64 and Linux ARM64 when those hosts are available.
+The desktop app has been demonstrated to install and run on Linux. Pinned GitHub Actions workflows now exercise candidate packages on native Linux and Windows x64 and ARM64 runners; their manual tag input can retrospectively probe exact public ARM64 installers. Release validation should record the applicable exact-commit or exact-tag run for every architecture.
 
 iOS is currently out of scope for direct USB or serial support. If SignalSlinger ever exposes a transport that fits Apple's supported accessory model, that decision can be revisited later.
 

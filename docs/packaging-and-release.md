@@ -86,7 +86,7 @@ It:
 - refreshes the special `jdeploy` release icon asset
 - repairs the macOS installer wrapper icon after publish so public Mac installers stay branded with the project icon
 
-Pull requests and `Development_Android` pushes run the desktop/Android build-and-test workflow. Separate pinned Linux x64 and Windows x64 workflows install the local jDeploy package and execute its hardware-free version probe through the genuine installed launcher. These automated x64 results can satisfy the corresponding checklist items; ARM64 remains a separately recorded check.
+Pull requests and `Development_Android` pushes run the desktop/Android build-and-test workflow. Separate pinned Linux and Windows workflows install the local jDeploy package and execute its hardware-free version probe through the genuine installed launcher on native x64 and ARM64 GitHub-hosted runners. Their manual `workflow_dispatch` path accepts a `release_tag`, downloads the exact public ARM64 installer for that tag, and probes the installed release. Candidate results validate the tested checkout; a release checklist item requires evidence for the exact release candidate or published artifact. Historical checklist skips remain historical facts and are not rewritten after a retrospective run.
 
 The intended release flow is:
 
@@ -101,7 +101,7 @@ The intended release flow is:
 6. run `just android-instrumentation` on a physical Android device and record the device/OS/test-count evidence
 7. with explicit destructive-write approval, run `./scripts/android-regression.sh --serial <adb-serial>` against the named attached SignalSlinger and record its final readback
 8. run the desktop app regression series on macOS with a real attached SignalSlinger
-9. run `just macos-installed-smoke`, then run packaged desktop smoke checks on Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64 when hosts are available, recording concrete evidence for each architecture or an explicit skip reason and requester
+9. run `just macos-installed-smoke`, review the hosted Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64 candidate results, and dispatch the ARM64 workflows with the release tag after publication; record concrete evidence for each architecture or an explicit skip reason and requester
 10. create `docs/release-notes/vX.Y.Z.md` from [release-notes-template.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-notes-template.md), validate it with `npm run release:notes -- --checklist <checklist.json>`, and provide the Android release-notes section as copyable Play Console text
 11. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
 12. merge the desired release state to `main`
@@ -161,11 +161,11 @@ Notes:
 - `desktopExe` is the simplest Windows installer target to start with.
 - `desktopMsi` may require Windows packaging tooling such as WiX depending on the local JDK and `jpackage` setup.
 - Windows installers use the same shared version line as macOS packaging, the in-app SerialSlinger version, and the jDeploy/npm package.
-- Release validation must explicitly cover Windows Intel x64 and Windows ARM64 packaged-app smoke, or record an approved checklist skip for the missing architecture.
+- Release validation must explicitly cover Windows Intel x64 and Windows ARM64 packaged-app smoke, or record an approved checklist skip for the missing architecture. The pinned Windows workflow uses native GitHub-hosted runners for both architectures and supports a tag-specific retrospective ARM64 installer probe.
 
 ## Linux Packaging
 
-Use the jDeploy package as the default Linux desktop distribution path. The desktop app has been demonstrated to install and run on Linux. For release validation, install and launch the packaged app on Linux Intel x64 and Linux ARM64 when those hosts are available; otherwise record an approved checklist skip for the missing architecture. Routine Linux smoke skips are acceptable when no Linux host is part of the release session, but the skip should remain explicit in the checklist.
+Use the jDeploy package as the default Linux desktop distribution path. The desktop app has been demonstrated to install and run on Linux. The pinned Linux workflow installs and probes candidates on native GitHub-hosted x64 and ARM64 runners and supports a tag-specific retrospective ARM64 installer probe. For release validation, record those exact-commit or exact-tag results; if a required run is unavailable, record an approved checklist skip with the concrete reason and requester.
 
 ## Android Signed Bundles
 
