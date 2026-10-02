@@ -133,16 +133,14 @@ jobs:
             throw "Expected a release tag such as v2.0.24."
           }
           $installer = Get-ChildItem release-assets -File -Filter '*.exe' | Select-Object -First 1
-          foreach ($arguments in @('--jdeploy:update', '--jdeploy:command=install')) {
-            $process = Start-Process -FilePath $installer.FullName -ArgumentList $arguments -Wait -PassThru
-            if ($process.ExitCode -ne 0) {
-              Get-ChildItem "$HOME\.jdeploy\log" -File -Recurse -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                  Write-Host "===== $($_.FullName) ====="
-                  Get-Content $_.FullName -Tail 200
-                }
-              throw "Installer command $arguments exited $($process.ExitCode)."
-            }
+          # Exercise the published installer itself rather than replacing its bootstrap first.
+          $process = Start-Process `
+            -FilePath $installer.FullName `
+            -ArgumentList '--jdeploy:command=install' `
+            -Wait `
+            -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Installer exited $($process.ExitCode)."
           }
           $packageVersion = $env:RELEASE_TAG.Substring(1)
           node scripts/jdeploy-local-smoke.mjs `
