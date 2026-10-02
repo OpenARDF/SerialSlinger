@@ -1,7 +1,12 @@
-name: Linux x64 installed desktop smoke
+name: Linux installed desktop smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional published release tag to install and probe on ARM64
+        required: false
+        type: string
   pull_request:
     branches: [main, Development_Android]
     paths:
@@ -37,8 +42,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  installed-smoke:
-    name: Install and probe the jDeploy app
+  x64-installed-smoke:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == ''
+    name: Install and probe the jDeploy app (x64)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -64,6 +70,77 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-x64-installed-smoke-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ env.HOME }}/.jdeploy/log/**
+            ${{ env.HOME }}/.local/state/SerialSlinger/logs/**
+            shared/build/reports/**
+
+  arm64-installed-smoke:
+    name: Install and probe the jDeploy app (ARM64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - name: Set the checkout initialization branch
+        run: git config --global init.defaultBranch main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == ''
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Require a native ARM64 runner
+        run: test "$(uname -m)" = "aarch64"
+      - name: Install npm dependencies
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == ''
+        run: npm ci
+      - name: Install and probe the candidate through jDeploy
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == ''
+        # Keep a display available if initialization reaches AWT before the smoke hook exits.
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" npm run jdeploy:local-smoke
+      - name: Download the published ARM64 installer
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'SerialSlinger.Installer-linux-arm64-*.tar.gz' \
+            --dir release-assets
+          test "$(find release-assets -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 1
+          mkdir -p release-assets/installer
+          tar -xzf release-assets/*.tar.gz -C release-assets/installer
+          test "$(find release-assets/installer -maxdepth 1 -type f | wc -l)" -eq 1
+      - name: Install and probe the published ARM64 release
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a release tag such as v2.0.24" >&2
+            exit 1
+          fi
+          installer="$(find release-assets/installer -maxdepth 1 -type f)"
+          chmod 0755 "$installer"
+          "$installer" --jdeploy:update
+          "$installer" --jdeploy:command=install
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \
+            node scripts/jdeploy-local-smoke.mjs --probe-only "${RELEASE_TAG#v}"
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-arm64-installed-smoke-diagnostics
           if-no-files-found: warn
           retention-days: 7
           path: |

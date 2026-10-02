@@ -74,9 +74,28 @@ function runInstalledProbe(installPath, evidencePath) {
   }
 }
 
+export function parseSmokeArguments(args) {
+  if (args.length === 0) {
+    return { probeOnlyVersion: null };
+  }
+  if (args.length === 2 && args[0] === "--probe-only" && /^\d+\.\d+\.\d+$/.test(args[1])) {
+    return { probeOnlyVersion: args[1] };
+  }
+  throw new Error("Usage: jdeploy-local-smoke.mjs [--probe-only <major.minor.patch>]");
+}
+
 function main() {
-  run(npmCommand(), ["run", "jdeploy:install-local"]);
-  run(npmCommand(), ["run", "jdeploy:verify-install"]);
+  let options;
+  try {
+    options = parseSmokeArguments(process.argv.slice(2));
+  } catch (error) {
+    fail(error.message);
+  }
+
+  if (options.probeOnlyVersion == null) {
+    run(npmCommand(), ["run", "jdeploy:install-local"]);
+    run(npmCommand(), ["run", "jdeploy:verify-install"]);
+  }
 
   const installPath = localInstallPath();
   if (installPath == null) {
@@ -91,9 +110,10 @@ function main() {
   rmSync(evidencePath, { force: true });
   try {
     runInstalledProbe(installPath, evidencePath);
-    const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-    validateEvidence(evidencePath, packageJson.version);
-    console.log(`SerialSlinger installed-package smoke passed for ${packageJson.version}.`);
+    const expectedPackageVersion = options.probeOnlyVersion
+      ?? JSON.parse(readFileSync("package.json", "utf8")).version;
+    validateEvidence(evidencePath, expectedPackageVersion);
+    console.log(`SerialSlinger installed-package smoke passed for ${expectedPackageVersion}.`);
   } catch (error) {
     fail(error.message);
   } finally {

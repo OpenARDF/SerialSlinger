@@ -1,7 +1,12 @@
-name: Windows x64 installed desktop smoke
+name: Windows installed desktop smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional published release tag to install and probe on ARM64
+        required: false
+        type: string
   pull_request:
     branches: [main, Development_Android]
     paths:
@@ -39,8 +44,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  installed-smoke:
-    name: Install and probe the jDeploy app
+  x64-installed-smoke:
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == ''
+    name: Install and probe the jDeploy app (x64)
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -69,5 +75,82 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: |
+            ${{ env.APPDATA }}\SerialSlinger\logs\**
+            shared\build\reports\**
+
+  arm64-installed-smoke:
+    name: Install and probe the jDeploy app (ARM64)
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == ''
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Require a native ARM64 runner
+        shell: pwsh
+        run: |
+          if ((node -p process.arch) -ne "arm64") {
+            throw "Expected an ARM64 Node process on the native ARM64 runner."
+          }
+      - name: Install npm dependencies
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == ''
+        run: npm ci
+      - name: Install and probe the candidate through jDeploy
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == ''
+        run: npm run jdeploy:local-smoke
+      - name: Download the published ARM64 installer
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          New-Item -ItemType Directory -Path release-assets | Out-Null
+          gh release download $env:RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern 'SerialSlinger.Installer-win-arm64-*.exe' `
+            --dir release-assets
+          $installers = @(Get-ChildItem release-assets -File -Filter '*.exe')
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows ARM64 installer, found $($installers.Count)."
+          }
+      - name: Install and probe the published ARM64 release
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Expected a release tag such as v2.0.24."
+          }
+          $installer = Get-ChildItem release-assets -File -Filter '*.exe' | Select-Object -First 1
+          foreach ($arguments in @('--jdeploy:update', '--jdeploy:command=install')) {
+            $process = Start-Process -FilePath $installer.FullName -ArgumentList $arguments -Wait -PassThru
+            if ($process.ExitCode -ne 0) {
+              throw "Installer command $arguments exited $($process.ExitCode)."
+            }
+          }
+          $packageVersion = $env:RELEASE_TAG.Substring(1)
+          node scripts/jdeploy-local-smoke.mjs --probe-only $packageVersion
+      - name: Stop Gradle before saving the setup cache
+        if: always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.release_tag == '')
+        run: .\gradlew.bat --stop
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-arm64-installed-smoke-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ env.HOME }}\.jdeploy\log\**
             ${{ env.APPDATA }}\SerialSlinger\logs\**
             shared\build\reports\**

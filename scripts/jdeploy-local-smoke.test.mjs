@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { localInstallPath, validateEvidence } from "./jdeploy-local-smoke.mjs";
+import {
+  localInstallPath,
+  parseSmokeArguments,
+  validateEvidence
+} from "./jdeploy-local-smoke.mjs";
 
 test("resolves native jDeploy launcher paths on supported platforms", () => {
   const home = join("", "test-home");
@@ -38,4 +42,14 @@ test("validates evidence from the installed application main class", () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("parses the release-installed probe-only mode conservatively", () => {
+  assert.deepEqual(parseSmokeArguments([]), { probeOnlyVersion: null });
+  assert.deepEqual(parseSmokeArguments(["--probe-only", "2.0.24"]), {
+    probeOnlyVersion: "2.0.24"
+  });
+  assert.throws(() => parseSmokeArguments(["--probe-only"]), /Usage:/);
+  assert.throws(() => parseSmokeArguments(["--probe-only", "v2.0.24"]), /Usage:/);
+  assert.throws(() => parseSmokeArguments(["--unexpected", "2.0.24"]), /Usage:/);
 });
