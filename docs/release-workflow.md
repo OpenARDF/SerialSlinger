@@ -7,6 +7,15 @@ assume the repository root unless stated otherwise.
 
 - `main` is the stable release branch.
 - `Development1` is the active development branch.
+- Start each development slice from a clean, synchronized `Development1` on a
+  focused `codex/<feature>` topic branch. Merge the topic branch back through a
+  pull request after the required build-and-test gate passes; formal approving
+  reviews are optional for the single-maintainer workflow.
+- Protected branches require linear history and reject force pushes and
+  deletion. GitHub automatically deletes merged remote topic branches.
+- The exact-history synchronization required by a full release is the only
+  direct-push exception for `Development1`; the controlled procedure below
+  temporarily relaxes and immediately restores its pull-request gates.
 - A full deployment synchronizes `main` and `Development1` to the same final
   release-evidence commit, then leaves `Development1` checked out.
 - Before making release changes, confirm the current branch and working tree.
@@ -119,8 +128,11 @@ just release-notes-check docs/release-checklist-X.Y.Z.json
 just release-checklist docs/release-checklist-X.Y.Z.json pre-tag
 ```
 
-9. Commit the release candidate on `Development1`, fast-forward `main`,
-   record the main-sync evidence, and commit that evidence on `main`.
+9. Prepare the release candidate on a focused `codex/release-X.Y.Z` topic
+   branch, open a pull request into `Development1`, and squash-merge it after
+   the required build-and-test gate passes. Fast-forward `main` to the merged
+   candidate, record the main-sync evidence, and commit that evidence on
+   `main`.
 10. Set the checklist `sourceCommit` to the verified main-sync commit and commit
    only that checklist update. Create the annotated tag at this checklist-only
    child commit. The hosted workflow requires `sourceCommit` to equal the tagged
@@ -146,8 +158,12 @@ curl -L -I https://github.com/OpenARDF/SerialSlinger/releases/download/vX.Y.Z/se
 ```
 
 13. Record final checklist evidence, run the final checklist guard, commit the
-    post-tag evidence update, push `main`, fast-forward `Development1` to the
-    same commit, push it, and leave `Development1` checked out.
+    post-tag evidence update, and push `main`. To retain the exact tag and
+    evidence commits on both long-lived branches, temporarily suspend only
+    `Development1`'s required-pull-request and required-status-check settings,
+    fast-forward it to `main`, and push it. Immediately restore and read back
+    those settings, confirm force pushes and deletion remain disabled, and
+    leave `Development1` checked out.
 
 ## Publication Notes
 
