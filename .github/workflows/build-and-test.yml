@@ -43,7 +43,8 @@ jobs:
           android sdk install platform-tools platforms/android-37.0
       - name: Install pinned static-analysis tools
         run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          # v1.7.12 recognizes the pinned macOS 26 GitHub-hosted runner.
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           go install mvdan.cc/sh/v3/cmd/shfmt@v3.12.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Audit npm dependencies
