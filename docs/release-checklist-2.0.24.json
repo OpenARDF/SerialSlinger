@@ -4,7 +4,7 @@
   "previousRelease": "v2.0.23",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "",
+  "sourceCommit": "3c1ed0a47ce0d8263c100f22907ca84cf66618e1",
   "version": "2.0.24",
   "androidVersionCode": "32",
   "releaseNotesFile": "docs/release-notes/v2.0.24.md",
