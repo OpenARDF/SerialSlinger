@@ -80,7 +80,7 @@ SerialSlinger:
 - [Linux ARM64 candidate passes](https://github.com/OpenARDF/SerialSlinger/actions/runs/36952152109)
 - [Published Linux ARM64 v2.0.24 installer passes](https://github.com/OpenARDF/SerialSlinger/actions/runs/36952163814)
 - [Published Windows ARM64 v2.0.24 installer fails during `--jdeploy:update`](https://github.com/OpenARDF/SerialSlinger/actions/runs/36952166643)
-- [Retrospective verification record](https://github.com/OpenARDF/SerialSlinger/blob/Development_Android/docs/release-verification-2.0.24-arm64.md)
+- [Retrospective verification record](https://github.com/OpenARDF/SerialSlinger/blob/main/docs/release-verification-2.0.24-arm64.md)
 
 The exact-release workflows select one matching published installer and do not fall back to candidate evidence.
 

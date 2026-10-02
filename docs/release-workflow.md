@@ -6,9 +6,9 @@ assume the repository root unless stated otherwise.
 ## Branch Roles
 
 - `main` is the stable release branch.
-- `Development_Android` is the active development branch.
-- A full deployment synchronizes `main` and `Development_Android` to the same
-  final release-evidence commit, then leaves `Development_Android` checked out.
+- `Development1` is the active development branch.
+- A full deployment synchronizes `main` and `Development1` to the same final
+  release-evidence commit, then leaves `Development1` checked out.
 - Before making release changes, confirm the current branch and working tree.
   Existing unrelated changes must be intentionally excluded from the release.
 
@@ -63,7 +63,7 @@ just release-checklist docs/release-checklist-X.Y.Z.json final
 git status --short --branch
 git fetch origin --prune --tags
 gh release list --limit 5
-git rev-list --left-right --count main...Development_Android
+git rev-list --left-right --count main...Development1
 ```
 
 2. Prepare the next plain patch version and increment Android `versionCode`.
@@ -119,7 +119,7 @@ just release-notes-check docs/release-checklist-X.Y.Z.json
 just release-checklist docs/release-checklist-X.Y.Z.json pre-tag
 ```
 
-9. Commit the release candidate on `Development_Android`, fast-forward `main`,
+9. Commit the release candidate on `Development1`, fast-forward `main`,
    record the main-sync evidence, and commit that evidence on `main`.
 10. Set the checklist `sourceCommit` to the verified main-sync commit and commit
    only that checklist update. Create the annotated tag at this checklist-only
@@ -146,8 +146,8 @@ curl -L -I https://github.com/OpenARDF/SerialSlinger/releases/download/vX.Y.Z/se
 ```
 
 13. Record final checklist evidence, run the final checklist guard, commit the
-    post-tag evidence update, push `main`, fast-forward `Development_Android` to
-    the same commit, push it, and leave `Development_Android` checked out.
+    post-tag evidence update, push `main`, fast-forward `Development1` to the
+    same commit, push it, and leave `Development1` checked out.
 
 ## Publication Notes
 

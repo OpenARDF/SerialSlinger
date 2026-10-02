@@ -3,9 +3,9 @@ name: Build and test
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main, Development_Android]
+    branches: [main, Development1]
   push:
-    branches: [Development_Android]
+    branches: [Development1]
 
 permissions:
   contents: read

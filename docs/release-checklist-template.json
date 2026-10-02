@@ -179,7 +179,7 @@
     },
     {
       "id": "final-checklist-audit",
-      "description": "Run the final checklist guard, commit the post-tag evidence update, and synchronize main and Development_Android without moving the tag.",
+      "description": "Run the final checklist guard, commit the post-tag evidence update, and synchronize main and Development1 without moving the tag.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",

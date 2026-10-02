@@ -8,7 +8,7 @@ on:
         required: false
         type: string
   pull_request:
-    branches: [main, Development_Android]
+    branches: [main, Development1]
     paths:
       - ".github/workflows/linux-desktop-smoke.yml"
       - "build.gradle.kts"
@@ -21,7 +21,7 @@ on:
       - "settings.gradle.kts"
       - "shared/**"
   push:
-    branches: [Development_Android]
+    branches: [Development1]
     paths:
       - ".github/workflows/linux-desktop-smoke.yml"
       - "build.gradle.kts"

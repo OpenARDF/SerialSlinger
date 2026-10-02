@@ -30,7 +30,7 @@ on:
       - "scripts/check-android-native-compatibility.mjs"
       - "scripts/check-android-native-compatibility.test.mjs"
   push:
-    branches: [Development_Android]
+    branches: [Development1]
     paths:
       - ".github/workflows/android-native-compatibility.yml"
       - "androidApp/build.gradle.kts"
