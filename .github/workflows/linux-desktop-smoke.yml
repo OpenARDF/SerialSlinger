@@ -132,7 +132,8 @@ jobs:
           fi
           installer="$(find release-assets/installer -maxdepth 1 -type f)"
           chmod 0755 "$installer"
-          # Exercise the published installer itself rather than replacing its bootstrap first.
+          # Public jDeploy installers bootstrap their installer package before installing the app.
+          "$installer" --jdeploy:update
           "$installer" --jdeploy:command=install
           xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" \
             node scripts/jdeploy-local-smoke.mjs \
