@@ -148,8 +148,8 @@
     {
       "id": "merged-to-main",
       "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Fast-forwarded main from the previously published v2.0.23 line to validated release-candidate commit cd603586b310fbe763d229ba90348594f24306dc on 2026-10-01; no merge commit or content changes were introduced.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
