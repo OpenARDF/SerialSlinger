@@ -12,7 +12,7 @@ internal class DesktopSessionHistoryView(onDetails: () -> Unit) {
     }
     val details = JButton("View details...").apply { addActionListener { onDetails() } }
     val panel = JPanel(BorderLayout()).apply {
-        add(JScrollPane(summary), BorderLayout.CENTER)
+        add(DesktopNestedScrollPane(summary), BorderLayout.CENTER)
         add(details, BorderLayout.SOUTH)
     }
 

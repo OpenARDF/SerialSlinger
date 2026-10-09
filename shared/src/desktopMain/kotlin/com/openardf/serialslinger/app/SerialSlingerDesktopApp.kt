@@ -2122,7 +2122,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                     row = addRow(section, row, "Event Status", buildEventStatusRow())
                     row = addRow(section, row, lastsRowLabel, lastsField)
                     row = addRow(section, row, daysToRunRowLabel, buildDaysToRunRow())
-                    row = addRow(section, row, "Schedule dates", JScrollPane(scheduleSummaryArea))
+                    row = addRow(section, row, "Schedule dates", DesktopNestedScrollPane(scheduleSummaryArea))
                     row = addRow(section, row, frequency1Label, frequency1Field)
                     row = addRow(section, row, frequency2Label, frequency2Field)
                     row = addRow(section, row, frequency3Label, frequency3Field)

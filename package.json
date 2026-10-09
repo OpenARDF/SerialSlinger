@@ -1,6 +1,6 @@
 {
   "name": "serialslinger",
-  "version": "2.0.24",
+  "version": "2.0.24-a",
   "description": "Desktop configuration tool for SignalSlinger devices.",
   "author": "OpenARDF",
   "homepage": "https://github.com/OpenARDF/SerialSlinger",
@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "node-fetch": "^2.7.0",
-    "shelljs": "^0.10.0",
+    "shelljs": "0.8.5",
     "tar": "^7.5.22",
     "yauzl": "^3.3.2"
   },
