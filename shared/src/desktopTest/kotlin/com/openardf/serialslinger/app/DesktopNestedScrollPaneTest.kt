@@ -34,11 +34,16 @@ class DesktopNestedScrollPaneTest {
             val parent = JScrollPane(JPanel().apply { add(nested) })
             nested.verticalScrollBar.model = DefaultBoundedRangeModel(0, 10, 0, 100)
             var forwardedRotation = 0.0
-            parent.addMouseWheelListener { forwardedRotation = it.preciseWheelRotation }
+            var forwardedWheelRotation = 0
+            parent.addMouseWheelListener {
+                forwardedRotation = it.preciseWheelRotation
+                forwardedWheelRotation = it.wheelRotation
+            }
 
             nested.dispatchEvent(wheelEvent(nested, rotation = -0.75))
 
             assertEquals(-0.75, forwardedRotation)
+            assertEquals(-1, forwardedWheelRotation)
         }
     }
 

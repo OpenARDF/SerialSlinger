@@ -24,7 +24,11 @@ internal class DesktopNestedScrollPane(view: Component) : JScrollPane(view) {
             return
         }
 
-        // Preserve the precise rotation so macOS trackpad momentum continues naturally in the form.
+        // Swing ignores wheel events whose integer rotation is zero, which occurs for fractional
+        // macOS trackpad deltas. Preserve the precise delta while supplying its direction to Swing.
+        val forwardedWheelRotation =
+            event.wheelRotation.takeIf { it != 0 }
+                ?: if (event.preciseWheelRotation > 0.0) 1 else -1
         val point = SwingUtilities.convertPoint(this, event.point, ancestor)
         ancestor.dispatchEvent(
             MouseWheelEvent(
@@ -40,7 +44,7 @@ internal class DesktopNestedScrollPane(view: Component) : JScrollPane(view) {
                 event.isPopupTrigger,
                 event.scrollType,
                 event.scrollAmount,
-                event.wheelRotation,
+                forwardedWheelRotation,
                 event.preciseWheelRotation,
             ),
         )
