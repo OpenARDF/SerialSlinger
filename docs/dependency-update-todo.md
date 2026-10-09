@@ -2,17 +2,19 @@
 
 ## jDeploy installer-tool warnings
 
-jDeploy 6.1.7 still installs its own `shelljs` 0.8 dependency, which brings the deprecated
-`glob` 7 and `inflight` packages into the development-only installer toolchain. SerialSlinger uses
-the maintained direct `shelljs` 0.10 launcher dependency, overrides nested `brace-expansion` with
-patched 1.1.21, bundles the runtime launcher dependencies, and requires `npm audit` to report zero
-known vulnerabilities.
+jDeploy 6.1.7 installs `shelljs` 0.8, which brings the deprecated `glob` 7 and `inflight`
+packages into the installer toolchain. SerialSlinger also pins its bundled launcher dependency to
+`shelljs` 0.8.5 because `shelljs` 0.10 pulls in `braces` 3.0.3 through `fast-glob` and `micromatch`,
+and every available `braces` release is affected by GHSA-vfj7-8cjw-p6xm with no patched release.
+The project overrides nested `brace-expansion` with patched 1.1.21 and requires `npm audit` to
+report zero known vulnerabilities.
 
 This is a narrow waiver for npm's `glob` and `inflight` deprecation notices while they remain
-transitive dependencies of the pinned jDeploy CLI. Do not force an incompatible dependency
-override that makes the npm tree invalid. Recheck this waiver whenever jDeploy changes or during
-each release dependency review, and remove it when upstream no longer requires those packages.
-The local release gate and both hosted build and publication workflows still require
+dependencies of the pinned jDeploy CLI and the security-pinned launcher. Do not force an
+incompatible dependency override that makes the npm tree invalid. Recheck this waiver whenever
+jDeploy, `shelljs`, or `braces` changes and during each release dependency review; return the
+launcher to a maintained `shelljs` release as soon as its dependency chain is patched. The local
+release gate and both hosted build and publication workflows still require
 `npm audit --audit-level=low` to report zero known vulnerabilities.
 
 ## Kotlin metadata configuration advisory
