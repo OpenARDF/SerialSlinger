@@ -107,6 +107,25 @@ class ScheduleSubmitSupportTest {
     }
 
     @Test
+    fun `absolute duration edit moves expired start before deriving nine hour finish`() {
+        val request = ScheduleSubmitSupport.absoluteDurationEdit(
+            currentSettings = sampleSettings().copy(
+                currentTimeCompact = "261011160200",
+                startTimeCompact = "260928090000",
+                finishTimeCompact = "260928170000",
+                daysToRun = 2,
+            ),
+            requestedDuration = java.time.Duration.ofHours(9),
+            requestedDaysToRun = 3,
+        )
+
+        assertEquals("261011160500", request.startTimeCompact)
+        assertEquals("261012010500", request.finishTimeCompact)
+        assertEquals(3, request.requestedDaysToRun)
+        assertEquals(setOf(SettingKey.DAYS_TO_RUN), request.forceWriteKeys)
+    }
+
+    @Test
     fun `absolute finish edit with duration override delegates to duration edit`() {
         val request = ScheduleSubmitSupport.absoluteFinishEditWithDurationOverride(
             currentSettings = sampleSettings().copy(

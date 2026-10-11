@@ -4499,6 +4499,7 @@ object AndroidSessionController {
         context: Context,
         finishTimeInput: String,
         requestedDaysToRun: Int? = null,
+        requestedDurationOverride: Duration? = null,
         requestedDeviceName: String? = null,
         source: String = "ui",
         onComplete: ((Result<DeviceSubmitResult>) -> Unit)? = null,
@@ -4570,9 +4571,12 @@ object AndroidSessionController {
                     val scheduleBaseSettings = synchronized(this) {
                         settingsWithDisplayedDeviceTimeIfNeededLocked(snapshot.settings)
                     }
-                    val editRequest = ScheduleSubmitSupport.absoluteFinishEdit(
+                    // A duration must be resolved from the same current-time snapshot used
+                    // for submission so crossing a five-minute boundary cannot shorten it.
+                    val editRequest = ScheduleSubmitSupport.absoluteFinishEditWithDurationOverride(
                         currentSettings = scheduleBaseSettings,
                         normalizedFinishTime = normalizedFinishTime,
+                        requestedDurationOverride = requestedDurationOverride,
                         requestedDaysToRun = requestedDaysToRun,
                     )
                     if (
@@ -4613,9 +4617,28 @@ object AndroidSessionController {
                     val wasNoOp = submitResult.wasNoOp()
                     val scheduleImpact = summarizeScheduleImpact(snapshot.settings, submitResult.state.snapshot?.settings, SettingKey.FINISH_TIME)
                     if (verificationFailure) {
+                        val reconciledViewState = AndroidSubmitReadbackSupport.reconciledViewState(snapshot.info, submitResult)
+                        if (reconciledViewState != null) {
+                            latestSessionViewState = reconciledViewState
+                            resolvedTarget?.let(::rememberLoadedTargetLocked)
+                            // A failed verification can still mean that firmware applied a
+                            // different value. Show that readback without changing the clone template.
+                            applySnapshotDrafts(reconciledViewState.state.snapshot, refreshClockDisplayAnchor = false)
+                            timeWorkflowNotice = scheduleImpact.noticeText
+                        }
                         latestSubmitSummary = renderSubmitFailureSummary(submitResult)
-                        latestProbeSummary = "Latest load remains available above. Finish Time submission failed verification."
-                        statusText = "Finish Time update failed verification."
+                        latestProbeSummary =
+                            if (reconciledViewState == null) {
+                                "Latest load remains available above. Finish Time submission failed verification."
+                            } else {
+                                "Finish Time submission failed verification. Displayed device data was refreshed from readback."
+                            }
+                        statusText =
+                            if (reconciledViewState == null) {
+                                "Finish Time update failed verification."
+                            } else {
+                                "Finish Time did not match the request; device data was refreshed."
+                            }
                         statusIsError = true
                         clearScheduleDerivedDataPendingLocked()
                         callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
@@ -4706,6 +4729,7 @@ object AndroidSessionController {
             context = context,
             finishTimeInput = normalizedFinishTime,
             requestedDaysToRun = requestedDaysToRun,
+            requestedDurationOverride = requestedDuration,
             requestedDeviceName = requestedDeviceName,
             source = "set-lasts",
             onComplete = onComplete,
