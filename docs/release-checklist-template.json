@@ -147,7 +147,7 @@
     },
     {
       "id": "merged-to-main",
-      "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
+      "description": "Squash-merge the verified release candidate pull request into protected Development1, fast-forward main to that exact candidate before tagging, and record both commits.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -155,7 +155,7 @@
     },
     {
       "id": "tag-pushed",
-      "description": "Create and push the annotated vX.Y.Z release tag at the verified main release commit.",
+      "description": "Squash-merge the checklist-only tag-evidence pull request into protected Development1, verify its sole parent and changed file, fast-forward main, then create and push the annotated vX.Y.Z tag.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
@@ -179,7 +179,7 @@
     },
     {
       "id": "final-checklist-audit",
-      "description": "Run the final checklist guard, commit the post-tag evidence update, and synchronize main and Development1 without moving the tag.",
+      "description": "Run the final checklist guard on the post-release evidence update prepared as a protected pull request into Development1 without moving the tag.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
