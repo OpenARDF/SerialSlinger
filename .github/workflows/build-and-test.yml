@@ -69,6 +69,7 @@ jobs:
             scripts/check-android-instrumentation-results.test.mjs \
             scripts/check-release-checklist.test.mjs \
             scripts/check-release-tag.test.mjs \
+            scripts/check-release-workflow.test.mjs \
             scripts/jdeploy-local-smoke.test.mjs \
             scripts/prepare-jdeploy-github-release.test.mjs \
             scripts/publish-jdeploy-github-release.test.mjs

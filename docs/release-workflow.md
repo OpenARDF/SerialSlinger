@@ -169,11 +169,12 @@ curl -L -I https://github.com/OpenARDF/SerialSlinger/releases/download/vX.Y.Z/se
 ```
 
 13. Create a post-release evidence topic branch from `Development1`. Record the
-    workflow and release-verification evidence, mark the final checklist audit,
-    and run the final checklist guard. Open a pull request into `Development1`
-    and squash-merge it after the required gate passes. Fast-forward `main`
-    from `Development1`, push `main`, and verify the remote branch tips are
-    identical without moving the tag. Leave `Development1` checked out:
+    completed tag push under `tag-pushed`, record the workflow and
+    release-verification evidence, mark the final checklist audit, and run the
+    final checklist guard. Open a pull request into `Development1` and
+    squash-merge it after the required gate passes. Fast-forward `main` from
+    `Development1`, push `main`, and verify the remote branch tips are identical
+    without moving the tag. Leave `Development1` checked out:
 
 ```sh
 git switch main

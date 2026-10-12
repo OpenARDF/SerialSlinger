@@ -6,6 +6,7 @@ import test from "node:test";
 
 const releaseWorkflow = readFileSync("docs/release-workflow.md", "utf8");
 const packagingWorkflow = readFileSync("docs/packaging-and-release.md", "utf8");
+const buildAndTestWorkflow = readFileSync(".github/workflows/build-and-test.yml", "utf8");
 const checklistTemplate = JSON.parse(readFileSync("docs/release-checklist-template.json", "utf8"));
 
 function checklistDescription(id) {
@@ -24,7 +25,12 @@ test("release instructions preserve protected Development1 history", () => {
   assert.match(releaseWorkflow, /Keep `Development1` protections enabled throughout a release\./u);
   assert.match(releaseWorkflow, /Do not commit release evidence directly on `main`\./u);
   assert.match(releaseWorkflow, /post-release evidence topic branch from `Development1`/u);
+  assert.match(releaseWorkflow, /completed tag push under `tag-pushed`/u);
   assert.match(releaseWorkflow, /git merge --ff-only Development1/u);
+});
+
+test("required CI exercises the release workflow policy", () => {
+  assert.match(buildAndTestWorkflow, /scripts\/check-release-workflow\.test\.mjs/u);
 });
 
 test("release checklist requires protected pull-request evidence", () => {
