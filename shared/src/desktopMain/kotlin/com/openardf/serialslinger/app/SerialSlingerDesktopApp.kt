@@ -2589,11 +2589,18 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         }
     }
 
-    private fun updateHardwareFaultWarning(snapshot: DeviceSnapshot?) {
+    private fun updateHardwareFaultWarning(
+        snapshot: DeviceSnapshot?,
+        isBusy: Boolean = backgroundWorkInProgress,
+    ) {
         val faults = snapshot?.status?.hardwareFaults.orEmpty()
         hardwareFaultWarningPanel.isVisible = faults.isNotEmpty()
         hardwareFaultWarningText.text = if (faults.isEmpty()) "" else HardwareFaultPresentation.summary(faults)
-        clearHardwareFaultsButton.isEnabled = faults.isNotEmpty() && !backgroundWorkInProgress && currentTransport != null
+        clearHardwareFaultsButton.isEnabled = DesktopAutomaticWorkPolicy.hardwareFaultClearEnabled(
+            hasFaults = faults.isNotEmpty(),
+            isBusy = isBusy,
+            transportAvailable = currentTransport != null,
+        )
         hardwareFaultWarningPanel.revalidate()
         hardwareFaultWarningPanel.repaint()
     }
@@ -10953,6 +10960,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             updateDisplayedClockFields()
         }
         updateCloneWorkflowControls(isBusy)
+        updateHardwareFaultWarning(loadedSnapshot, isBusy)
         updateApplyButtonState()
     }
 

@@ -74,7 +74,7 @@ class FirmwareSettingsBackupStoreTest {
             assertTrue(file.renameTo(interruptedPrevious))
             store.save(replacementSnapshot, "2.1.1")
             val retained = store.load(file)
-            assertEquals("W8UM", retained.settings.stationId)
+            assertEquals("SHOULD-NOT-REPLACE", retained.settings.stationId)
             assertEquals("2.1.1", retained.targetVersion)
             assertFalse(interruptedPrevious.exists())
             store.delete(file)
@@ -87,12 +87,30 @@ class FirmwareSettingsBackupStoreTest {
     }
 
     @Test
+    fun createsAndDeletesBackupForFirmwareThatPredatesDeviceIdentity() {
+        val root = Files.createTempDirectory("firmware-backup-no-uid-test")
+        try {
+            val store = FirmwareSettingsBackupStore(root.toFile())
+            val file = store.save(snapshot(uid = null, version = "2.0.2"), "2.1.0")
+            val backup = store.load(file)
+
+            assertEquals("legacy-no-uid", backup.deviceUniqueId)
+            val updated = snapshot(version = "2.1.0")
+            backup.requireRestored(updated)
+            assertTrue(backup.canDeleteAfterSuccessfulVerification(updated))
+            store.delete(file)
+            assertFalse(root.toFile().exists())
+        } finally {
+            root.toFile().deleteRecursively()
+            root.deleteIfExists()
+        }
+    }
+
+    @Test
     fun rejectsWrongDeviceVersionSettingsAndCorruptBackups() {
         val root = Files.createTempDirectory("firmware-backup-negative-test")
         try {
             val store = FirmwareSettingsBackupStore(root.toFile())
-            assertFailsWith<IllegalArgumentException> { store.save(snapshot(uid = null), "2.1.0") }
-
             val file = store.save(snapshot(), "2.1.0")
             val backup = store.load(file)
             assertFailsWith<IllegalArgumentException> {
@@ -124,11 +142,13 @@ class FirmwareSettingsBackupStoreTest {
     }
 
     @Test
-    fun resumesUniquePendingBackupWhenOlderFirmwareDoesNotReportIdentity() {
+    fun reconcilesUniquePendingBackupWhenOlderFirmwareDoesNotReportIdentity() {
         val root = Files.createTempDirectory("firmware-backup-resume-test")
         try {
             val store = FirmwareSettingsBackupStore(root.toFile())
-            val original = snapshot(stationId = "NZ0I", version = "2.0.7")
+            val original = snapshot(stationId = "NZ0I", version = "2.0.7").copy(
+                settings = settings("NZ0I").copy(lowFrequencyHz = 3_510_000),
+            )
             val file = store.save(original, "2.0.2")
 
             val resumedFile = store.save(
@@ -141,7 +161,8 @@ class FirmwareSettingsBackupStoreTest {
             assertEquals(original.info.deviceUniqueId, resumed.deviceUniqueId)
             assertEquals("2.0.7", resumed.sourceVersion)
             assertEquals("2.0.7", resumed.targetVersion)
-            assertEquals("NZ0I", resumed.settings.stationId)
+            assertEquals("RESET", resumed.settings.stationId)
+            assertEquals(3_510_000L, resumed.settings.lowFrequencyHz)
         } finally {
             root.toFile().deleteRecursively()
             root.deleteIfExists()

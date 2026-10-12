@@ -15,6 +15,9 @@ data class FirmwareSettingsBackup(
     val thermalShutdownThresholdC: Int?,
     val thermalShutdownEnabled: Boolean?,
 ) {
+    private val hasReportedDeviceIdentity: Boolean
+        get() = !deviceUniqueId.startsWith(UNKNOWN_DEVICE_ID_PREFIX)
+
     fun settingsForRestore(current: DeviceSettings): DeviceSettings = settings.copy(
         foxRole = settings.foxRole ?: current.foxRole,
         arduconFoxRoleCode = settings.arduconFoxRoleCode ?: current.arduconFoxRoleCode,
@@ -35,7 +38,7 @@ data class FirmwareSettingsBackup(
     )
 
     fun requireMatches(snapshot: DeviceSnapshot) {
-        snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() }?.let { reportedUid ->
+        snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() && hasReportedDeviceIdentity }?.let { reportedUid ->
             require(reportedUid.equals(deviceUniqueId, ignoreCase = true)) {
                 "Updated SignalSlinger identity does not match the saved settings backup."
             }
@@ -55,13 +58,14 @@ data class FirmwareSettingsBackup(
     }
 
     /**
-     * A firmware that does not report the unit identity cannot prove which unit consumed this
-     * backup. Keep the tiny backup until a later verified update reports the identity again.
+     * Keep a known-identity backup while the target cannot report its identity. A backup created
+     * for pre-UID firmware has no identity claim to preserve and can be removed after verification.
      */
     fun canDeleteAfterSuccessfulVerification(snapshot: DeviceSnapshot): Boolean =
-        snapshot.info.deviceUniqueId
-            ?.takeIf { it.isNotBlank() }
-            ?.equals(deviceUniqueId, ignoreCase = true) == true
+        !hasReportedDeviceIdentity ||
+            snapshot.info.deviceUniqueId
+                ?.takeIf { it.isNotBlank() }
+                ?.equals(deviceUniqueId, ignoreCase = true) == true
 
     /**
      * Compares only values represented by this backup. Live clock data, fields absent from the
@@ -181,9 +185,10 @@ class FirmwareSettingsBackupStore(private val directory: File) {
         deleteOrphanedTemporaryFiles()
         val reportedUid = snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() }
         val resumed = if (reportedUid == null) uniquePendingBackupFor(snapshot) else null
-        val uid = requireNotNull(reportedUid ?: resumed?.second?.deviceUniqueId) {
-            "Cannot back up firmware settings without a device identity or a uniquely matching pending backup."
-        }
+        // Firmware 2.0.0-2.0.2 predates UID reporting. The reserved private token gives those
+        // updates an atomic replacement path without pretending that it is a hardware ID.
+        val uid = reportedUid ?: resumed?.second?.deviceUniqueId
+            ?: UNKNOWN_DEVICE_ID
         val target = resumed?.first ?: directory.resolve("${uid.lowercase()}.properties")
         val previous = directory.resolve("${target.name}.previous")
         if (!target.isFile && previous.isFile) {
@@ -191,12 +196,14 @@ class FirmwareSettingsBackupStore(private val directory: File) {
                 "Could not recover the previous firmware settings backup."
             }
         }
-        val backup = if (target.isFile) {
+        if (target.isFile && reportedUid != null) {
             val pending = load(target)
             require(pending.deviceUniqueId.equals(uid, ignoreCase = true)) {
                 "Pending firmware settings backup identity does not match the attached device."
             }
-            pending.copy(targetVersion = targetVersion)
+        }
+        val backup = if (resumed != null) {
+            resumed.second.reconciledWith(snapshot, targetVersion)
         } else {
             FirmwareSettingsBackup(
                 deviceUniqueId = uid,
@@ -229,6 +236,39 @@ class FirmwareSettingsBackupStore(private val directory: File) {
             "Could not remove the superseded firmware settings backup."
         }
         return target
+    }
+
+    /**
+     * A no-UID firmware can be the middle of a downgrade/upgrade sequence. Refresh every value
+     * it can report while retaining only fields absent from that legacy protocol.
+     */
+    private fun FirmwareSettingsBackup.reconciledWith(
+        snapshot: DeviceSnapshot,
+        targetVersion: String,
+    ): FirmwareSettingsBackup {
+        val current = snapshot.settings
+        val previous = settings
+        return copy(
+            targetVersion = targetVersion,
+            settings = current.copy(
+                foxRole = current.foxRole ?: previous.foxRole,
+                arduconFoxRoleCode = current.arduconFoxRoleCode ?: previous.arduconFoxRoleCode,
+                patternText = current.patternText ?: previous.patternText,
+                currentTimeCompact = null,
+                startTimeCompact = current.startTimeCompact ?: previous.startTimeCompact,
+                finishTimeCompact = current.finishTimeCompact ?: previous.finishTimeCompact,
+                lowFrequencyHz = current.lowFrequencyHz ?: previous.lowFrequencyHz,
+                mediumFrequencyHz = current.mediumFrequencyHz ?: previous.mediumFrequencyHz,
+                highFrequencyHz = current.highFrequencyHz ?: previous.highFrequencyHz,
+                beaconFrequencyHz = current.beaconFrequencyHz ?: previous.beaconFrequencyHz,
+                lowBatteryThresholdVolts = current.lowBatteryThresholdVolts ?: previous.lowBatteryThresholdVolts,
+                externalBatteryControlMode =
+                    current.externalBatteryControlMode ?: previous.externalBatteryControlMode,
+            ),
+            thermalShutdownThresholdC =
+                snapshot.status.thermalShutdownThresholdC?.toInt() ?: thermalShutdownThresholdC,
+            thermalShutdownEnabled = snapshot.status.thermalShutdownEnabled ?: thermalShutdownEnabled,
+        )
     }
 
     private fun uniquePendingBackupFor(snapshot: DeviceSnapshot): Pair<File, FirmwareSettingsBackup>? {
@@ -332,3 +372,6 @@ class FirmwareSettingsBackupStore(private val directory: File) {
         )
     }
 }
+
+private const val UNKNOWN_DEVICE_ID_PREFIX = "legacy-no-uid"
+private const val UNKNOWN_DEVICE_ID = UNKNOWN_DEVICE_ID_PREFIX

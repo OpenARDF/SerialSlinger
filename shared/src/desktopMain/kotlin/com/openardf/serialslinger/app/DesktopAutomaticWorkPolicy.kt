@@ -48,4 +48,10 @@ object DesktopAutomaticWorkPolicy {
             schedulingSupported &&
             syncNeeded &&
             !failureSuppressed
+
+    fun hardwareFaultClearEnabled(
+        hasFaults: Boolean,
+        isBusy: Boolean,
+        transportAvailable: Boolean,
+    ): Boolean = hasFaults && !isBusy && transportAvailable
 }
