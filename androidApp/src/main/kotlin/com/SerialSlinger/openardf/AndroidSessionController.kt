@@ -23,6 +23,7 @@ import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.FrequencyBankId
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FoxRole
+import com.openardf.serialslinger.model.FirmwareSettingsBackupStore
 import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.CloneTemplateEligibility
@@ -6081,6 +6082,7 @@ object AndroidSessionController {
                                 overrideBoard = overrideBoard,
                                 recoverAlreadyWaiting = recoverAlreadyWaiting,
                                 requestedVersion = requestedVersion?.trim()?.removePrefix("v")?.takeIf(String::isNotBlank),
+                                backupSnapshot = if (recoverAlreadyWaiting) null else snapshot,
                             ),
                         )
                     }
@@ -6112,6 +6114,9 @@ object AndroidSessionController {
                             overrideBoard = start.overrideBoard,
                         )
                     val downloadFailure = selection.downloadFailure
+                    val backupStore = FirmwareSettingsBackupStore(
+                        context.applicationContext.filesDir.resolve("firmware-settings-backups"),
+                    )
                     if (selection.source == SignalSlingerReleaseSelectionSource.RESIDENT && downloadFailure != null) {
                         val confirmed = confirmResidentFallback?.invoke(
                             selection.release.version,
@@ -6138,6 +6143,14 @@ object AndroidSessionController {
                     }
                     val usbDevice = resolveUsbDevice(usbManager, start.deviceName)
                         ?: error("SignalSlinger is no longer connected.")
+                    val backupFile = start.backupSnapshot?.let { snapshot ->
+                        backupStore.save(snapshot, selection.release.version).also {
+                            updateLog += AndroidLogEntry(
+                                "Saved a temporary settings backup before firmware update.",
+                                AndroidLogCategory.APP,
+                            )
+                        }
+                    }
                     updateLog += AndroidLogEntry(selection.message, AndroidLogCategory.APP)
                     selection.downloadFailure?.let { failure ->
                         updateLog += AndroidLogEntry("GitHub update check failed: $failure", AndroidLogCategory.APP)
@@ -6166,6 +6179,72 @@ object AndroidSessionController {
                             transport.disconnect()
                         }
                     }
+                    fun reloadRestoreAndVerify(): FirmwareUpdateReload? {
+                        val initial = reloadSignalSlingerAfterFirmwareUpdate(
+                            context = context,
+                            deviceName = start.deviceName,
+                            productLabel = "SignalSlinger",
+                            appBaudRate = signalSlingerAppBaudRate,
+                        ).onFailure { reloadFailure ->
+                            updateLog += AndroidLogEntry(
+                                "SignalSlinger update completed, but the visible device information could not be refreshed: " +
+                                    reloadFailure.message.orEmpty(),
+                                AndroidLogCategory.APP,
+                            )
+                        }.getOrNull()?.let { (reloadResult, clockAnchor) ->
+                            FirmwareUpdateReload(reloadResult, clockAnchor)
+                        } ?: return null
+                        val savedFile = backupFile ?: return initial
+                        val backup = backupStore.load(savedFile)
+                        val initialSnapshot = initial.result.state.snapshot
+                            ?: error("Updated SignalSlinger did not report settings.")
+                        backup.requireMatches(initialSnapshot)
+                        runWithResolvedTransport(
+                            context = context,
+                            requestedDeviceName = start.deviceName,
+                            requestedTarget = AndroidConnectionTarget.Usb(start.deviceName, signalSlingerAppBaudRate),
+                            allowUsbAutoDetect = false,
+                            missingMessage = "SignalSlinger is no longer connected.",
+                            verifyLoadedDeviceIdentity = false,
+                        ) { _, transport ->
+                            DeviceSessionController.submitEdits(
+                                state = initial.result.state,
+                                editedSettings = EditableDeviceSettings.fromDeviceSettings(
+                                    backup.settingsForRestore(initialSnapshot.settings),
+                                ),
+                                transport = transport,
+                            )
+                            val supplementalCommands = backup.supplementalRestoreCommands(initialSnapshot)
+                            if (supplementalCommands.isNotEmpty()) {
+                                transport.sendCommands(supplementalCommands)
+                                transport.readAvailableLines()
+                            }
+                            transport.sendCommands(listOf("RST"))
+                            runCatching { transport.readAvailableLines() }
+                        }.getOrThrow()
+                        updateLog += AndroidLogEntry(
+                            "Restored and read back the saved settings after EEPROM migration.",
+                            AndroidLogCategory.APP,
+                        )
+                        Thread.sleep(1_500)
+                        val verified = reloadSignalSlingerAfterFirmwareUpdate(
+                            context = context,
+                            deviceName = start.deviceName,
+                            productLabel = "SignalSlinger",
+                            appBaudRate = signalSlingerAppBaudRate,
+                        ).getOrThrow().let { (reloadResult, clockAnchor) ->
+                            FirmwareUpdateReload(reloadResult, clockAnchor)
+                        }
+                        val verifiedSnapshot = verified.result.state.snapshot
+                            ?: error("SignalSlinger did not reload after settings restore.")
+                        backup.requireRestored(verifiedSnapshot)
+                        backupStore.delete(savedFile)
+                        updateLog += AndroidLogEntry(
+                            "Verified restored settings after reboot and removed the temporary backup.",
+                            AndroidLogCategory.APP,
+                        )
+                        return verified
+                    }
                     try {
                         performSelectedUpdate(start.recoverAlreadyWaiting)
                     } catch (failure: Throwable) {
@@ -6187,20 +6266,7 @@ object AndroidSessionController {
                             )
                             return@runCatching FirmwareUpdateOutcome(
                                 release = selection.release,
-                                reloadResult = reloadSignalSlingerAfterFirmwareUpdate(
-                                    context = context,
-                                    deviceName = start.deviceName,
-                                    productLabel = "SignalSlinger",
-                                    appBaudRate = signalSlingerAppBaudRate,
-                                ).onFailure { reloadFailure ->
-                                    updateLog += AndroidLogEntry(
-                                        "SignalSlinger update completed, but the visible device information could not be refreshed: ${reloadFailure.message ?: reloadFailure::class.simpleName}",
-                                        AndroidLogCategory.APP,
-                                    )
-                                }.getOrNull()
-                                    ?.let { (reloadResult, clockAnchor) ->
-                                        FirmwareUpdateReload(reloadResult, clockAnchor)
-                                    },
+                                reloadResult = reloadRestoreAndVerify(),
                             )
                         }
                         if (
@@ -6218,20 +6284,7 @@ object AndroidSessionController {
                         )
                         performSelectedUpdate(recoverAlreadyWaitingForAttempt = true)
                     }
-                    val reloadResult = reloadSignalSlingerAfterFirmwareUpdate(
-                        context = context,
-                        deviceName = start.deviceName,
-                        productLabel = "SignalSlinger",
-                        appBaudRate = signalSlingerAppBaudRate,
-                    ).onFailure { failure ->
-                        updateLog += AndroidLogEntry(
-                            "SignalSlinger update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}",
-                            AndroidLogCategory.APP,
-                        )
-                    }.getOrNull()
-                        ?.let { (reloadResult, clockAnchor) ->
-                            FirmwareUpdateReload(reloadResult, clockAnchor)
-                        }
+                    val reloadResult = reloadRestoreAndVerify()
                     FirmwareUpdateOutcome(
                         release = selection.release,
                         reloadResult = reloadResult,
@@ -6889,6 +6942,7 @@ object AndroidSessionController {
         val overrideBoard: String?,
         val recoverAlreadyWaiting: Boolean,
         val requestedVersion: String?,
+        val backupSnapshot: DeviceSnapshot?,
     )
 
     private data class FirmwareUpdateOutcome(

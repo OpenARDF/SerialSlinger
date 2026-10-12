@@ -81,6 +81,7 @@ data class DeviceCapabilities(
     val supportsDaysToRun: Boolean = true,
     val supportsFrequencyProfiles: Boolean = false,
     val supportsFirmwareUpdate: Boolean = false,
+    val supportsHardwareFaultHistory: Boolean = false,
 )
 
 data class DeviceInfo(
@@ -118,6 +119,8 @@ data class DeviceStatus(
     val sessionReport: SessionReport? = null,
     val sessionHistoryDeviceUniqueId: String? = null,
     val sessionHistory: List<SessionHistoryRecord> = emptyList(),
+    val hardwareFaultDeviceUniqueId: String? = null,
+    val hardwareFaults: List<HardwareFaultRecord> = emptyList(),
     val lastCommunicationError: String? = null,
 )
 

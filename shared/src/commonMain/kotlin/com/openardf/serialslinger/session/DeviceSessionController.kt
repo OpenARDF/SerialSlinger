@@ -403,9 +403,12 @@ object DeviceSessionController {
 
         // A probe without a UID cannot establish ownership of history from an earlier load.
         updatedState.snapshot?.let { snapshot ->
-            if (snapshot.info.deviceUniqueId == null && snapshot.status.sessionHistoryDeviceUniqueId != null) {
+            if (snapshot.info.deviceUniqueId == null &&
+                (snapshot.status.sessionHistoryDeviceUniqueId != null || snapshot.status.hardwareFaultDeviceUniqueId != null)
+            ) {
                 updatedState = updatedState.copy(snapshot = snapshot.copy(status = snapshot.status.copy(
                     sessionReport = null, sessionHistory = emptyList(), sessionHistoryDeviceUniqueId = null,
+                    hardwareFaults = emptyList(), hardwareFaultDeviceUniqueId = null,
                 )))
             }
         }

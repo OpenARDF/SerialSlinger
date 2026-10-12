@@ -19,6 +19,8 @@ import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FirmwareUpdateOfferSupport
+import com.openardf.serialslinger.model.FirmwareSettingsBackupStore
+import com.openardf.serialslinger.model.HardwareFaultPresentation
 import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
 import com.openardf.serialslinger.model.MultiDayDurationGuardOption
 import com.openardf.serialslinger.model.MultiDayDurationGuardPlanner
@@ -799,6 +801,28 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         )
     }
     private val sessionStopArea = sessionHistoryView.summary
+    private val hardwareFaultWarningText = JTextArea(2, 32).apply {
+        isEditable = false
+        lineWrap = true
+        wrapStyleWord = true
+        foreground = Color(0x9E, 0x1C, 0x1C)
+        background = Color(0xFF, 0xEE, 0xEE)
+        font = font.deriveFont(java.awt.Font.BOLD)
+    }
+    private val clearHardwareFaultsButton = JButton(HardwareFaultPresentation.clearLabel).apply {
+        addActionListener { clearHardwareFaultHistory() }
+    }
+    private val hardwareFaultWarningPanel = JPanel(BorderLayout(12, 6)).apply {
+        alignmentX = Component.LEFT_ALIGNMENT
+        background = Color(0xFF, 0xEE, 0xEE)
+        border = BorderFactory.createTitledBorder(
+            BorderFactory.createLineBorder(Color(0xB9, 0x1C, 0x1C), 2),
+            HardwareFaultPresentation.title,
+        ).apply { titleColor = Color(0xB9, 0x1C, 0x1C) }
+        add(hardwareFaultWarningText, BorderLayout.CENTER)
+        add(clearHardwareFaultsButton, BorderLayout.EAST)
+        isVisible = false
+    }
 
     private val startsInField = JTextField()
     private val lastsField = JTextField()
@@ -2093,6 +2117,8 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = BorderFactory.createEmptyBorder(0, 0, 12, 0)
+            add(hardwareFaultWarningPanel)
+            add(Box.createVerticalStrut(12))
             add(buildSectionPanel(
                 title = "Device Settings",
                 helperText = "These settings are individual to each device. They are not applied when Clone is used.",
@@ -2556,6 +2582,41 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             null
         } else {
             "Remaining scheduled windows; elapsed windows do not prove completed sessions."
+        }
+    }
+
+    private fun updateHardwareFaultWarning(snapshot: DeviceSnapshot?) {
+        val faults = snapshot?.status?.hardwareFaults.orEmpty()
+        hardwareFaultWarningPanel.isVisible = faults.isNotEmpty()
+        hardwareFaultWarningText.text = if (faults.isEmpty()) "" else HardwareFaultPresentation.summary(faults)
+        clearHardwareFaultsButton.isEnabled = faults.isNotEmpty() && !backgroundWorkInProgress && currentTransport != null
+        hardwareFaultWarningPanel.revalidate()
+        hardwareFaultWarningPanel.repaint()
+    }
+
+    private fun clearHardwareFaultHistory() {
+        val transport = currentTransport ?: return
+        val state = currentState ?: return
+        val confirmation = JOptionPane.showConfirmDialog(
+            this,
+            HardwareFaultPresentation.clearConfirmation,
+            HardwareFaultPresentation.clearDialogTitle,
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (confirmation != JOptionPane.YES_OPTION) return
+
+        runInBackground("Clearing hardware failure log...") {
+            transport.sendCommands(listOf(HardwareFaultPresentation.clearCommand))
+            val responseLines = transport.readAvailableLines()
+            val nextState = DeviceSessionWorkflow.ingestReportLines(state, responseLines)
+            currentState = nextState
+            loadedSnapshot = nextState.snapshot
+            SwingUtilities.invokeLater {
+                applySnapshotToForm(nextState.snapshot, recalculateClockOffset = false)
+                val remaining = nextState.snapshot?.status?.hardwareFaults.orEmpty()
+                setStatus(if (remaining.isEmpty()) "Hardware failure log cleared." else "Active hardware failure remains recorded.")
+            }
         }
     }
 
@@ -6475,12 +6536,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun applySnapshotToForm(snapshot: DeviceSnapshot?, recalculateClockOffset: Boolean = true) {
         clearPendingImmediateEdit()
         if (snapshot == null) {
+            updateHardwareFaultWarning(null)
             updateProductSectionTitles(null)
             clearFormForUnread()
             return
         }
 
         updateProductSectionTitles(snapshot)
+        updateHardwareFaultWarning(snapshot)
         val settings = snapshot.settings
         val timedSettings = snapshot.settings
         val frequencies = FrequencySupport.describeFrequencies(settings)
@@ -9649,6 +9712,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         log("Preparing SignalSlinger update from ${manifestFile.name}.")
         val manifest = SignalSlingerFirmwareUpdate.parseReleaseInfo(Files.readString(manifestFile.toPath()))
+        val backupStore = FirmwareSettingsBackupStore(desktopFirmwareSettingsBackupDirectory())
         val updateFile = manifest.updateFile()
         val hexFile = manifestFile.parentFile.resolve(updateFile.fileName)
         require(hexFile.isFile) {
@@ -9659,6 +9723,14 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
         SignalSlingerFirmwareUpdate.verifyReleaseFileHash(updateFile, hexBytes)
         val hexText = hexBytes.decodeToString()
         log("Checked update file ${updateFile.fileName} (${hexBytes.size} bytes).")
+        val backupFile = if (!recoverAlreadyWaiting) {
+            backupStore.save(
+                requireNotNull(loadedSnapshot) { "Load SignalSlinger settings before updating firmware." },
+                manifest.version,
+            ).also { log("Saved a temporary settings backup before firmware update.") }
+        } else {
+            null
+        }
 
         try {
             currentTransport?.disconnect()
@@ -9697,11 +9769,42 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
 
         log("SignalSlinger update completed: ${manifest.product} ${manifest.version} ${manifest.board}.")
         setBusyProgress(96, 100, "Reloading SignalSlinger")
-        val refreshedConnection = runCatching {
+        var refreshedConnection = runCatching {
             loadPortWithAliasFallback(portPath)
         }.onFailure { failure ->
             log("SignalSlinger update completed, but the visible device information could not be refreshed: ${failure.message ?: failure::class.simpleName}")
         }.getOrNull()
+        if (backupFile != null && refreshedConnection != null) {
+            val initialConnection = refreshedConnection
+            val backup = backupStore.load(backupFile)
+            val initialSnapshot = initialConnection.result.state.snapshot
+                ?: error("Updated SignalSlinger did not report settings.")
+            backup.requireMatches(initialSnapshot)
+            DeviceSessionController.submitEdits(
+                state = initialConnection.result.state,
+                editedSettings = EditableDeviceSettings.fromDeviceSettings(
+                    backup.settingsForRestore(initialSnapshot.settings),
+                ),
+                transport = initialConnection.transport,
+            )
+            val supplementalCommands = backup.supplementalRestoreCommands(initialSnapshot)
+            if (supplementalCommands.isNotEmpty()) {
+                initialConnection.transport.sendCommands(supplementalCommands)
+                initialConnection.transport.readAvailableLines()
+            }
+            log("Restored and read back the saved settings after EEPROM migration.")
+            initialConnection.transport.sendCommands(listOf("RST"))
+            runCatching { initialConnection.transport.readAvailableLines() }
+            initialConnection.transport.disconnect()
+            Thread.sleep(1_500)
+            val verifiedConnection = loadPortWithAliasFallback(portPath)
+            val verifiedSnapshot = verifiedConnection.result.state.snapshot
+                ?: error("SignalSlinger did not reload after settings restore.")
+            backup.requireRestored(verifiedSnapshot)
+            backupStore.delete(backupFile)
+            log("Verified restored settings after reboot and removed the temporary backup.")
+            refreshedConnection = verifiedConnection
+        }
         SwingUtilities.invokeLater {
             finishFirmwareUpdateLog("Update SignalSlinger", logEntries)
             if (refreshedConnection != null) {
@@ -9843,6 +9946,11 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
     private fun desktopSignalSlingerReleaseCacheDirectory(): File {
         val home = System.getProperty("user.home").orEmpty().ifBlank { "." }
         return File(home, ".serialslinger/signalslinger-updates")
+    }
+
+    private fun desktopFirmwareSettingsBackupDirectory(): File {
+        val home = System.getProperty("user.home").orEmpty().ifBlank { "." }
+        return File(home, ".serialslinger/firmware-settings-backups")
     }
 
     private fun desktopArduconReleaseCacheDirectory(): File {

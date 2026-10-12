@@ -83,6 +83,7 @@ import com.openardf.serialslinger.model.FrequencyBankId
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FirmwareUpdateUiText
 import com.openardf.serialslinger.model.FirmwareUpdateOfferSupport
+import com.openardf.serialslinger.model.HardwareFaultPresentation
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
@@ -788,6 +789,9 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         val loadedSettings = snapshot?.settings ?: DeviceSettings.empty()
         val loadedStatus = snapshot?.status
         val loadedInfo = snapshot?.info
+        if (!disconnectedLocked && loadedStatus?.hardwareFaults?.isNotEmpty() == true) {
+            content.addView(hardwareFaultWarningCard(loadedStatus.hardwareFaults))
+        }
         val cloneTemplateSettings =
             if (previewModeActive) {
                 null
@@ -6265,6 +6269,44 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
         if (hasLoadedTarget) {
             commandEditor.requestFocus()
         }
+    }
+
+    private fun hardwareFaultWarningCard(
+        faults: List<com.openardf.serialslinger.model.HardwareFaultRecord>,
+    ): View = outlinedCardLayout().apply {
+        setBackgroundColor("#FFEEEE".toColorInt())
+        addView(TextView(this@MainActivity).apply {
+            text = HardwareFaultPresentation.title
+            textSize = 18f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor("#B91C1C".toColorInt())
+        })
+        addView(sectionBody(HardwareFaultPresentation.summary(faults)).apply {
+            setTextColor("#9E1C1C".toColorInt())
+        })
+        addView(Button(this@MainActivity).apply {
+            text = HardwareFaultPresentation.clearLabel
+            setTextColor("#B91C1C".toColorInt())
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle(HardwareFaultPresentation.clearDialogTitle)
+                    .setMessage(HardwareFaultPresentation.clearConfirmation)
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Clear") { _, _ ->
+                        AndroidSessionController.runRawCommand(
+                            context = applicationContext,
+                            commandInput = HardwareFaultPresentation.clearCommand,
+                            source = "hardware-fault-warning",
+                            onComplete = { result ->
+                                result.onFailure { error ->
+                                    showLargeTextDialog("Clear Failed", error.message ?: "Unknown error")
+                                }
+                            },
+                        )
+                    }
+                    .showLogged(HardwareFaultPresentation.clearDialogTitle)
+            }
+        })
     }
 
     private fun showCommandReplyDialog(
