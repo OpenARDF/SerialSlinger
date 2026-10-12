@@ -1662,56 +1662,27 @@ object AndroidSessionController {
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Station ID already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Station ID submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Station ID already matched the requested value."
-                        } else {
-                            "Station ID updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Station ID update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = sessionState.snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Station ID",
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = false,
+                )
             }
 
             emitCommandLog(
                 command = "set-station-id",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -1780,56 +1751,27 @@ object AndroidSessionController {
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. ID Speed already matched the requested value."
-                        } else {
-                            "Latest load remains available above. ID Speed submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "ID Speed already matched the requested value."
-                        } else {
-                            "ID Speed updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "ID Speed update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = sessionState.snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "ID Speed",
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = false,
+                )
             }
 
             emitCommandLog(
                 command = "set-id-speed",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -1922,49 +1864,27 @@ object AndroidSessionController {
                     }
                 }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Low Bat. Thresh. already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Low Bat. Thresh. submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Low Bat. Thresh. already matched the requested value."
-                        } else {
-                            "Low Bat. Thresh. updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Low Bat. Thresh. update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Low Bat. Thresh.",
+                    updateCloneTemplate = false,
+                    refreshAllDrafts = true,
+                )
             }
 
             emitCommandLog(
                 command = "set-low-battery-threshold",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -2037,49 +1957,27 @@ object AndroidSessionController {
                     }
                 }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Ext. Bat. Ctrl already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Ext. Bat. Ctrl submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Ext. Bat. Ctrl already matched the requested value."
-                        } else {
-                            "Ext. Bat. Ctrl updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Ext. Bat. Ctrl update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Ext. Bat. Ctrl",
+                    updateCloneTemplate = false,
+                    refreshAllDrafts = true,
+                )
             }
 
             emitCommandLog(
                 command = "set-external-battery-control",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -2476,58 +2374,27 @@ object AndroidSessionController {
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    if (updateCloneTemplate) {
-                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                    }
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Pattern Speed already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Pattern Speed submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Pattern Speed already matched the requested value."
-                        } else {
-                            "Pattern Speed updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Pattern Speed update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Pattern Speed",
+                    updateCloneTemplate = updateCloneTemplate,
+                    refreshAllDrafts = false,
+                )
             }
 
             emitCommandLog(
                 command = "set-pattern-speed",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -2736,55 +2603,27 @@ object AndroidSessionController {
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Pattern Text already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Pattern Text submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Pattern Text already matched the requested value."
-                        } else {
-                            "Pattern Text updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Pattern Text update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = sessionState.snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Pattern Text",
+                    updateCloneTemplate = false,
+                    refreshAllDrafts = false,
+                )
             }
 
             emitCommandLog(
                 command = "set-pattern-text",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -2853,55 +2692,27 @@ object AndroidSessionController {
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Current Frequency already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Current Frequency submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Current Frequency already matched the requested value."
-                        } else {
-                            "Current Frequency updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Current Frequency update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = sessionState.snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Current Frequency",
+                    updateCloneTemplate = false,
+                    refreshAllDrafts = false,
+                )
             }
 
             emitCommandLog(
                 command = "set-current-frequency",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -3002,56 +2813,27 @@ object AndroidSessionController {
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. ${bankId.label} already matched the requested value."
-                        } else {
-                            "Latest load remains available above. ${bankId.label} submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "${bankId.label} already matched the requested value."
-                        } else {
-                            "${bankId.label} updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "${bankId.label} update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = bankId.label,
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = false,
+                )
             }
 
             emitCommandLog(
                 command = "set-frequency-bank",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -3155,56 +2937,32 @@ object AndroidSessionController {
                 )
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Timed Event frequencies already matched the saved defaults."
-                        } else {
-                            "Latest load remains available above. Timed Event default frequencies were applied."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Timed Event default frequencies already matched."
-                        } else {
-                            "Timed Event default frequencies updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Default frequencies saved to clone settings only."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Timed Event default frequencies",
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = false,
+                    noChangeStatusText = "Timed Event default frequencies already matched.",
+                    verifiedStatusText = "Timed Event default frequencies updated and verified.",
+                    submitFailedStatusText = "Default frequencies saved to clone settings only.",
+                    noChangeProbeSummary = "Latest load remains available above. Timed Event frequencies already matched the saved defaults.",
+                    verifiedProbeSummary = "Latest load remains available above. Timed Event default frequencies were applied.",
+                )
             }
 
             emitCommandLog(
                 command = "set-frequency-defaults",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -3300,65 +3058,25 @@ object AndroidSessionController {
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    val verificationFailure = submitResult.submitVerificationFailure()
-                    if (verificationFailure) {
-                        latestSubmitSummary = renderSubmitFailureSummary(submitResult)
-                        latestProbeSummary = "Latest load remains available above. Fox Role submission failed verification."
-                        statusText = "Fox Role update failed verification."
-                        statusIsError = true
-                        callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
-                        commandSucceeded = false
-                    } else {
-                        latestSessionViewState = AndroidSessionViewState(
-                            state = submitResult.state,
-                            traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                        )
-                        resolvedTarget?.let(::rememberLoadedTargetLocked)
-                        draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                        draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                        draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
-                        draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                        draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                        draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                        draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                        latestSubmitSummary = renderSubmitSummary(submitResult)
-                        latestProbeSummary =
-                            if (wasNoOp) {
-                                "Latest load remains available above. Fox Role already matched the requested value."
-                            } else {
-                                "Latest load remains available above. Fox Role submission completed."
-                            }
-                        statusText =
-                            if (wasNoOp) {
-                                "Fox Role already matched the requested value."
-                            } else {
-                                "Fox Role updated and verified."
-                            }
-                        statusIsError = false
-                        callbackResult = Result.success(submitResult)
-                        commandSucceeded = true
-                    }
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Fox Role update failed."
-                    statusIsError = true
-                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Fox Role update failed."))
-                    commandSucceeded = false
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Fox Role",
+                    updateCloneTemplate = false,
+                    refreshAllDrafts = false,
+                )
             }
+            callbackResult = handled.callbackResult
+            commandSucceeded = handled.commandSucceeded
 
             emitCommandLog(
                 command = "set-fox-role",
                 source = source,
                 success = commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
@@ -3432,56 +3150,27 @@ object AndroidSessionController {
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                    draftStationId = submitResult.state.snapshot?.settings?.stationId.orEmpty()
-                    draftEventType = submitResult.state.snapshot?.settings?.eventType?.name.orEmpty()
-                    draftFoxRole = formatSnapshotFoxRole(submitResult.state.snapshot)
-                    draftIdSpeedWpm = submitResult.state.snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-                    draftPatternText = submitResult.state.snapshot?.settings?.patternText.orEmpty()
-                    draftPatternSpeedWpm = submitResult.state.snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-                    draftCurrentFrequency = formatFrequencyInput(submitResult.state.snapshot?.settings?.defaultFrequencyHz)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Event Type already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Event Type submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Event Type already matched the requested value."
-                        } else {
-                            "Event Type updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Event Type update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Event Type",
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = false,
+                )
             }
 
             emitCommandLog(
                 command = "set-event-type",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -3571,50 +3260,30 @@ object AndroidSessionController {
                 DeviceSessionController.submitEdits(sessionState, editedSettings, transport)
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                    applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Event Profile already matched the requested values."
-                        } else {
-                            "Latest load remains available above. Event Profile submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Event Profile already matched the requested values."
-                        } else {
-                            "Event Profile updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Event Profile update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Event Profile",
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = true,
+                    noChangeStatusText = "Event Profile already matched the requested values.",
+                    noChangeProbeSummary =
+                        "Latest load remains available above. Event Profile already matched the requested values.",
+                )
             }
 
             emitCommandLog(
                 command = "set-event-profile",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -3751,40 +3420,18 @@ object AndroidSessionController {
                 }
             }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                    applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
-                    timeWorkflowNotice = null
-                    clearScheduleDerivedDataPendingLocked()
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. Days To Run already matched the requested value."
-                        } else {
-                            "Latest load remains available above. Days To Run submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "Days To Run already matched the requested value."
-                        } else {
-                            "Days To Run updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Days To Run update failed."
-                    statusIsError = true
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Days To Run",
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = true,
+                ).also { outcome ->
+                    if (outcome.viewState != null) {
+                        timeWorkflowNotice = null
+                    }
                     clearScheduleDerivedDataPendingLocked()
                 }
             }
@@ -3792,12 +3439,13 @@ object AndroidSessionController {
             emitCommandLog(
                 command = "set-days-to-run",
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(result) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -4148,73 +3796,41 @@ object AndroidSessionController {
                 }
             }
 
-            var callbackResult: Result<DeviceSubmitResult>
-            var commandSucceeded: Boolean
-            var commandTraceEntries: List<SerialTraceEntry> = emptyList()
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    commandTraceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries
-                    val verificationFailure = submitResult.submitVerificationFailure()
-                    commandSucceeded = !verificationFailure
-                    val wasNoOp = submitResult.wasNoOp()
-                    val scheduleImpact = summarizeScheduleImpact(snapshot.settings, submitResult.state.snapshot?.settings, SettingKey.CURRENT_TIME)
-                    if (verificationFailure) {
-                        latestSubmitSummary = renderSubmitFailureSummary(submitResult)
-                        latestProbeSummary = "Latest load remains available above. Device Time submission failed verification."
-                        statusText = "Device Time update failed verification."
-                        statusIsError = true
-                        clearScheduleDerivedDataPendingLocked()
-                        callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
-                    } else {
-                        latestSessionViewState = AndroidSessionViewState(
-                            state = submitResult.state,
-                            traceEntries = commandTraceEntries,
-                        )
-                        resolvedTarget?.let(::rememberLoadedTargetLocked)
-                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                        applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
-                        timeWorkflowNotice = scheduleImpact.noticeText
-                        clearScheduleDerivedDataPendingLocked()
-                        latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
-                        latestProbeSummary =
-                            if (wasNoOp) {
-                                "Latest load remains available above. Device Time already matched the requested value."
-                            } else {
-                                "Latest load remains available above. Device Time submission completed."
-                            }
-                        statusText =
-                            if (wasNoOp) {
-                                "Device Time already matched the requested value."
-                            } else {
-                                scheduleImpact.statusText ?: "Device Time updated and verified."
-                            }
-                        statusIsError = false
-                        callbackResult = Result.success(submitResult)
+            val scheduleImpact = result.getOrNull()?.let { submitResult ->
+                summarizeScheduleImpact(
+                    snapshot.settings,
+                    submitResult.state.snapshot?.settings,
+                    SettingKey.CURRENT_TIME,
+                )
+            }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Device Time",
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = true,
+                    verifiedStatusText = scheduleImpact?.statusText ?: "Device Time updated and verified.",
+                    additionalSuccessSummaryLines = scheduleImpact?.summaryLines.orEmpty(),
+                ).also { outcome ->
+                    if (outcome.viewState != null) {
+                        timeWorkflowNotice = scheduleImpact?.noticeText
                     }
-                } else {
-                    commandSucceeded = false
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Device Time update failed."
-                    statusIsError = true
                     clearScheduleDerivedDataPendingLocked()
-                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Device Time update failed."))
                 }
             }
 
             emitCommandLog(
                 command = "set-current-time",
                 source = source,
-                success = commandSucceeded,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
-                traceEntries = commandTraceEntries,
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(callbackResult) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -4411,86 +4027,54 @@ object AndroidSessionController {
                     Result.failure(error)
                 }
 
-            var callbackResult: Result<DeviceSubmitResult>
-            var commandSucceeded: Boolean
-            var commandTraceEntries: List<SerialTraceEntry> = emptyList()
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    commandTraceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries
-                    val verificationFailure = submitResult.submitVerificationFailure()
-                    commandSucceeded = !verificationFailure
-                    val wasNoOp = submitResult.wasNoOp()
-                    val scheduleImpact = summarizeScheduleImpact(snapshot.settings, submitResult.state.snapshot?.settings, SettingKey.START_TIME)
-                    if (verificationFailure) {
-                        latestSubmitSummary = renderSubmitFailureSummary(submitResult)
-                        latestProbeSummary = "Latest load remains available above. Start Time submission failed verification."
-                        statusText = "Start Time update failed verification."
-                        statusIsError = true
-                        clearScheduleDerivedDataPendingLocked()
-                        callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
-                    } else {
-                        latestSessionViewState = AndroidSessionViewState(
-                            state = submitResult.state,
-                            traceEntries = commandTraceEntries,
+            val scheduleImpact = result.getOrNull()?.let { submitResult ->
+                summarizeScheduleImpact(
+                    snapshot.settings,
+                    submitResult.state.snapshot?.settings,
+                    SettingKey.START_TIME,
+                )
+            }
+            val adjustmentLines =
+                buildList {
+                    val submittedStart = submittedStartTimeCompact
+                    if (submittedStart != null && submittedStart != normalizedStartTime) {
+                        add(
+                            "Start Time adjusted from " +
+                                "${JvmTimeSupport.formatCompactTimestamp(normalizedStartTime)} to " +
+                                "${JvmTimeSupport.formatCompactTimestamp(submittedStart)} " +
+                                "to match SignalSlinger 5-minute start boundaries.",
                         )
-                        resolvedTarget?.let(::rememberLoadedTargetLocked)
-                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                        applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
-                        timeWorkflowNotice = scheduleImpact.noticeText
-                        clearScheduleDerivedDataPendingLocked()
-                        val adjustmentLines =
-                            buildList {
-                                val submittedStart = submittedStartTimeCompact
-                                if (submittedStart != null && submittedStart != normalizedStartTime) {
-                                    add(
-                                        "Start Time adjusted from " +
-                                            "${JvmTimeSupport.formatCompactTimestamp(normalizedStartTime)} to " +
-                                            "${JvmTimeSupport.formatCompactTimestamp(submittedStart)} " +
-                                            "to match SignalSlinger 5-minute start boundaries.",
-                                    )
-                                }
-                                addAll(scheduleImpact.summaryLines)
-                            }
-                        latestSubmitSummary = renderSubmitSummary(submitResult, adjustmentLines)
-                        latestProbeSummary =
-                            if (wasNoOp) {
-                                "Latest load remains available above. Start Time already matched the requested value."
-                            } else {
-                                "Latest load remains available above. Start Time submission completed."
-                            }
-                        statusText =
-                            if (wasNoOp) {
-                                "Start Time already matched the requested value."
-                            } else {
-                                scheduleImpact.statusText ?: "Start Time updated and verified."
-                            }
-                        statusIsError = false
-                        callbackResult = Result.success(submitResult)
                     }
-                } else {
-                    commandSucceeded = false
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Start Time update failed."
-                    statusIsError = true
+                    addAll(scheduleImpact?.summaryLines.orEmpty())
+                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Start Time",
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = true,
+                    verifiedStatusText = scheduleImpact?.statusText ?: "Start Time updated and verified.",
+                    additionalSuccessSummaryLines = adjustmentLines,
+                ).also { outcome ->
+                    if (outcome.viewState != null) {
+                        timeWorkflowNotice = scheduleImpact?.noticeText
+                    }
                     clearScheduleDerivedDataPendingLocked()
-                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Start Time update failed."))
                 }
             }
 
             emitCommandLog(
                 command = "set-start-time",
                 source = source,
-                success = commandSucceeded,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
-                traceEntries = commandTraceEntries,
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(callbackResult) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -4605,92 +4189,41 @@ object AndroidSessionController {
                     }
                 }.getOrElse { error -> Result.failure(error) }
 
-            var callbackResult: Result<DeviceSubmitResult>
-            var commandSucceeded: Boolean
-            var commandTraceEntries: List<SerialTraceEntry> = emptyList()
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    commandTraceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries
-                    val verificationFailure = submitResult.submitVerificationFailure()
-                    commandSucceeded = !verificationFailure
-                    val wasNoOp = submitResult.wasNoOp()
-                    val scheduleImpact = summarizeScheduleImpact(snapshot.settings, submitResult.state.snapshot?.settings, SettingKey.FINISH_TIME)
-                    if (verificationFailure) {
-                        val reconciledViewState = AndroidSubmitReadbackSupport.reconciledViewState(snapshot.info, submitResult)
-                        if (reconciledViewState != null) {
-                            latestSessionViewState = reconciledViewState
-                            resolvedTarget?.let(::rememberLoadedTargetLocked)
-                            // A failed verification can still mean that firmware applied a
-                            // different value. Show that readback without changing the clone template.
-                            applySnapshotDrafts(reconciledViewState.state.snapshot, refreshClockDisplayAnchor = false)
-                            timeWorkflowNotice = scheduleImpact.noticeText
-                        }
-                        latestSubmitSummary = renderSubmitFailureSummary(submitResult)
-                        latestProbeSummary =
-                            if (reconciledViewState == null) {
-                                "Latest load remains available above. Finish Time submission failed verification."
-                            } else {
-                                "Finish Time submission failed verification. Displayed device data was refreshed from readback."
-                            }
-                        statusText =
-                            if (reconciledViewState == null) {
-                                "Finish Time update failed verification."
-                            } else {
-                                "Finish Time did not match the request; device data was refreshed."
-                            }
-                        statusIsError = true
-                        clearScheduleDerivedDataPendingLocked()
-                        callbackResult = Result.failure(IllegalStateException(submitResult.submitVerificationFailureMessage()))
-                    } else {
-                        latestSessionViewState = AndroidSessionViewState(
-                            state = submitResult.state,
-                            traceEntries = commandTraceEntries,
-                        )
-                        resolvedTarget?.let(::rememberLoadedTargetLocked)
-                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                        applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
-                        timeWorkflowNotice = scheduleImpact.noticeText
-                        clearScheduleDerivedDataPendingLocked()
-                        latestSubmitSummary = renderSubmitSummary(submitResult, scheduleImpact.summaryLines)
-                        latestProbeSummary =
-                            if (wasNoOp) {
-                                "Latest load remains available above. Finish Time already matched the requested value."
-                            } else {
-                                "Latest load remains available above. Finish Time submission completed."
-                            }
-                        statusText =
-                            if (wasNoOp) {
-                                "Finish Time already matched the requested value."
-                            } else {
-                                scheduleImpact.statusText ?: "Finish Time updated and verified."
-                            }
-                        statusIsError = false
-                        callbackResult = Result.success(submitResult)
+            val scheduleImpact = result.getOrNull()?.let { submitResult ->
+                summarizeScheduleImpact(
+                    snapshot.settings,
+                    submitResult.state.snapshot?.settings,
+                    SettingKey.FINISH_TIME,
+                )
+            }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = "Finish Time",
+                    updateCloneTemplate = true,
+                    refreshAllDrafts = true,
+                    verifiedStatusText = scheduleImpact?.statusText ?: "Finish Time updated and verified.",
+                    additionalSuccessSummaryLines = scheduleImpact?.summaryLines.orEmpty(),
+                ).also { outcome ->
+                    if (outcome.viewState != null) {
+                        timeWorkflowNotice = scheduleImpact?.noticeText
                     }
-                } else {
-                    commandSucceeded = false
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "Finish Time update failed."
-                    statusIsError = true
                     clearScheduleDerivedDataPendingLocked()
-                    callbackResult = Result.failure(result.exceptionOrNull() ?: IllegalStateException("Finish Time update failed."))
                 }
             }
 
             emitCommandLog(
                 command = "set-finish-time",
                 source = source,
-                success = commandSucceeded,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
-                traceEntries = commandTraceEntries,
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
             onComplete?.let { callback ->
-                mainHandler.post { callback(callbackResult) }
+                mainHandler.post { callback(handled.callbackResult) }
             }
         }
     }
@@ -5804,74 +5337,6 @@ object AndroidSessionController {
         }.trim()
     }
 
-    private fun renderSubmitSummary(
-        result: DeviceSubmitResult,
-        additionalLines: List<String> = emptyList(),
-    ): String {
-        if (result.wasNoOp()) {
-            val productName = result.state.snapshot?.info?.productName?.ifBlank { null } ?: "device"
-            return buildString {
-                appendLine("No setting changes were required.")
-                appendLine("Commands sent: 0")
-                appendLine("Readback commands sent: 0")
-                append("The requested value already matched the loaded $productName snapshot.")
-            }.trim()
-        }
-
-        return buildString {
-            appendLine("Submit succeeded.")
-            result.state.snapshot?.settings?.let { settings ->
-                SchedulePresentation.scheduleLines(settings).forEach { appendLine(it) }
-            }
-            appendLine("Commands sent: ${result.commandsSent.size}")
-            appendLine("Submit response lines: ${result.linesReceived.size}")
-            appendLine("Readback commands sent: ${result.readbackCommandsSent.size}")
-            appendLine("Readback response lines: ${result.readbackLinesReceived.size}")
-            if (additionalLines.isNotEmpty()) {
-                appendLine()
-                appendLine("Observed coupled changes")
-                additionalLines.forEach { line ->
-                    appendLine(line)
-                }
-            }
-            appendLine()
-            appendLine("Verification")
-            if (result.verifications.isEmpty()) {
-                appendLine("No verification results were returned.")
-            } else {
-                result.verifications.forEach { verification ->
-                    appendLine(
-                        "${verification.fieldKey}: verified=${verification.verified} observed=${verification.observedInReadback} expected=${verification.expectedValue} actual=${verification.actualValue}",
-                    )
-                }
-            }
-        }.trim()
-    }
-
-    private fun renderSubmitFailureSummary(
-        result: DeviceSubmitResult,
-    ): String {
-        return buildString {
-            appendLine("Submit failed.")
-            appendLine(result.submitVerificationFailureMessage())
-            appendLine("Commands sent: ${result.commandsSent.size}")
-            appendLine("Submit response lines: ${result.linesReceived.size}")
-            appendLine("Readback commands sent: ${result.readbackCommandsSent.size}")
-            appendLine("Readback response lines: ${result.readbackLinesReceived.size}")
-            appendLine()
-            appendLine("Verification")
-            if (result.verifications.isEmpty()) {
-                appendLine("No verification results were returned.")
-            } else {
-                result.verifications.forEach { verification ->
-                    appendLine(
-                        "${verification.fieldKey}: verified=${verification.verified} observed=${verification.observedInReadback} expected=${verification.expectedValue} actual=${verification.actualValue}",
-                    )
-                }
-            }
-        }.trim()
-    }
-
     private fun summarizeScheduleImpact(
         before: DeviceSettings,
         after: DeviceSettings?,
@@ -5948,13 +5413,7 @@ object AndroidSessionController {
         snapshot: DeviceSnapshot?,
         refreshClockDisplayAnchor: Boolean = true,
     ) {
-        draftStationId = snapshot?.settings?.stationId.orEmpty()
-        draftEventType = snapshot?.settings?.eventType?.name.orEmpty()
-        draftFoxRole = formatSnapshotFoxRole(snapshot)
-        draftIdSpeedWpm = snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
-        draftPatternText = snapshot?.settings?.patternText.orEmpty()
-        draftPatternSpeedWpm = snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
-        draftCurrentFrequency = formatFrequencyInput(snapshot?.settings?.defaultFrequencyHz)
+        applyPrimarySettingDrafts(snapshot)
         draftCurrentTime = formatDateTimeInput(snapshot?.settings?.currentTimeCompact)
         draftStartTime = formatDateTimeInput(snapshot?.settings?.startTimeCompact)
         draftFinishTime = formatDateTimeInput(snapshot?.settings?.finishTimeCompact)
@@ -5962,6 +5421,65 @@ object AndroidSessionController {
         if (refreshClockDisplayAnchor) {
             applyClockDisplayAnchor(snapshot?.settings?.currentTimeCompact)
         }
+    }
+
+    private fun applyPrimarySettingDrafts(snapshot: DeviceSnapshot?) {
+        draftStationId = snapshot?.settings?.stationId.orEmpty()
+        draftEventType = snapshot?.settings?.eventType?.name.orEmpty()
+        draftFoxRole = formatSnapshotFoxRole(snapshot)
+        draftIdSpeedWpm = snapshot?.settings?.idCodeSpeedWpm?.toString().orEmpty()
+        draftPatternText = snapshot?.settings?.patternText.orEmpty()
+        draftPatternSpeedWpm = snapshot?.settings?.patternCodeSpeedWpm?.toString().orEmpty()
+        draftCurrentFrequency = formatFrequencyInput(snapshot?.settings?.defaultFrequencyHz)
+    }
+
+    /**
+     * Apply every DeviceSubmitResult through the same verification policy.
+     * Failed verification may refresh the UI from same-device readback, but can
+     * never update clone-template state or be reported as a successful command.
+     */
+    private fun applySubmissionResultLocked(
+        operationResult: Result<DeviceSubmitResult>,
+        expectedSnapshot: DeviceSnapshot?,
+        resolvedTarget: AndroidConnectionTarget?,
+        settingLabel: String,
+        updateCloneTemplate: Boolean,
+        refreshAllDrafts: Boolean,
+        noChangeStatusText: String = "$settingLabel already matched the requested value.",
+        verifiedStatusText: String = "$settingLabel updated and verified.",
+        submitFailedStatusText: String = "$settingLabel update failed.",
+        noChangeProbeSummary: String = "Latest load remains available above. $settingLabel already matched the requested value.",
+        verifiedProbeSummary: String = "Latest load remains available above. $settingLabel submission completed.",
+        additionalSuccessSummaryLines: List<String> = emptyList(),
+    ): AndroidSubmissionResult {
+        val handled = AndroidSubmissionResultHandler.handle(
+            expectedDevice = expectedSnapshot?.info,
+            operationResult = operationResult,
+            settingLabel = settingLabel,
+            noChangeStatusText = noChangeStatusText,
+            verifiedStatusText = verifiedStatusText,
+            submitFailedStatusText = submitFailedStatusText,
+            noChangeProbeSummary = noChangeProbeSummary,
+            verifiedProbeSummary = verifiedProbeSummary,
+            additionalSuccessSummaryLines = additionalSuccessSummaryLines,
+        )
+        handled.viewState?.let { viewState ->
+            latestSessionViewState = viewState
+            resolvedTarget?.let(::rememberLoadedTargetLocked)
+            if (refreshAllDrafts) {
+                applySnapshotDrafts(viewState.state.snapshot, refreshClockDisplayAnchor = false)
+            } else {
+                applyPrimarySettingDrafts(viewState.state.snapshot)
+            }
+        }
+        if (handled.canUpdateCloneTemplate && updateCloneTemplate) {
+            rememberCloneTemplateTimedEventFieldsFrom(handled.viewState?.state?.snapshot)
+        }
+        latestSubmitSummary = handled.submitSummary
+        handled.probeSummary?.let { latestProbeSummary = it }
+        statusText = handled.statusText
+        statusIsError = handled.statusIsError
+        return handled
     }
 
     private fun formatSnapshotFoxRole(snapshot: DeviceSnapshot?): String {
@@ -6205,51 +5723,26 @@ object AndroidSessionController {
                     }
                 }
 
-            synchronized(this) {
-                if (result.isSuccess) {
-                    val submitResult = result.getOrThrow()
-                    val wasNoOp = submitResult.wasNoOp()
-                    latestSessionViewState = AndroidSessionViewState(
-                        state = submitResult.state,
-                        traceEntries = submitResult.submitTraceEntries + submitResult.readbackTraceEntries,
-                    )
-                    resolvedTarget?.let(::rememberLoadedTargetLocked)
-                    applySnapshotDrafts(submitResult.state.snapshot, refreshClockDisplayAnchor = false)
-                    if (updateCloneTemplate) {
-                        rememberCloneTemplateTimedEventFieldsFrom(submitResult.state.snapshot)
-                    }
-                    latestSubmitSummary = renderSubmitSummary(submitResult)
-                    latestProbeSummary =
-                        if (wasNoOp) {
-                            "Latest load remains available above. $settingLabel already matched the requested value."
-                        } else {
-                            "Latest load remains available above. $settingLabel submission completed."
-                        }
-                    statusText =
-                        if (wasNoOp) {
-                            "$settingLabel already matched the requested value."
-                        } else {
-                            "$settingLabel updated and verified."
-                        }
-                    statusIsError = false
-                } else {
-                    latestSubmitSummary = buildString {
-                        appendLine("Submit failed.")
-                        append(result.exceptionOrNull()?.message ?: "Unknown error")
-                    }.trim()
-                    statusText = "$settingLabel update failed."
-                    statusIsError = true
-                }
+            val handled = synchronized(this) {
+                applySubmissionResultLocked(
+                    operationResult = result,
+                    expectedSnapshot = snapshot,
+                    resolvedTarget = resolvedTarget,
+                    settingLabel = settingLabel,
+                    updateCloneTemplate = updateCloneTemplate,
+                    refreshAllDrafts = true,
+                )
             }
 
             emitCommandLog(
                 command = commandName,
                 source = source,
-                success = result.isSuccess,
+                success = handled.commandSucceeded,
                 summary = synchronized(this) { latestSubmitSummary },
+                traceEntries = handled.traceEntries,
             )
             notifyListeners()
-            onComplete?.let { callback -> mainHandler.post { callback(result) } }
+            onComplete?.let { callback -> mainHandler.post { callback(handled.callbackResult) } }
         }
     }
 
@@ -7554,21 +7047,4 @@ object AndroidSessionController {
         }
     }
 
-    private fun DeviceSubmitResult.wasNoOp(): Boolean {
-        return commandsSent.isEmpty() &&
-            readbackCommandsSent.isEmpty() &&
-            verifications.isEmpty()
-    }
-
-    private fun DeviceSubmitResult.submitVerificationFailure(): Boolean {
-        return !wasNoOp() && verifications.any { !it.verified }
-    }
-
-    private fun DeviceSubmitResult.submitVerificationFailureMessage(): String {
-        return if (readbackLinesReceived.isEmpty()) {
-            "SignalSlinger did not return readback data, so the change could not be verified."
-        } else {
-            "SignalSlinger readback did not match the requested change."
-        }
-    }
 }
