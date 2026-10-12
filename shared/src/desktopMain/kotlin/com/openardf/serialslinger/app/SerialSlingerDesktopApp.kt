@@ -1259,7 +1259,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 DesktopLogEntry("Current log file: ${sessionLog.currentLogFile()}", DesktopLogCategory.APP),
             ),
         )
-        SwingUtilities.invokeLater { maybeShowSerialSlingerUpdateNotice() }
+        SwingUtilities.invokeLater {
+            DesktopStartupActions.run(
+                checkForAppUpdates = ::maybeShowSerialSlingerUpdateNotice,
+                logAutomaticDeviceDetection = {
+                    appendLog(
+                        "Startup Device Detection",
+                        listOf(
+                            DesktopLogEntry(
+                                "Automatically searching for an attached device.",
+                                DesktopLogCategory.APP,
+                            ),
+                        ),
+                    )
+                },
+                findAttachedDevice = ::autoDetectPorts,
+            )
+        }
     }
 
     fun requestFindDeviceFocus() {

@@ -150,10 +150,15 @@ object ScheduleSubmitSupport {
         require(!requestedDuration.isNegative && !requestedDuration.isZero) {
             "Event duration must be positive."
         }
-        val normalizedStartTime = JvmTimeSupport.validateStartTimeForWrite(currentSettings.startTimeCompact)
+        // Duration is relative to the start we will actually write. An expired start is
+        // advanced to the next valid boundary before the finish is derived from it.
+        val normalizedStartTime = JvmTimeSupport.normalizeStartTimeForFinishChange(
+            startTimeCompact = currentSettings.startTimeCompact,
+            currentTimeCompact = currentSettings.currentTimeCompact,
+        )
             ?: error("Set a valid Start Time first before changing Duration.")
         return absoluteFinishEdit(
-            currentSettings = currentSettings,
+            currentSettings = currentSettings.copy(startTimeCompact = normalizedStartTime),
             normalizedFinishTime = JvmTimeSupport.finishTimeCompactFromStart(normalizedStartTime, requestedDuration),
             requestedDaysToRun = requestedDaysToRun,
         )
