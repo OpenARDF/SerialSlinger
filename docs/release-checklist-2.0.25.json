@@ -148,8 +148,8 @@
     {
       "id": "merged-to-main",
       "description": "Fast-forward or otherwise integrate the verified release candidate into main before tagging, and record the exact main commit.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "PR #7 squash-merged to Development1 at 2793c5aaedfe6c96d10e929b4359f4c7d7bacfef; local main fast-forwarded to that exact verified release candidate commit before tagging.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
