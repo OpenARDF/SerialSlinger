@@ -104,10 +104,12 @@ The intended release flow is:
 9. run `just macos-installed-smoke`, review the hosted Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64 candidate results, and dispatch the ARM64 workflows with the release tag after publication; record concrete evidence for each architecture or an explicit skip reason and requester
 10. create `docs/release-notes/vX.Y.Z.md` from [release-notes-template.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-notes-template.md), validate it with `npm run release:notes -- --checklist <checklist.json>`, and provide the Android release-notes section as copyable Play Console text
 11. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
-12. merge the desired release state to `main`
-13. set checklist `sourceCommit` to the exact verified commit, commit only that checklist update, then create and push a tag like `v1.0.93` at the checklist-only child commit
-14. let the GitHub Actions workflow publish the release artifacts
-15. before declaring the deployment complete, update the checklist for the final tag, workflow, release-verification, and final-audit items, then run `npm run release:checklist -- --file <checklist.json> --phase final`
+12. squash-merge the release-candidate pull request into protected `Development1`, then fast-forward `main` to that exact candidate
+13. on a new topic branch from `Development1`, set checklist `sourceCommit` to the candidate, record the main-sync evidence, and commit only that checklist update; squash-merge its pull request into `Development1`
+14. verify the resulting checklist-only commit has the candidate as its sole parent, fast-forward `main` to it, then create and push a tag like `v1.0.93`
+15. let the GitHub Actions workflow publish the release artifacts
+16. prepare the final tag, workflow, release-verification, and audit evidence on another topic branch, run `npm run release:checklist -- --file <checklist.json> --phase final`, and squash-merge its pull request into `Development1`
+17. fast-forward `main` from `Development1`, verify the two remote branch tips are identical, and leave `Development1` checked out; keep branch protections enabled for the entire release
 
 The release checklist gate is mandatory unless the user specifically asks to skip an item. A skipped item must be recorded in the checklist with both a concrete reason and the requester.
 

@@ -45,6 +45,7 @@ scripts-test:
         scripts/check-android-native-compatibility.test.mjs \
         scripts/check-android-instrumentation-results.test.mjs \
         scripts/check-release-checklist.test.mjs \
+        scripts/check-release-workflow.test.mjs \
         scripts/check-release-tag.test.mjs \
         scripts/jdeploy-local-smoke.test.mjs \
         scripts/prepare-jdeploy-github-release.test.mjs \

@@ -6,16 +6,20 @@ assume the repository root unless stated otherwise.
 ## Branch Roles
 
 - `main` is the stable release branch.
-- `Development1` is the active development branch.
+- `Development1` is the active development branch and the authoritative source
+  for release commits.
 - Start each development slice from a clean, synchronized `Development1` on a
   focused `codex/<feature>` topic branch. Merge the topic branch back through a
   pull request after the required build-and-test gate passes; formal approving
   reviews are optional for the single-maintainer workflow.
 - Protected branches require linear history and reject force pushes and
   deletion. GitHub automatically deletes merged remote topic branches.
-- The exact-history synchronization required by a full release is the only
-  direct-push exception for `Development1`; the controlled procedure below
-  temporarily relaxes and immediately restores its pull-request gates.
+- Keep `Development1` protections enabled throughout a release. Source,
+  tag-evidence, and post-publication evidence commits reach `Development1`
+  through pull requests after the required gate passes.
+- Do not commit release evidence directly on `main`. Fast-forward `main` from
+  `Development1` so release history always moves in one direction and never
+  requires a protection bypass.
 - A full deployment synchronizes `main` and `Development1` to the same final
   release-evidence commit, then leaves `Development1` checked out.
 - Before making release changes, confirm the current branch and working tree.
@@ -130,17 +134,24 @@ just release-checklist docs/release-checklist-X.Y.Z.json pre-tag
 
 9. Prepare the release candidate on a focused `codex/release-X.Y.Z` topic
    branch, open a pull request into `Development1`, and squash-merge it after
-   the required build-and-test gate passes. Fast-forward `main` to the merged
-   candidate, record the main-sync evidence, and commit that evidence on
-   `main`.
-10. Set the checklist `sourceCommit` to the verified main-sync commit and commit
-   only that checklist update. Create the annotated tag at this checklist-only
-   child commit. The hosted workflow requires `sourceCommit` to equal the tagged
-   commit's sole parent and rejects any other file change in the tagged commit:
+   the required build-and-test gate passes. Fast-forward `main` to that exact
+   candidate and push it. Record the candidate PR and main-sync evidence in the
+   checklist on a new tag-evidence topic branch created from `Development1`.
+10. On the tag-evidence branch, set checklist `sourceCommit` to the verified
+    candidate commit and commit only that checklist update. Open a pull request
+    into `Development1` and squash-merge it after the required gate passes.
+    Verify the resulting `Development1` commit has the candidate as its sole
+    parent and changes only the release checklist. Fast-forward `main` to this
+    checklist-only commit, then create and push the annotated tag there. The
+    hosted workflow requires `sourceCommit` to equal the tagged commit's sole
+    parent and rejects any other file change in the tagged commit:
 
 ```sh
+git switch main
+git merge --ff-only Development1
+git push origin main
 git tag -a vX.Y.Z -m "SerialSlinger X.Y.Z"
-git push origin main vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 11. Watch the GitHub Actions `jDeploy Release` workflow through completion:
@@ -157,13 +168,22 @@ gh release view vX.Y.Z --json tagName,targetCommitish,isDraft,isPrerelease,publi
 curl -L -I https://github.com/OpenARDF/SerialSlinger/releases/download/vX.Y.Z/serialslinger-X.Y.Z.tgz
 ```
 
-13. Record final checklist evidence, run the final checklist guard, commit the
-    post-tag evidence update, and push `main`. To retain the exact tag and
-    evidence commits on both long-lived branches, temporarily suspend only
-    `Development1`'s required-pull-request and required-status-check settings,
-    fast-forward it to `main`, and push it. Immediately restore and read back
-    those settings, confirm force pushes and deletion remain disabled, and
-    leave `Development1` checked out.
+13. Create a post-release evidence topic branch from `Development1`. Record the
+    completed tag push under `tag-pushed`, record the workflow and
+    release-verification evidence, mark the final checklist audit, and run the
+    final checklist guard. Open a pull request into `Development1` and
+    squash-merge it after the required gate passes. Fast-forward `main` from
+    `Development1`, push `main`, and verify the remote branch tips are identical
+    without moving the tag. Leave `Development1` checked out:
+
+```sh
+git switch main
+git merge --ff-only Development1
+git push origin main
+git fetch origin
+test "$(git rev-parse origin/main)" = "$(git rev-parse origin/Development1)"
+git switch Development1
+```
 
 ## Publication Notes
 
