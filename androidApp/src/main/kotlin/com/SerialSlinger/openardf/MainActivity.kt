@@ -5203,6 +5203,7 @@ private fun RelativeTimeSelection.toSharedSelection(): RelativeScheduleSelection
             overrideBoard = overrideBoard,
             recoverAlreadyWaiting = recoverAlreadyWaiting,
             requestedVersion = requestedVersion,
+            manualTimeUpdatingEnabled = deviceTimeSetMode == AndroidDeviceTimeSetMode.MANUAL,
             confirmResidentFallback = ::confirmResidentSignalSlingerUpdate,
             confirmRecoveryFallback = ::confirmSignalSlingerRecoveryUpdate,
             confirmHardwareMismatch = ::confirmSignalSlingerHardwarePackageMismatch,

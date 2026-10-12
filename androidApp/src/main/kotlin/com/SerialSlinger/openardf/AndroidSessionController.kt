@@ -24,6 +24,8 @@ import com.openardf.serialslinger.model.FrequencyBankId
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FirmwareSettingsBackupStore
+import com.openardf.serialslinger.model.FirmwareUpdateTimeSyncDecision
+import com.openardf.serialslinger.model.FirmwareUpdateTimeSyncPolicy
 import com.openardf.serialslinger.model.FIRMWARE_SETTINGS_REBOOT_RETRY_DELAY_MS
 import com.openardf.serialslinger.model.FIRMWARE_SETTINGS_REBOOT_VERIFICATION_ATTEMPTS
 import com.openardf.serialslinger.model.JvmTimeSupport
@@ -6036,6 +6038,7 @@ object AndroidSessionController {
         overrideBoard: String? = null,
         recoverAlreadyWaiting: Boolean = false,
         requestedVersion: String? = null,
+        manualTimeUpdatingEnabled: Boolean = false,
         confirmResidentFallback: ((version: String, board: String, downloadFailure: String) -> Boolean)? = null,
         confirmRecoveryFallback: ((failureDetails: String) -> Boolean)? = null,
         confirmHardwareMismatch: ((failureDetails: String) -> Boolean)? = null,
@@ -6283,6 +6286,32 @@ object AndroidSessionController {
                         )
                         return verified
                     }
+                    fun finishUpdatedFirmware(): FirmwareUpdateOutcome {
+                        val reloadResult = reloadRestoreAndVerify()
+                        val timeSyncAttempt = reloadResult?.let { reloaded ->
+                            runCatching {
+                                synchronizeTimeAfterFirmwareUpdate(
+                                    context = context,
+                                    deviceName = start.deviceName,
+                                    reload = reloaded,
+                                    manualTimeUpdatingEnabled = manualTimeUpdatingEnabled,
+                                    updateLog = updateLog,
+                                )
+                            }
+                        }
+                        val timeSyncFailure = timeSyncAttempt?.exceptionOrNull()?.let(::rootMessage)
+                        timeSyncFailure?.let { failure ->
+                            updateLog += AndroidLogEntry(
+                                "SignalSlinger firmware was updated, but its clock could not be synchronized: $failure",
+                                AndroidLogCategory.APP,
+                            )
+                        }
+                        return FirmwareUpdateOutcome(
+                            release = selection.release,
+                            reloadResult = timeSyncAttempt?.getOrNull() ?: reloadResult,
+                            timeSyncFailure = timeSyncFailure,
+                        )
+                    }
                     try {
                         performSelectedUpdate(start.recoverAlreadyWaiting)
                     } catch (failure: Throwable) {
@@ -6302,10 +6331,7 @@ object AndroidSessionController {
                                 recoverAlreadyWaitingForAttempt = start.recoverAlreadyWaiting,
                                 allowHardwareMismatch = true,
                             )
-                            return@runCatching FirmwareUpdateOutcome(
-                                release = selection.release,
-                                reloadResult = reloadRestoreAndVerify(),
-                            )
+                            return@runCatching finishUpdatedFirmware()
                         }
                         if (
                             start.recoverAlreadyWaiting ||
@@ -6322,11 +6348,7 @@ object AndroidSessionController {
                         )
                         performSelectedUpdate(recoverAlreadyWaitingForAttempt = true)
                     }
-                    val reloadResult = reloadRestoreAndVerify()
-                    FirmwareUpdateOutcome(
-                        release = selection.release,
-                        reloadResult = reloadResult,
-                    )
+                    finishUpdatedFirmware()
                 }
             val alreadyCurrent = result.exceptionOrNull()?.isAlreadyCurrentUpdate() == true
             val cancelledUpdate = result.exceptionOrNull() is SignalSlingerUpdateCancelledException
@@ -6380,15 +6402,25 @@ object AndroidSessionController {
                     } else {
                         latestSessionViewState = null
                     }
-                    latestSubmitSummary = "SignalSlinger update completed: ${release.product} ${release.version} ${release.board}."
+                    latestSubmitSummary = buildString {
+                        append("SignalSlinger update completed: ${release.product} ${release.version} ${release.board}.")
+                        outcome.timeSyncFailure?.let { failure ->
+                            append("\nDevice time synchronization failed: $failure")
+                        }
+                    }
                     latestProbeSummary =
                         if (displayedReloadResult != null) {
                             "Reloaded SignalSlinger after update."
                         } else {
                             "Reload SignalSlinger after update."
                         }
-                    statusText = "SignalSlinger update completed."
-                    statusIsError = false
+                    statusText =
+                        if (outcome.timeSyncFailure == null) {
+                            "SignalSlinger update completed."
+                        } else {
+                            "Firmware updated; device time sync failed."
+                        }
+                    statusIsError = outcome.timeSyncFailure != null
                     firmwareUpdateProgress = null
                 } else if (alreadyCurrent) {
                     val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
@@ -6748,6 +6780,82 @@ object AndroidSessionController {
         }
     }
 
+    private fun synchronizeTimeAfterFirmwareUpdate(
+        context: Context,
+        deviceName: String,
+        reload: FirmwareUpdateReload,
+        manualTimeUpdatingEnabled: Boolean,
+        updateLog: MutableList<AndroidLogEntry>,
+    ): FirmwareUpdateReload {
+        val snapshot = requireNotNull(reload.result.state.snapshot) {
+            "Updated SignalSlinger did not report settings for device time synchronization."
+        }
+        when (FirmwareUpdateTimeSyncPolicy.decide(manualTimeUpdatingEnabled, snapshot)) {
+            FirmwareUpdateTimeSyncDecision.SKIP_MANUAL_MODE -> {
+                updateLog += AndroidLogEntry(
+                    "Skipped post-update device time synchronization because Manual time updating is enabled.",
+                    AndroidLogCategory.APP,
+                )
+                return reload
+            }
+            FirmwareUpdateTimeSyncDecision.SKIP_UNSUPPORTED -> {
+                updateLog += AndroidLogEntry(
+                    "Skipped post-update device time synchronization because this firmware does not report time-setting support.",
+                    AndroidLogCategory.APP,
+                )
+                return reload
+            }
+            FirmwareUpdateTimeSyncDecision.SYNC -> Unit
+        }
+
+        val syncResult = runWithResolvedTransport(
+            context = context,
+            requestedDeviceName = deviceName,
+            requestedTarget = AndroidConnectionTarget.Usb(deviceName, signalSlingerAppBaudRate),
+            allowUsbAutoDetect = false,
+            missingMessage = "SignalSlinger is no longer connected.",
+            verifyLoadedDeviceIdentity = false,
+        ) { _, transport ->
+            performAlignedTimeSync(
+                transport = transport,
+                state = reload.result.state,
+                snapshot = snapshot,
+            )
+        }.getOrThrow()
+        val finalAttempt = syncResult.finalAttempt
+        require(syncResult.succeeded) {
+            finalAttempt.phaseErrorMillis?.let { phase ->
+                "Device time sync remained outside tolerance (${JvmTimeSupport.formatSignedDurationMillis(phase)})."
+            } ?: "Device time sync could not be verified."
+        }
+        updateLog += AndroidLogEntry(
+            "Synchronized device time after firmware update.",
+            AndroidLogCategory.APP,
+        )
+        updateLog += AndroidLogEntry(
+            "Clock sync completed in ${syncResult.attempts.size} attempt(s)" +
+                (finalAttempt.phaseErrorMillis?.let { phase ->
+                    " with measured phase error ${JvmTimeSupport.formatSignedDurationMillis(phase)}."
+                } ?: "."),
+            AndroidLogCategory.APP,
+        )
+        buildSyncTraceEntries(syncResult).forEach { trace ->
+            updateLog += AndroidLogEntry(
+                message = "${trace.direction.label} ${trace.payload}",
+                category = AndroidLogCategory.SERIAL,
+                timestampMs = trace.timestampMs,
+            )
+        }
+        return reload.copy(
+            result = reload.result.copy(state = finalAttempt.state),
+            clockAnchor = ClockDisplayAnchor(
+                currentTimeCompact = finalAttempt.state.snapshot?.settings?.currentTimeCompact,
+                referenceTime = finalAttempt.verificationSamples.lastOrNull()?.midpointAt,
+                phaseErrorMillis = finalAttempt.phaseErrorMillis,
+            ),
+        )
+    }
+
     private fun recordFirmwareUpdateProgress(
         productLabel: String,
         progress: SignalSlingerFirmwareUpdateProgress,
@@ -7001,6 +7109,7 @@ object AndroidSessionController {
     private data class FirmwareUpdateOutcome(
         val release: SignalSlingerReleaseInfo,
         val reloadResult: FirmwareUpdateReload?,
+        val timeSyncFailure: String?,
     )
 
     private data class ArduconUpdateStart(

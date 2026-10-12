@@ -20,6 +20,8 @@ import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FirmwareUpdateOfferSupport
 import com.openardf.serialslinger.model.FirmwareSettingsBackupStore
+import com.openardf.serialslinger.model.FirmwareUpdateTimeSyncDecision
+import com.openardf.serialslinger.model.FirmwareUpdateTimeSyncPolicy
 import com.openardf.serialslinger.model.FIRMWARE_SETTINGS_REBOOT_RETRY_DELAY_MS
 import com.openardf.serialslinger.model.FIRMWARE_SETTINGS_REBOOT_VERIFICATION_ATTEMPTS
 import com.openardf.serialslinger.model.HardwareFaultPresentation
@@ -9835,6 +9837,23 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 refreshedConnection = verified
             }
         }
+        var postUpdateTimeSyncFailure: String? = null
+        refreshedConnection?.let { connection ->
+            synchronizeTimeAfterFirmwareUpdate(
+                connection = connection,
+                manualTimeUpdatingEnabled = displayPreferences.timeSetMode == TimeSetMode.MANUAL,
+                logEntries = logEntries,
+            ).fold(
+                onSuccess = { refreshedConnection = it },
+                onFailure = { failure ->
+                    postUpdateTimeSyncFailure = rootMessage(failure)
+                    log(
+                        "SignalSlinger firmware was updated, but its clock could not be synchronized: " +
+                            postUpdateTimeSyncFailure,
+                    )
+                },
+            )
+        }
         SwingUtilities.invokeLater {
             finishFirmwareUpdateLog("Update SignalSlinger", logEntries)
             if (refreshedConnection != null) {
@@ -9853,11 +9872,21 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             } else {
                 clearFormForUnread()
             }
-            setStatus("SignalSlinger update completed.")
-            val message = if (refreshedConnection != null) {
-                "SignalSlinger update completed.\n\nThe displayed device information has been refreshed."
-            } else {
-                "SignalSlinger update completed.\n\nSerialSlinger could not refresh the displayed device information. Use Reload SignalSlinger Data to refresh it."
+            setStatus(
+                if (postUpdateTimeSyncFailure == null) {
+                    "SignalSlinger update completed."
+                } else {
+                    "SignalSlinger update completed; device time sync failed."
+                },
+            )
+            val message = when {
+                postUpdateTimeSyncFailure != null ->
+                    "SignalSlinger update completed, but SerialSlinger could not synchronize the device time.\n\n" +
+                        postUpdateTimeSyncFailure
+                refreshedConnection != null ->
+                    "SignalSlinger update completed.\n\nThe displayed device information has been refreshed."
+                else ->
+                    "SignalSlinger update completed.\n\nSerialSlinger could not refresh the displayed device information. Use Reload SignalSlinger Data to refresh it."
             }
             playCompletionBeep()
             showAppMessageDialog(message)
@@ -9867,6 +9896,55 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 requestFindDeviceFocus()
             }
         }
+    }
+
+    private fun synchronizeTimeAfterFirmwareUpdate(
+        connection: LoadedConnection,
+        manualTimeUpdatingEnabled: Boolean,
+        logEntries: MutableList<DesktopLogEntry>,
+    ): Result<LoadedConnection> = runCatching {
+        val snapshot = requireNotNull(connection.result.state.snapshot) {
+            "Updated SignalSlinger did not report settings for device time synchronization."
+        }
+        when (FirmwareUpdateTimeSyncPolicy.decide(manualTimeUpdatingEnabled, snapshot)) {
+            FirmwareUpdateTimeSyncDecision.SKIP_MANUAL_MODE -> {
+                logEntries += DesktopLogEntry(
+                    "Skipped post-update device time synchronization because Manual time updating is enabled.",
+                )
+                return@runCatching connection
+            }
+            FirmwareUpdateTimeSyncDecision.SKIP_UNSUPPORTED -> {
+                logEntries += DesktopLogEntry(
+                    "Skipped post-update device time synchronization because this firmware does not report time-setting support.",
+                )
+                return@runCatching connection
+            }
+            FirmwareUpdateTimeSyncDecision.SYNC -> Unit
+        }
+
+        val syncResult = performAlignedTimeSync(
+            transport = connection.transport,
+            state = connection.result.state,
+            snapshot = snapshot,
+        )
+        val finalAttempt = syncResult.finalAttempt
+        require(syncResult.succeeded) {
+            finalAttempt.phaseErrorMillis?.let { phase ->
+                "Device time sync remained outside tolerance (${DesktopInputSupport.formatSignedDurationMillis(phase)})."
+            } ?: "Device time sync could not be verified."
+        }
+        logEntries += DesktopLogEntry("Synchronized device time after firmware update.")
+        logEntries += buildSyncLogEntries(syncResult.attempts, syncResult.latencySamples)
+        connection.copy(
+            result = connection.result.copy(
+                state = finalAttempt.state,
+            ),
+            clockAnchor = ClockDisplayAnchor(
+                currentTimeCompact = finalAttempt.state.snapshot?.settings?.currentTimeCompact,
+                referenceTime = finalAttempt.verificationSamples.lastOrNull()?.midpointAt,
+                phaseErrorMillis = finalAttempt.phaseErrorMillis,
+            ),
+        )
     }
 
     private fun userFacingFirmwareUpdateStage(stage: String): String =
@@ -10042,7 +10120,7 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             failureDetails.contains("No response", ignoreCase = true)
     }
 
-    private fun rootMessage(exception: Exception): String {
+    private fun rootMessage(exception: Throwable): String {
         var cause: Throwable? = exception
         while (cause != null) {
             cause.message?.takeIf { it.isNotBlank() }?.let { return it }
