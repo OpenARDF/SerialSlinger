@@ -3,6 +3,9 @@ package com.openardf.serialslinger.model
 import java.io.File
 import java.util.Properties
 
+const val FIRMWARE_SETTINGS_REBOOT_VERIFICATION_ATTEMPTS = 3
+const val FIRMWARE_SETTINGS_REBOOT_RETRY_DELAY_MS = 1_500L
+
 /** Settings SerialSlinger can safely restore to the same unit after an EEPROM-map update. */
 data class FirmwareSettingsBackup(
     val deviceUniqueId: String,
@@ -13,12 +16,29 @@ data class FirmwareSettingsBackup(
     val thermalShutdownEnabled: Boolean?,
 ) {
     fun settingsForRestore(current: DeviceSettings): DeviceSettings = settings.copy(
+        foxRole = settings.foxRole ?: current.foxRole,
+        arduconFoxRoleCode = settings.arduconFoxRoleCode ?: current.arduconFoxRoleCode,
+        patternText = settings.patternText ?: current.patternText,
         currentTimeCompact = current.currentTimeCompact,
+        startTimeCompact = settings.startTimeCompact ?: current.startTimeCompact,
+        finishTimeCompact = settings.finishTimeCompact ?: current.finishTimeCompact,
+        lowFrequencyHz = settings.lowFrequencyHz ?: current.lowFrequencyHz,
+        mediumFrequencyHz = settings.mediumFrequencyHz ?: current.mediumFrequencyHz,
+        highFrequencyHz = settings.highFrequencyHz ?: current.highFrequencyHz,
+        beaconFrequencyHz = settings.beaconFrequencyHz ?: current.beaconFrequencyHz,
+        lowBatteryThresholdVolts = settings.lowBatteryThresholdVolts ?: current.lowBatteryThresholdVolts,
+        externalBatteryControlMode = settings.externalBatteryControlMode ?: current.externalBatteryControlMode,
+        dtmfPassword = current.dtmfPassword,
+        amToneFrequency = current.amToneFrequency,
+        pttResetSetting = current.pttResetSetting,
+        temperatureCalibration = current.temperatureCalibration,
     )
 
     fun requireMatches(snapshot: DeviceSnapshot) {
-        require(snapshot.info.deviceUniqueId.equals(deviceUniqueId, ignoreCase = true)) {
-            "Updated SignalSlinger identity does not match the saved settings backup."
+        snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() }?.let { reportedUid ->
+            require(reportedUid.equals(deviceUniqueId, ignoreCase = true)) {
+                "Updated SignalSlinger identity does not match the saved settings backup."
+            }
         }
         require(snapshot.info.softwareVersion == targetVersion) {
             "Updated SignalSlinger reports ${snapshot.info.softwareVersion ?: "an unknown version"}; expected $targetVersion."
@@ -27,21 +47,112 @@ data class FirmwareSettingsBackup(
 
     fun requireRestored(snapshot: DeviceSnapshot) {
         requireMatches(snapshot)
-        require(settingsForRestore(snapshot.settings) == snapshot.settings) {
-            "Restored SignalSlinger settings did not survive reboot verification."
-        }
-        require(
-            thermalShutdownThresholdC == null ||
-                snapshot.status.thermalShutdownThresholdC?.toInt() == thermalShutdownThresholdC,
-        ) {
-            "Restored SignalSlinger thermal shutdown threshold did not survive reboot verification."
-        }
-        require(thermalShutdownEnabled == null || snapshot.status.thermalShutdownEnabled == thermalShutdownEnabled) {
-            "Restored SignalSlinger thermal shutdown mode did not survive reboot verification."
+        val differences = restorationDifferences(snapshot)
+        require(differences.isEmpty()) {
+            "Restored SignalSlinger settings did not survive reboot verification. " +
+                "Differences: ${differences.joinToString("; ")}"
         }
     }
 
+    /**
+     * A firmware that does not report the unit identity cannot prove which unit consumed this
+     * backup. Keep the tiny backup until a later verified update reports the identity again.
+     */
+    fun canDeleteAfterSuccessfulVerification(snapshot: DeviceSnapshot): Boolean =
+        snapshot.info.deviceUniqueId
+            ?.takeIf { it.isNotBlank() }
+            ?.equals(deviceUniqueId, ignoreCase = true) == true
+
+    /**
+     * Compares only values represented by this backup. Live clock data, fields absent from the
+     * source firmware, and settings belonging only to other products are deliberately ignored.
+     */
+    fun restorationDifferences(snapshot: DeviceSnapshot): List<String> {
+        val actual = snapshot.settings
+        val expected = settingsForRestore(actual)
+        return buildList {
+            fun difference(label: String, expectedValue: Any?, actualValue: Any?) {
+                if (expectedValue != actualValue) {
+                    add("$label expected ${formatBackupValue(expectedValue)}, read ${formatBackupValue(actualValue)}")
+                }
+            }
+
+            difference("Station ID", expected.stationId, actual.stationId)
+            difference("Event type", expected.eventType, actual.eventType)
+            difference("Fox role", expected.foxRole, actual.foxRole)
+            difference("Pattern text", expected.patternText, actual.patternText)
+            difference("ID speed", expected.idCodeSpeedWpm, actual.idCodeSpeedWpm)
+            difference("Pattern speed", expected.patternCodeSpeedWpm, actual.patternCodeSpeedWpm)
+            difference("Start time", expected.startTimeCompact, actual.startTimeCompact)
+            difference("Finish time", expected.finishTimeCompact, actual.finishTimeCompact)
+            difference("Days to run", expected.daysToRun, actual.daysToRun)
+            difference("Default frequency", expected.defaultFrequencyHz, actual.defaultFrequencyHz)
+            difference("Low frequency", expected.lowFrequencyHz, actual.lowFrequencyHz)
+            difference("Medium frequency", expected.mediumFrequencyHz, actual.mediumFrequencyHz)
+            difference("High frequency", expected.highFrequencyHz, actual.highFrequencyHz)
+            difference("Beacon frequency", expected.beaconFrequencyHz, actual.beaconFrequencyHz)
+            if (!approximatelyEqual(expected.lowBatteryThresholdVolts, actual.lowBatteryThresholdVolts)) {
+                add(
+                    "Low-battery threshold expected ${formatBackupValue(expected.lowBatteryThresholdVolts)}, " +
+                        "read ${formatBackupValue(actual.lowBatteryThresholdVolts)}",
+                )
+            }
+            difference(
+                "External-battery control",
+                expected.externalBatteryControlMode,
+                actual.externalBatteryControlMode,
+            )
+            difference("Transmitter mode", expected.transmissionsEnabled, actual.transmissionsEnabled)
+            if (snapshot.capabilities.supportsThermalShutdownMode) {
+                thermalShutdownThresholdC?.let { expectedThreshold ->
+                    difference(
+                        "Thermal shutdown threshold",
+                        expectedThreshold,
+                        snapshot.status.thermalShutdownThresholdC?.toInt(),
+                    )
+                }
+                thermalShutdownEnabled?.let { expectedEnabled ->
+                    difference("Thermal shutdown mode", expectedEnabled, snapshot.status.thermalShutdownEnabled)
+                }
+            }
+        }
+    }
+
+    fun requiresRestore(snapshot: DeviceSnapshot): Boolean = restorationDifferences(snapshot).isNotEmpty()
+
+    /**
+     * Reloads until the restored settings are visible or the conservative retry budget is exhausted.
+     * A freshly rebooted unit can briefly answer with an incomplete startup readback.
+     */
+    fun <T : Any> verifyRestoredAfterReboot(
+        attempts: Int = FIRMWARE_SETTINGS_REBOOT_VERIFICATION_ATTEMPTS,
+        beforeAttempt: (attempt: Int) -> Unit = {},
+        load: () -> T,
+        snapshotOf: (T) -> DeviceSnapshot,
+        discardRejected: (T) -> Unit = {},
+        onRetry: (attempt: Int, failure: Throwable) -> Unit = { _, _ -> },
+    ): T {
+        require(attempts > 0) { "At least one reboot verification attempt is required." }
+        var lastFailure: Throwable? = null
+        for (attempt in 1..attempts) {
+            beforeAttempt(attempt)
+            var candidate: T? = null
+            val failure = runCatching {
+                load().also { loaded ->
+                    candidate = loaded
+                    requireRestored(snapshotOf(loaded))
+                }
+            }.exceptionOrNull()
+            if (failure == null) return requireNotNull(candidate)
+            candidate?.let(discardRejected)
+            lastFailure = failure
+            if (attempt < attempts) onRetry(attempt, failure)
+        }
+        throw lastFailure ?: error("SignalSlinger settings verification did not complete.")
+    }
+
     fun supplementalRestoreCommands(snapshot: DeviceSnapshot): List<String> = buildList {
+        if (!snapshot.capabilities.supportsThermalShutdownMode) return@buildList
         thermalShutdownThresholdC?.takeIf {
             snapshot.status.thermalShutdownThresholdC?.toInt() != it
         }?.let { add(ThermalShutdownSupport.commandForCelsius(it, snapshot.info.productName)) }
@@ -49,17 +160,31 @@ data class FirmwareSettingsBackup(
             snapshot.status.thermalShutdownEnabled != it
         }?.let { add(ThermalShutdownSupport.commandForEnabled(it, snapshot.info.productName)) }
     }
+
+    private fun approximatelyEqual(expected: Double?, actual: Double?): Boolean {
+        if (expected == null || actual == null) return expected == actual
+        return kotlin.math.abs(expected - actual) < 0.0001
+    }
+
+    private fun formatBackupValue(value: Any?): String = when (value) {
+        null -> "not reported"
+        true -> "enabled"
+        false -> "disabled"
+        else -> "'$value'"
+    }
 }
 
 /** Small, private, short-lived update safety net. Successful verified updates delete it. */
 class FirmwareSettingsBackupStore(private val directory: File) {
     fun save(snapshot: DeviceSnapshot, targetVersion: String): File {
-        val uid = requireNotNull(snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() }) {
-            "Cannot back up firmware settings without a device identity."
-        }
         directory.mkdirs()
         deleteOrphanedTemporaryFiles()
-        val target = directory.resolve("${uid.lowercase()}.properties")
+        val reportedUid = snapshot.info.deviceUniqueId?.takeIf { it.isNotBlank() }
+        val resumed = if (reportedUid == null) uniquePendingBackupFor(snapshot) else null
+        val uid = requireNotNull(reportedUid ?: resumed?.second?.deviceUniqueId) {
+            "Cannot back up firmware settings without a device identity or a uniquely matching pending backup."
+        }
+        val target = resumed?.first ?: directory.resolve("${uid.lowercase()}.properties")
         val previous = directory.resolve("${target.name}.previous")
         if (!target.isFile && previous.isFile) {
             require(previous.renameTo(target)) {
@@ -104,6 +229,19 @@ class FirmwareSettingsBackupStore(private val directory: File) {
             "Could not remove the superseded firmware settings backup."
         }
         return target
+    }
+
+    private fun uniquePendingBackupFor(snapshot: DeviceSnapshot): Pair<File, FirmwareSettingsBackup>? {
+        val currentVersion = snapshot.info.softwareVersion?.takeIf { it.isNotBlank() } ?: return null
+        val matches = directory.listFiles { file ->
+            file.isFile && file.name.endsWith(".properties")
+        }.orEmpty().map { file -> file to load(file) }
+            .filter { (_, backup) -> backup.targetVersion == currentVersion }
+        require(matches.size <= 1) {
+            "Multiple pending firmware settings backups match SignalSlinger $currentVersion; " +
+                "the unit identity is required to select one safely."
+        }
+        return matches.singleOrNull()
     }
 
     fun load(file: File): FirmwareSettingsBackup {

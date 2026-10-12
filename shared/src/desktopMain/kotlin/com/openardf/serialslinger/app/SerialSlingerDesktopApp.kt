@@ -20,6 +20,8 @@ import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FirmwareUpdateOfferSupport
 import com.openardf.serialslinger.model.FirmwareSettingsBackupStore
+import com.openardf.serialslinger.model.FIRMWARE_SETTINGS_REBOOT_RETRY_DELAY_MS
+import com.openardf.serialslinger.model.FIRMWARE_SETTINGS_REBOOT_VERIFICATION_ATTEMPTS
 import com.openardf.serialslinger.model.HardwareFaultPresentation
 import com.openardf.serialslinger.model.MultiDayDurationGuardChoice
 import com.openardf.serialslinger.model.MultiDayDurationGuardOption
@@ -9780,30 +9782,58 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
             val initialSnapshot = initialConnection.result.state.snapshot
                 ?: error("Updated SignalSlinger did not report settings.")
             backup.requireMatches(initialSnapshot)
-            DeviceSessionController.submitEdits(
-                state = initialConnection.result.state,
-                editedSettings = EditableDeviceSettings.fromDeviceSettings(
-                    backup.settingsForRestore(initialSnapshot.settings),
-                ),
-                transport = initialConnection.transport,
-            )
-            val supplementalCommands = backup.supplementalRestoreCommands(initialSnapshot)
-            if (supplementalCommands.isNotEmpty()) {
-                initialConnection.transport.sendCommands(supplementalCommands)
-                initialConnection.transport.readAvailableLines()
+            val initialDifferences = backup.restorationDifferences(initialSnapshot)
+            if (initialDifferences.isEmpty()) {
+                if (backup.canDeleteAfterSuccessfulVerification(initialSnapshot)) {
+                    backupStore.delete(backupFile)
+                    log("Verified saved settings remained intact after the firmware update; no restore was needed. Removed the temporary backup.")
+                } else {
+                    log("Verified saved settings remained intact after the firmware update. Kept the temporary backup because this firmware does not report the unit identity; a later verified update will remove it.")
+                }
+            } else {
+                log("Settings requiring restoration after the firmware update: ${initialDifferences.joinToString("; ")}.")
+                DeviceSessionController.submitEdits(
+                    state = initialConnection.result.state,
+                    editedSettings = EditableDeviceSettings.fromDeviceSettings(
+                        backup.settingsForRestore(initialSnapshot.settings),
+                    ),
+                    transport = initialConnection.transport,
+                )
+                val supplementalCommands = backup.supplementalRestoreCommands(initialSnapshot)
+                if (supplementalCommands.isNotEmpty()) {
+                    initialConnection.transport.sendCommands(supplementalCommands)
+                    initialConnection.transport.readAvailableLines()
+                }
+                log("Restored and read back the saved settings after EEPROM migration.")
+                initialConnection.transport.sendCommands(listOf("RST"))
+                runCatching { initialConnection.transport.readAvailableLines() }
+                initialConnection.transport.disconnect()
+                val verified = backup.verifyRestoredAfterReboot(
+                    attempts = FIRMWARE_SETTINGS_REBOOT_VERIFICATION_ATTEMPTS,
+                    beforeAttempt = { Thread.sleep(FIRMWARE_SETTINGS_REBOOT_RETRY_DELAY_MS) },
+                    load = { loadPortWithAliasFallback(portPath) },
+                    snapshotOf = { candidate ->
+                        candidate.result.state.snapshot
+                            ?: error("SignalSlinger did not reload after settings restore.")
+                    },
+                    discardRejected = { candidate -> candidate.transport.disconnect() },
+                    onRetry = { attempt, failure ->
+                        log(
+                            "Settings verification attempt $attempt did not match after reboot; " +
+                                "waiting and retrying: ${failure.message.orEmpty()}",
+                        )
+                    },
+                )
+                val verifiedSnapshot = verified.result.state.snapshot
+                    ?: error("SignalSlinger did not reload after settings restore.")
+                if (backup.canDeleteAfterSuccessfulVerification(verifiedSnapshot)) {
+                    backupStore.delete(backupFile)
+                    log("Verified restored settings after reboot and removed the temporary backup.")
+                } else {
+                    log("Verified restored settings after reboot. Kept the temporary backup because this firmware does not report the unit identity; a later verified update will remove it.")
+                }
+                refreshedConnection = verified
             }
-            log("Restored and read back the saved settings after EEPROM migration.")
-            initialConnection.transport.sendCommands(listOf("RST"))
-            runCatching { initialConnection.transport.readAvailableLines() }
-            initialConnection.transport.disconnect()
-            Thread.sleep(1_500)
-            val verifiedConnection = loadPortWithAliasFallback(portPath)
-            val verifiedSnapshot = verifiedConnection.result.state.snapshot
-                ?: error("SignalSlinger did not reload after settings restore.")
-            backup.requireRestored(verifiedSnapshot)
-            backupStore.delete(backupFile)
-            log("Verified restored settings after reboot and removed the temporary backup.")
-            refreshedConnection = verifiedConnection
         }
         SwingUtilities.invokeLater {
             finishFirmwareUpdateLog("Update SignalSlinger", logEntries)
@@ -10037,6 +10067,9 @@ private class SerialSlingerDesktopFrame : JFrame("SerialSlinger ${SerialSlingerA
                 failureDetails.contains("did not enter update mode", ignoreCase = true) ||
                 failureDetails.contains("did not respond in update mode", ignoreCase = true) ->
                 "The update was interrupted or SignalSlinger did not restart as expected.\n\nReconnect SignalSlinger and try Update Connected Device again.\n\n$failureDetails"
+            failureDetails.contains("did not survive reboot verification", ignoreCase = true) ->
+                "SignalSlinger firmware was installed, but settings verification failed.\n\n" +
+                    "The temporary settings backup was kept so the settings can be recovered.\n\n$failureDetails"
             else -> "SignalSlinger update failed.\n\n$failureDetails"
         }
     }

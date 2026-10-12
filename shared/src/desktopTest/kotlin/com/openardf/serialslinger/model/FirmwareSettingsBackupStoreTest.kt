@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertContains
 import kotlin.test.assertTrue
 
 class FirmwareSettingsBackupStoreTest {
@@ -25,6 +26,7 @@ class FirmwareSettingsBackupStoreTest {
         version: String = "2.0.7",
     ) = DeviceSnapshot(
         info = DeviceInfo(productName = "SignalSlinger", deviceUniqueId = uid, softwareVersion = version),
+        capabilities = DeviceCapabilities(supportsThermalShutdownMode = true),
         status = DeviceStatus(thermalShutdownThresholdC = 65.0, thermalShutdownEnabled = true),
         settings = settings(stationId),
     )
@@ -52,7 +54,21 @@ class FirmwareSettingsBackupStoreTest {
                 ),
             )
             assertTrue(backup.supplementalRestoreCommands(snapshot).isEmpty())
-            backup.requireRestored(snapshot.copy(info = snapshot.info.copy(softwareVersion = "2.1.0")))
+            val updatedSnapshot = snapshot.copy(
+                info = snapshot.info.copy(softwareVersion = "2.1.0"),
+                settings = settings.copy(
+                    currentTimeCompact = "261012120012",
+                    dtmfPassword = "new-firmware-only-value",
+                    temperatureCalibration = -110,
+                ),
+            )
+            assertTrue(backup.restorationDifferences(updatedSnapshot).isEmpty())
+            assertFalse(backup.requiresRestore(updatedSnapshot))
+            assertEquals(
+                updatedSnapshot.settings,
+                backup.settingsForRestore(updatedSnapshot.settings),
+            )
+            backup.requireRestored(updatedSnapshot)
             val replacementSnapshot = snapshot.copy(settings = settings.copy(stationId = "SHOULD-NOT-REPLACE"))
             val interruptedPrevious = file.resolveSibling("${file.name}.previous")
             assertTrue(file.renameTo(interruptedPrevious))
@@ -82,12 +98,15 @@ class FirmwareSettingsBackupStoreTest {
             assertFailsWith<IllegalArgumentException> {
                 backup.requireMatches(snapshot(uid = "different", version = "2.1.0"))
             }
+            backup.requireMatches(snapshot(uid = null, version = "2.1.0"))
             assertFailsWith<IllegalArgumentException> {
                 backup.requireMatches(snapshot(version = "2.1.1"))
             }
-            assertFailsWith<IllegalArgumentException> {
+            val settingsFailure = assertFailsWith<IllegalArgumentException> {
                 backup.requireRestored(snapshot(stationId = "CHANGED", version = "2.1.0"))
             }
+            assertContains(settingsFailure.message.orEmpty(), "Station ID expected 'W8UM', read 'CHANGED'")
+            assertTrue(backup.requiresRestore(snapshot(stationId = "CHANGED", version = "2.1.0")))
             assertFailsWith<IllegalArgumentException> {
                 backup.requireRestored(
                     snapshot(version = "2.1.0").copy(
@@ -98,6 +117,109 @@ class FirmwareSettingsBackupStoreTest {
 
             file.writeText("format=99\nuid=invalid\n")
             assertFailsWith<IllegalArgumentException> { store.load(file) }
+        } finally {
+            root.toFile().deleteRecursively()
+            root.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun resumesUniquePendingBackupWhenOlderFirmwareDoesNotReportIdentity() {
+        val root = Files.createTempDirectory("firmware-backup-resume-test")
+        try {
+            val store = FirmwareSettingsBackupStore(root.toFile())
+            val original = snapshot(stationId = "NZ0I", version = "2.0.7")
+            val file = store.save(original, "2.0.2")
+
+            val resumedFile = store.save(
+                snapshot(stationId = "RESET", uid = null, version = "2.0.2"),
+                "2.0.7",
+            )
+
+            assertEquals(file, resumedFile)
+            val resumed = store.load(resumedFile)
+            assertEquals(original.info.deviceUniqueId, resumed.deviceUniqueId)
+            assertEquals("2.0.7", resumed.sourceVersion)
+            assertEquals("2.0.7", resumed.targetVersion)
+            assertEquals("NZ0I", resumed.settings.stationId)
+        } finally {
+            root.toFile().deleteRecursively()
+            root.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun refusesToGuessBetweenPendingBackupsWhenIdentityIsUnavailable() {
+        val root = Files.createTempDirectory("firmware-backup-ambiguous-test")
+        try {
+            val store = FirmwareSettingsBackupStore(root.toFile())
+            store.save(snapshot(uid = "unit-one", version = "2.0.7"), "2.0.2")
+            store.save(snapshot(uid = "unit-two", version = "2.0.7"), "2.0.2")
+
+            val failure = assertFailsWith<IllegalArgumentException> {
+                store.save(snapshot(uid = null, version = "2.0.2"), "2.0.7")
+            }
+            assertContains(failure.message.orEmpty(), "Multiple pending firmware settings backups")
+        } finally {
+            root.toFile().deleteRecursively()
+            root.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun retriesTransientPostRebootReadbackBeforeAcceptingRestoredSettings() {
+        val root = Files.createTempDirectory("firmware-backup-reboot-retry-test")
+        try {
+            val store = FirmwareSettingsBackupStore(root.toFile())
+            val backup = store.load(store.save(snapshot(), "2.1.0"))
+            val staleReadback = snapshot(stationId = "", version = "2.1.0")
+            val restoredReadback = snapshot(version = "2.1.0")
+            val readbacks = ArrayDeque(listOf(staleReadback, restoredReadback))
+            val attempts = mutableListOf<Int>()
+            val rejected = mutableListOf<DeviceSnapshot>()
+            val retries = mutableListOf<String>()
+
+            val verified = backup.verifyRestoredAfterReboot(
+                beforeAttempt = attempts::add,
+                load = { readbacks.removeFirst() },
+                snapshotOf = { it },
+                discardRejected = rejected::add,
+                onRetry = { _, failure -> retries += failure.message.orEmpty() },
+            )
+
+            assertEquals(restoredReadback, verified)
+            assertEquals(listOf(1, 2), attempts)
+            assertEquals(listOf(staleReadback), rejected)
+            assertEquals(1, retries.size)
+            assertContains(retries.single(), "Station ID expected 'W8UM', read ''")
+        } finally {
+            root.toFile().deleteRecursively()
+            root.deleteIfExists()
+        }
+    }
+
+    @Test
+    fun ignoresThermalSettingsWhenTargetFirmwareCannotReportThemAndRetainsBackupWithoutIdentity() {
+        val root = Files.createTempDirectory("firmware-backup-old-target-test")
+        try {
+            val store = FirmwareSettingsBackupStore(root.toFile())
+            val backup = store.load(store.save(snapshot(), "2.0.2"))
+            val oldFirmwareSnapshot = snapshot(uid = null, version = "2.0.2").copy(
+                capabilities = DeviceCapabilities(supportsThermalShutdownMode = false),
+                status = DeviceStatus(thermalShutdownThresholdC = null, thermalShutdownEnabled = null),
+            )
+
+            assertTrue(backup.restorationDifferences(oldFirmwareSnapshot).isEmpty())
+            assertTrue(backup.supplementalRestoreCommands(oldFirmwareSnapshot).isEmpty())
+            backup.requireRestored(oldFirmwareSnapshot)
+            assertFalse(backup.canDeleteAfterSuccessfulVerification(oldFirmwareSnapshot))
+            assertTrue(
+                backup.canDeleteAfterSuccessfulVerification(
+                    oldFirmwareSnapshot.copy(
+                        info = oldFirmwareSnapshot.info.copy(deviceUniqueId = backup.deviceUniqueId),
+                    ),
+                ),
+            )
         } finally {
             root.toFile().deleteRecursively()
             root.deleteIfExists()

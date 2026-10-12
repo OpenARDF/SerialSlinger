@@ -24,6 +24,8 @@ import com.openardf.serialslinger.model.FrequencyBankId
 import com.openardf.serialslinger.model.FrequencySupport
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FirmwareSettingsBackupStore
+import com.openardf.serialslinger.model.FIRMWARE_SETTINGS_REBOOT_RETRY_DELAY_MS
+import com.openardf.serialslinger.model.FIRMWARE_SETTINGS_REBOOT_VERIFICATION_ATTEMPTS
 import com.openardf.serialslinger.model.JvmTimeSupport
 import com.openardf.serialslinger.model.ClockPhaseSample
 import com.openardf.serialslinger.model.CloneTemplateEligibility
@@ -6199,6 +6201,23 @@ object AndroidSessionController {
                         val initialSnapshot = initial.result.state.snapshot
                             ?: error("Updated SignalSlinger did not report settings.")
                         backup.requireMatches(initialSnapshot)
+                        val initialDifferences = backup.restorationDifferences(initialSnapshot)
+                        if (initialDifferences.isEmpty()) {
+                            updateLog += AndroidLogEntry(
+                                if (backup.canDeleteAfterSuccessfulVerification(initialSnapshot)) {
+                                    backupStore.delete(savedFile)
+                                    "Verified saved settings remained intact after the firmware update; no restore was needed. Removed the temporary backup."
+                                } else {
+                                    "Verified saved settings remained intact after the firmware update. Kept the temporary backup because this firmware does not report the unit identity; a later verified update will remove it."
+                                },
+                                AndroidLogCategory.APP,
+                            )
+                            return initial
+                        }
+                        updateLog += AndroidLogEntry(
+                            "Settings requiring restoration after the firmware update: ${initialDifferences.joinToString("; ")}.",
+                            AndroidLogCategory.APP,
+                        )
                         runWithResolvedTransport(
                             context = context,
                             requestedDeviceName = start.deviceName,
@@ -6226,21 +6245,40 @@ object AndroidSessionController {
                             "Restored and read back the saved settings after EEPROM migration.",
                             AndroidLogCategory.APP,
                         )
-                        Thread.sleep(1_500)
-                        val verified = reloadSignalSlingerAfterFirmwareUpdate(
-                            context = context,
-                            deviceName = start.deviceName,
-                            productLabel = "SignalSlinger",
-                            appBaudRate = signalSlingerAppBaudRate,
-                        ).getOrThrow().let { (reloadResult, clockAnchor) ->
-                            FirmwareUpdateReload(reloadResult, clockAnchor)
-                        }
+                        val verified = backup.verifyRestoredAfterReboot(
+                            attempts = FIRMWARE_SETTINGS_REBOOT_VERIFICATION_ATTEMPTS,
+                            beforeAttempt = { Thread.sleep(FIRMWARE_SETTINGS_REBOOT_RETRY_DELAY_MS) },
+                            load = {
+                                reloadSignalSlingerAfterFirmwareUpdate(
+                                    context = context,
+                                    deviceName = start.deviceName,
+                                    productLabel = "SignalSlinger",
+                                    appBaudRate = signalSlingerAppBaudRate,
+                                ).getOrThrow().let { (reloadResult, clockAnchor) ->
+                                    FirmwareUpdateReload(reloadResult, clockAnchor)
+                                }
+                            },
+                            snapshotOf = { candidate ->
+                                candidate.result.state.snapshot
+                                    ?: error("SignalSlinger did not reload after settings restore.")
+                            },
+                            onRetry = { attempt, failure ->
+                                updateLog += AndroidLogEntry(
+                                    "Settings verification attempt $attempt did not match after reboot; " +
+                                        "waiting and retrying: ${failure.message.orEmpty()}",
+                                    AndroidLogCategory.APP,
+                                )
+                            },
+                        )
                         val verifiedSnapshot = verified.result.state.snapshot
                             ?: error("SignalSlinger did not reload after settings restore.")
-                        backup.requireRestored(verifiedSnapshot)
-                        backupStore.delete(savedFile)
                         updateLog += AndroidLogEntry(
-                            "Verified restored settings after reboot and removed the temporary backup.",
+                            if (backup.canDeleteAfterSuccessfulVerification(verifiedSnapshot)) {
+                                backupStore.delete(savedFile)
+                                "Verified restored settings after reboot and removed the temporary backup."
+                            } else {
+                                "Verified restored settings after reboot. Kept the temporary backup because this firmware does not report the unit identity; a later verified update will remove it."
+                            },
                             AndroidLogCategory.APP,
                         )
                         return verified
@@ -6292,12 +6330,15 @@ object AndroidSessionController {
                 }
             val alreadyCurrent = result.exceptionOrNull()?.isAlreadyCurrentUpdate() == true
             val cancelledUpdate = result.exceptionOrNull() is SignalSlingerUpdateCancelledException
+            val settingsVerificationFailed = result.exceptionOrNull()?.let(::isSettingsVerificationFailure) == true
             if (result.isFailure) {
                 val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
                 updateLog += AndroidLogEntry(
                     if (alreadyCurrent) {
                         "No update needed: $message"
                     } else if (cancelledUpdate) {
+                        message
+                    } else if (settingsVerificationFailed) {
                         message
                     } else {
                         "Update failed: $message"
@@ -6359,6 +6400,12 @@ object AndroidSessionController {
                     val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
                     latestSubmitSummary = message
                     statusText = message.lineSequence().firstOrNull().orEmpty().ifBlank { "Update cancelled." }
+                    statusIsError = true
+                    firmwareUpdateProgress = null
+                } else if (settingsVerificationFailed) {
+                    val message = friendlyUpdateFailureMessage(result.exceptionOrNull())
+                    latestSubmitSummary = message
+                    statusText = "Firmware installed; settings verification failed."
                     statusIsError = true
                     firmwareUpdateProgress = null
                 } else {
@@ -6884,9 +6931,15 @@ object AndroidSessionController {
                 details.contains("Error writing", ignoreCase = true) ||
                 details.contains("rc=-1", ignoreCase = true) ->
                 "The USB connection was interrupted during the update.\n\nReconnect SignalSlinger and try Update Connected Device again.\n\n$details"
+            isSettingsVerificationFailure(error) ->
+                "SignalSlinger firmware was installed, but settings verification failed.\n\n" +
+                    "The temporary settings backup was kept so the settings can be recovered.\n\n$details"
             else -> details
         }
     }
+
+    private fun isSettingsVerificationFailure(error: Throwable?): Boolean =
+        rootMessage(error).contains("did not survive reboot verification", ignoreCase = true)
 
     private fun friendlyArduconUpdateFailureMessage(error: Throwable?): String {
         val details = rootMessage(error)
