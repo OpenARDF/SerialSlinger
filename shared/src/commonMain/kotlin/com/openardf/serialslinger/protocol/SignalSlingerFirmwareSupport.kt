@@ -181,6 +181,15 @@ object SignalSlingerFirmwareSupport {
         loadCommandsAfterVersion = modern204Profile.loadCommandsAfterVersion + "FRE C",
     )
 
+    private val modern210Profile = modern207Profile.copy(
+        id = "modern-2.1.0+",
+        minimumVersion = SignalSlingerFirmwareVersion(2, 1, 0),
+        capabilities = modern207Profile.capabilities.copy(
+            supportsHardwareFaultHistory = true,
+        ),
+        loadCommandsAfterVersion = modern207Profile.loadCommandsAfterVersion + "HWF",
+    )
+
     private val arduconBaseLoadCommands = listOf(
         "ID",
         "FOX",
@@ -263,6 +272,7 @@ object SignalSlingerFirmwareSupport {
         }
 
         return when {
+            parsedVersion >= SignalSlingerFirmwareVersion(2, 1, 0) -> modern210Profile
             parsedVersion >= SignalSlingerFirmwareVersion(2, 0, 7) -> modern207Profile
             parsedVersion >= SignalSlingerFirmwareVersion(2, 0, 4) -> modern204Profile
             parsedVersion >= SignalSlingerFirmwareVersion(1, 2, 2) -> modern122Profile

@@ -25,6 +25,18 @@ class SignalSlingerFirmwareSupportTest {
     }
 
     @Test
+    fun readsHardwareFaultHistoryForSignalSlinger210AndLater() {
+        val olderProfile = SignalSlingerFirmwareSupport.resolve("2.0.99")
+        val faultProfile = SignalSlingerFirmwareSupport.resolve("2.1.0a")
+
+        assertFalse(olderProfile.capabilities.supportsHardwareFaultHistory)
+        assertFalse("HWF" in olderProfile.fullLoadCommands)
+        assertEquals("modern-2.1.0+", faultProfile.id)
+        assertTrue(faultProfile.capabilities.supportsHardwareFaultHistory)
+        assertTrue("HWF" in faultProfile.fullLoadCommands)
+    }
+
+    @Test
     fun resolvesModernProfileForCurrentFirmwareWithSuffix() {
         val profile = SignalSlingerFirmwareSupport.resolve("1.2s")
 

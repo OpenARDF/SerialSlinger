@@ -10,6 +10,7 @@ import com.openardf.serialslinger.model.EventProfileSupport
 import com.openardf.serialslinger.model.ExternalBatteryControlMode
 import com.openardf.serialslinger.model.FoxRole
 import com.openardf.serialslinger.model.FrequencySupport
+import com.openardf.serialslinger.model.HardwareFaultRecord
 import com.openardf.serialslinger.model.SettingKey
 import com.openardf.serialslinger.model.ThermalShutdownSupport
 import com.openardf.serialslinger.model.TemperatureCalibrationSupport
@@ -41,6 +42,8 @@ data class DeviceStatusPatch(
     val sessionReport: SessionReport? = null,
     val clearSessionHistory: Boolean = false,
     val sessionHistoryRecord: SessionHistoryRecord? = null,
+    val clearHardwareFaults: Boolean = false,
+    val hardwareFaultRecord: HardwareFaultRecord? = null,
     val temperatureC: Double? = null,
     val minimumTemperatureC: Double? = null,
     val maximumTemperatureC: Double? = null,
@@ -207,6 +210,7 @@ object SignalSlingerProtocolCodec {
     fun parseReportLine(line: String): DeviceReportUpdate? {
         val trimmed = line.trim()
         if (trimmed.startsWith("* Session ")) return parseSessionReport(trimmed)
+        if (trimmed.startsWith("* HWF ")) return parseHardwareFaultReport(trimmed)
         appInfoPattern.find(trimmed)?.let { match ->
             val fields = parseKeyValueFields(match.groupValues[1])
             val productName = fields["product"]
@@ -911,6 +915,32 @@ object SignalSlingerProtocolCodec {
                 ))
             }
             else -> return null
+        }
+        return DeviceReportUpdate(deviceStatusPatch = patch)
+    }
+
+    private fun parseHardwareFaultReport(line: String): DeviceReportUpdate? {
+        val fields = parseKeyValueFields(line.substringAfter("HWF", ""))
+        if (fields["v"] != "1") return null
+        val patch = if (fields.containsKey("count")) {
+            val capacity = fields["capacity"]?.toIntOrNull()?.takeIf { it in 1..32 } ?: return null
+            fields["count"]?.toIntOrNull()?.takeIf { it in 0..capacity } ?: return null
+            DeviceStatusPatch(clearHardwareFaults = true)
+        } else {
+            val code = fields["code"]?.toIntOrNull()?.takeIf { it in 1..8 } ?: return null
+            val at = fields["at"]?.toLongOrNull()?.takeIf { it in 0..0xffffffffL } ?: return null
+            // Version 1 defines only the time-valid bit. Rejecting unknown bits
+            // prevents a newer record format from being silently misrepresented.
+            val flags = fields["flags"]?.toIntOrNull()?.takeIf { it in 0..1 } ?: return null
+            val timeValid = flags and 1 != 0
+            if ((timeValid && at < MinimumValidEpochSeconds) || (!timeValid && at != 0L)) return null
+            DeviceStatusPatch(
+                hardwareFaultRecord = HardwareFaultRecord(
+                    code = code,
+                    detectedAtCompact = if (timeValid) parseEpochSecondsCompact(at.toString(), deviceWallClock = true) else null,
+                    timeValid = timeValid,
+                ),
+            )
         }
         return DeviceReportUpdate(deviceStatusPatch = patch)
     }

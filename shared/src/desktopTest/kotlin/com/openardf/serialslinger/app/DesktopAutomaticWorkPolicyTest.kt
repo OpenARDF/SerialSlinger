@@ -84,4 +84,22 @@ class DesktopAutomaticWorkPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun hardwareFaultClearFollowsEffectiveBusyState() {
+        assertFalse(
+            DesktopAutomaticWorkPolicy.hardwareFaultClearEnabled(
+                hasFaults = true,
+                isBusy = true,
+                transportAvailable = true,
+            ),
+        )
+        assertTrue(
+            DesktopAutomaticWorkPolicy.hardwareFaultClearEnabled(
+                hasFaults = true,
+                isBusy = false,
+                transportAvailable = true,
+            ),
+        )
+    }
 }

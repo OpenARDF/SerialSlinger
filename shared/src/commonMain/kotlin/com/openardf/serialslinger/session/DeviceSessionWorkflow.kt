@@ -157,9 +157,12 @@ object DeviceSessionWorkflow {
 
         // INF probes temporarily clear info.deviceUniqueId. Keep the history owner separately
         // so rediscovering the same transmitter does not discard its freshly read records.
+        val persistentStatusOwners = listOfNotNull(
+            status.sessionHistoryDeviceUniqueId,
+            status.hardwareFaultDeviceUniqueId,
+        )
         val identityChanged = infoPatch?.deviceUniqueId != null &&
-            status.sessionHistoryDeviceUniqueId != null &&
-            status.sessionHistoryDeviceUniqueId != nextInfo.deviceUniqueId
+            persistentStatusOwners.any { it != nextInfo.deviceUniqueId }
         val settingsPatch = update.settingsPatch
         val scheduleChanged =
             (settingsPatch?.startTimeObserved == true && settingsPatch.startTimeCompact != settings.startTimeCompact) ||
@@ -174,6 +177,8 @@ object DeviceSessionWorkflow {
         }
         val history = if (identityChanged || patch?.clearSessionHistory == true) emptyList() else status.sessionHistory
         val record = patch?.sessionHistoryRecord
+        val hardwareFaults = if (identityChanged || patch?.clearHardwareFaults == true) emptyList() else status.hardwareFaults
+        val hardwareFault = patch?.hardwareFaultRecord
         return copy(
             info = nextInfo,
             status = status.copy(
@@ -181,6 +186,12 @@ object DeviceSessionWorkflow {
                 sessionHistoryDeviceUniqueId = infoPatch?.deviceUniqueId ?: status.sessionHistoryDeviceUniqueId,
                 sessionReport = if (identityChanged || scheduleChanged) null else patch?.sessionReport ?: status.sessionReport,
                 sessionHistory = if (record == null) history else (history.filterNot { it.sequence == record.sequence } + record).takeLast(16),
+                hardwareFaultDeviceUniqueId = infoPatch?.deviceUniqueId ?: status.hardwareFaultDeviceUniqueId,
+                hardwareFaults = if (hardwareFault == null) {
+                    hardwareFaults
+                } else {
+                    (hardwareFaults.filterNot { it.code == hardwareFault.code } + hardwareFault).sortedBy { it.code }
+                },
                 temperatureC = update.deviceStatusPatch?.temperatureC ?: status.temperatureC,
                 minimumTemperatureC = update.deviceStatusPatch?.minimumTemperatureC ?: status.minimumTemperatureC,
                 maximumTemperatureC = update.deviceStatusPatch?.maximumTemperatureC ?: status.maximumTemperatureC,
