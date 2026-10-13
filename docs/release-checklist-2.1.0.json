@@ -44,8 +44,8 @@
     {
       "id": "android-native-compatibility",
       "description": "Verify 16 KB AAB packaging and ELF alignment, then record the successful hosted Android 15 16 KB emulator run.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Local release AAB inspection passed 16 KB packaging and found no 64-bit native libraries requiring ELF inspection; GitHub Actions run 38324987250 job 115061470101 launched successfully on Android 15 with 16 KB pages in 5m22s.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
@@ -108,32 +108,32 @@
     {
       "id": "windows-intel-x64-smoke",
       "description": "Install and launch the packaged Windows Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions Windows candidate smoke run 38324987287, job 115061470310 (x64), completed successfully in 3m51s.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "windows-arm64-smoke",
       "description": "Install and launch the packaged Windows ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions Windows candidate smoke run 38324987287, job 115061470459 (ARM64), completed successfully in 3m34s.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "linux-intel-x64-smoke",
       "description": "Install and launch the packaged Linux Intel x64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions Linux candidate smoke run 38324987272, job 115061470342 (x64), completed successfully in 2m20s.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
     {
       "id": "linux-arm64-smoke",
       "description": "Install and launch the packaged Linux ARM64 app, or record an explicit skipped-check waiver with requester.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "GitHub Actions Linux candidate smoke run 38324987272, job 115061470591 (ARM64), completed successfully in 2m05s.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
