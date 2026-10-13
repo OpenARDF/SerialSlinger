@@ -143,6 +143,7 @@ Notes:
 
 - `desktopDmg` currently produces an unsigned `.dmg` for local drag-and-drop testing.
 - Apple signing and notarization can be added later for normal end-user distribution.
+- The jDeploy macOS wrapper receives a final ad-hoc signature after customization so its bundle integrity is valid, but it is not a Developer-ID/notarized direct-distribution artifact. `syspolicy_check distribution` must become a required gate when Apple signing credentials are introduced.
 - The packaged macOS installer version, the in-app SerialSlinger version, and the jDeploy/npm version all come from the same version declaration in `build.gradle.kts`.
 - The packaging preflight task checks that the active JDK actually includes `jpackage` before packaging starts.
 
