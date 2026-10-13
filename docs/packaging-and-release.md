@@ -84,7 +84,7 @@ It:
 - publishes jDeploy release artifacts for tags beginning with `v`
 - targets GitHub releases rather than npm publishing
 - refreshes the special `jdeploy` release icon asset
-- repairs the macOS installer wrapper icon after publish so public Mac installers stay branded with the project icon
+- repairs the macOS installer wrapper branding, applies a final ad-hoc signature after all customization, and verifies the resulting bundle integrity
 
 Pull requests and `Development1` pushes run the desktop/Android build-and-test workflow. Separate pinned Linux and Windows workflows install the local jDeploy package and execute its hardware-free version probe through the genuine installed launcher on native x64 and ARM64 GitHub-hosted runners. Their manual `workflow_dispatch` path accepts a `release_tag`, downloads the exact public ARM64 installer for that tag, and probes the installed release. Candidate results validate the tested checkout; a release checklist item requires evidence for the exact release candidate or published artifact. Historical checklist skips remain historical facts and are not rewritten after a retrospective run.
 
@@ -143,6 +143,7 @@ Notes:
 
 - `desktopDmg` currently produces an unsigned `.dmg` for local drag-and-drop testing.
 - Apple signing and notarization can be added later for normal end-user distribution.
+- The jDeploy macOS wrapper receives a final ad-hoc signature after customization so its bundle integrity is valid, but it is not a Developer-ID/notarized direct-distribution artifact. `syspolicy_check distribution` must become a required gate when Apple signing credentials are introduced.
 - The packaged macOS installer version, the in-app SerialSlinger version, and the jDeploy/npm version all come from the same version declaration in `build.gradle.kts`.
 - The packaging preflight task checks that the active JDK actually includes `jpackage` before packaging starts.
 

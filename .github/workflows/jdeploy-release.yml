@@ -86,7 +86,7 @@ jobs:
           npm pack --ignore-scripts
           gh release upload "${{ github.ref_name }}" serialslinger-*.tgz --clobber
 
-      - name: Repair macOS jDeploy branding
+      - name: Repair and verify macOS jDeploy installers
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/repair-jdeploy-github-release-macos.sh "${{ github.ref_name }}"

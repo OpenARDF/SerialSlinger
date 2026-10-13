@@ -22,7 +22,7 @@ if [[ ! -f "$icon_icns" ]]; then
 	exit 1
 fi
 
-for tool in gh python3 tar; do
+for tool in codesign gh python3 tar; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		echo "Missing required tool: $tool" >&2
 		exit 1
@@ -79,22 +79,28 @@ app_xml = Path(sys.argv[1])
 icon_png = Path(sys.argv[2])
 data_uri = "data:image/png;base64," + base64.b64encode(icon_png.read_bytes()).decode("ascii")
 text = app_xml.read_text()
-updated = re.sub(r"icon=(['\"])data:image/png;base64,[^'\"]*\1", "icon='" + data_uri + "'", text, count=1)
-if updated == text:
+pattern = re.compile(r"icon=(['\"])data:image/png;base64,[^'\"]*\1")
+if not pattern.search(text):
     raise SystemExit(f"No embedded icon data URI found in {app_xml}")
+updated = pattern.sub("icon='" + data_uri + "'", text, count=1)
 app_xml.write_text(updated)
 PY
 	if [[ -f "$app_dir/Contents/MacOS/Client4JLauncher" ]]; then
 		mv "$app_dir/Contents/MacOS/Client4JLauncher" "$app_dir/Contents/MacOS/$launcher_name"
 		/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $launcher_name" "$app_dir/Contents/Info.plist"
 	fi
+	# jDeploy and this branding step customize a pre-signed generic wrapper.
+	# Apply the final ad-hoc signature only after every bundle change so macOS can
+	# validate executable integrity without implying Developer-ID notarization.
+	codesign --force --deep --sign - "$app_dir"
+	codesign --verify --deep --strict --verbose=2 "$app_dir"
 	(
 		cd "$unpack_dir"
 		tar -czf "$asset_dir/patched.tgz" "$(basename "$top_dir")"
 	)
 	mv "$asset_dir/patched.tgz" "$archive_path"
 	gh release upload "$release_tag" "$archive_path" --repo "$repo" --clobber >/dev/null
-	echo "Patched $asset_name"
+	echo "Patched, re-signed, and verified $asset_name"
 }
 
 # Keep the special jdeploy release aligned with the real app icon so the public
