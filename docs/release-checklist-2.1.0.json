@@ -84,8 +84,8 @@
     {
       "id": "android-regression",
       "description": "Run the destructive Android attached-SignalSlinger regression with approved target, restored settings, post-test readback, and either same-device clone-protection evidence or an actual clone to a distinct target; otherwise record an explicit waiver with requester.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Approved target Moto g 5G (2024), Android 15, SignalSlinger UID 42348279800036200109013300000000, FW 2.1.0 HW 3.5. Regression passed load, setting submissions, schedule, raw command, log, and same-device clone protection; final readback restored NZ0I, CLASSIC/BEACON, 20/8 WPM, 2026-09-08 09:40-18:40, 3 days, event stopped, and current clock. Evidence: build/android-regression/20261012-202018/summary.tsv.",
       "skipReason": "",
       "skipRequestedBy": ""
     },

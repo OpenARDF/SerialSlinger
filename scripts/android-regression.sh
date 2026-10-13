@@ -166,6 +166,34 @@ process.stdout.write(
 ' "$minutes"
 }
 
+compact_minutes_before() {
+	local compact_time="$1"
+	local minutes="$2"
+	node -e '
+const value = process.argv[1];
+const minutes = Number(process.argv[2]);
+if (!/^\d{12}$/.test(value) || !Number.isFinite(minutes)) process.exit(1);
+const d = new Date(
+  2000 + Number(value.slice(0, 2)),
+  Number(value.slice(2, 4)) - 1,
+  Number(value.slice(4, 6)),
+  Number(value.slice(6, 8)),
+  Number(value.slice(8, 10)),
+  Number(value.slice(10, 12))
+);
+d.setMinutes(d.getMinutes() - minutes);
+const pad = (part) => String(part).padStart(2, "0");
+process.stdout.write(
+  pad(d.getFullYear() % 100) +
+  pad(d.getMonth() + 1) +
+  pad(d.getDate()) +
+  pad(d.getHours()) +
+  pad(d.getMinutes()) +
+  pad(d.getSeconds())
+);
+' "$compact_time" "$minutes"
+}
+
 current_compact_time() {
 	node -e '
 const d = new Date();
@@ -199,6 +227,7 @@ run_restore_command() {
 restore_original_settings() {
 	local restore_failed=0
 	local restore_time
+	local schedule_restore_time
 	local restored_snapshot="$OUTPUT_DIR/restore-get-snapshot.txt"
 	local restored_event="$OUTPUT_DIR/restore-query-event.txt"
 
@@ -209,8 +238,20 @@ restore_original_settings() {
 	run_restore_command "restore-pattern-speed" set-pattern-speed "$ORIGINAL_PATTERN_SPEED" || restore_failed=1
 	run_restore_command "restore-event-type" set-event-type "$ORIGINAL_EVENT_TYPE" || restore_failed=1
 	run_restore_command "restore-fox-role" set-fox-role "$ORIGINAL_FOX_ROLE" || restore_failed=1
-	run_restore_command "restore-time-sequence" set-time-sequence \
-		"$restore_time" "$ORIGINAL_START_TIME" "$ORIGINAL_FINISH_TIME" "$ORIGINAL_DAYS_TO_RUN" || restore_failed=1
+	if [[ "$ORIGINAL_START_TIME" < "$restore_time" ]]; then
+		# SignalSlinger correctly rejects a past start while its clock is current. Move the
+		# clock back only long enough to reconstruct the captured expired schedule, then
+		# restore current time even if one of the intervening writes fails.
+		schedule_restore_time="$(compact_minutes_before "$ORIGINAL_START_TIME" 10)"
+		run_restore_command "restore-clock-before-expired-schedule" set-current-time "$schedule_restore_time" || restore_failed=1
+		run_restore_command "restore-start-time" set-start-time "$ORIGINAL_START_TIME" || restore_failed=1
+		run_restore_command "restore-finish-time" set-finish-time "$ORIGINAL_FINISH_TIME" || restore_failed=1
+		run_restore_command "restore-days-to-run" set-days-to-run "$ORIGINAL_DAYS_TO_RUN" || restore_failed=1
+		run_restore_command "restore-current-time" set-current-time "$restore_time" || restore_failed=1
+	else
+		run_restore_command "restore-time-sequence" set-time-sequence \
+			"$restore_time" "$ORIGINAL_START_TIME" "$ORIGINAL_FINISH_TIME" "$ORIGINAL_DAYS_TO_RUN" || restore_failed=1
+	fi
 	run_restore_command "restore-get-snapshot" get-snapshot || restore_failed=1
 
 	if [[ -f "$restored_snapshot" ]]; then
