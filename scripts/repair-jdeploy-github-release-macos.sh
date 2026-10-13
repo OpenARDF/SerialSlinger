@@ -79,9 +79,10 @@ app_xml = Path(sys.argv[1])
 icon_png = Path(sys.argv[2])
 data_uri = "data:image/png;base64," + base64.b64encode(icon_png.read_bytes()).decode("ascii")
 text = app_xml.read_text()
-updated = re.sub(r"icon=(['\"])data:image/png;base64,[^'\"]*\1", "icon='" + data_uri + "'", text, count=1)
-if updated == text:
+pattern = re.compile(r"icon=(['\"])data:image/png;base64,[^'\"]*\1")
+if not pattern.search(text):
     raise SystemExit(f"No embedded icon data URI found in {app_xml}")
+updated = pattern.sub("icon='" + data_uri + "'", text, count=1)
 app_xml.write_text(updated)
 PY
 	if [[ -f "$app_dir/Contents/MacOS/Client4JLauncher" ]]; then
