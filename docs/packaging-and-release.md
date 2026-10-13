@@ -84,7 +84,7 @@ It:
 - publishes jDeploy release artifacts for tags beginning with `v`
 - targets GitHub releases rather than npm publishing
 - refreshes the special `jdeploy` release icon asset
-- repairs the macOS installer wrapper icon after publish so public Mac installers stay branded with the project icon
+- refreshes the release-page icon and verifies each published macOS installer wrapper without modifying its Developer-ID-signed, notarized contents
 
 Pull requests and `Development1` pushes run the desktop/Android build-and-test workflow. Separate pinned Linux and Windows workflows install the local jDeploy package and execute its hardware-free version probe through the genuine installed launcher on native x64 and ARM64 GitHub-hosted runners. Their manual `workflow_dispatch` path accepts a `release_tag`, downloads the exact public ARM64 installer for that tag, and probes the installed release. Candidate results validate the tested checkout; a release checklist item requires evidence for the exact release candidate or published artifact. Historical checklist skips remain historical facts and are not rewritten after a retrospective run.
 

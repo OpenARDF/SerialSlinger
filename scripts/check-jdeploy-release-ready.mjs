@@ -132,7 +132,7 @@ ensure(workflowText.includes("prepare-jdeploy-github-release.mjs"), "The release
 ensure(workflowText.includes("publish-jdeploy-github-release.sh"), "The release workflow must use the guarded local publisher.");
 ensure(!workflowText.includes("shannah/jdeploy@"), "The release workflow must not use the mutable jDeploy action.");
 ensure(!workflowText.includes("@master"), "The release workflow must not use actions from a moving master branch.");
-ensure(workflowText.includes("Repair macOS jDeploy branding"), "The jDeploy workflow must repair macOS installer branding.");
+ensure(workflowText.includes("Verify macOS jDeploy signatures"), "The jDeploy workflow must verify macOS installer signatures.");
 ensure(workflowText.includes("docs/release-notes/"), "The jDeploy workflow must use checked release notes when present.");
 ensure(workflowText.includes("--notes-file"), "The jDeploy workflow must publish checked release notes with gh release edit --notes-file when present.");
 
@@ -167,7 +167,7 @@ ensure(windowsSmokeWorkflowText.includes("npm run jdeploy:local-smoke"), "The Wi
 ensure(windowsSmokeWorkflowText.includes(".\\gradlew.bat --stop"), "The Windows smoke must stop Gradle before cache save.");
 ensure(
   fs.existsSync(path.join(repoRoot, "scripts", "repair-jdeploy-github-release-macos.sh")),
-  "The macOS jDeploy installer branding repair script is missing.",
+  "The macOS jDeploy installer signature verification script is missing.",
 );
 ensure(
   fs.existsSync(path.join(repoRoot, "scripts", "check-release-notes.mjs")),
@@ -195,10 +195,16 @@ for (const requiredPath of [
 }
 const macosRepairScript = readFile(
   path.join(repoRoot, "scripts", "repair-jdeploy-github-release-macos.sh"),
-  "The macOS jDeploy installer branding repair script is missing.",
+  "The macOS jDeploy installer signature verification script is missing.",
 );
-ensure(macosRepairScript.includes("shared/packaging/icons/SerialSlinger.icns"), "The macOS installer repair script must use SerialSlinger.icns.");
-ensure(macosRepairScript.includes("app.xml"), "The macOS installer repair script must patch installer app.xml icon metadata.");
+ensure(
+  macosRepairScript.includes("codesign --verify --deep --strict"),
+  "The macOS installer verification script must validate the signed app bundle.",
+);
+ensure(
+  !macosRepairScript.includes('gh release upload "$release_tag" "$archive_path"'),
+  "The macOS installer verification script must not rewrite signed installer assets.",
+);
 
 const existingTag = execFileSync("git", ["ls-remote", "--tags", "origin", `refs/tags/${expectedTag}`], {
   cwd: repoRoot,

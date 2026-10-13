@@ -188,8 +188,8 @@ git switch Development1
 ## Publication Notes
 
 - The GitHub workflow publishes on `v*` tags, targets GitHub releases, uploads
-  the canonical npm tarball, repairs macOS jDeploy branding, and publishes the
-  release.
+  the canonical npm tarball, refreshes the release-page icon, verifies the
+  signed macOS installers without rewriting them, and publishes the release.
 - If `docs/release-notes/vX.Y.Z.md` exists in the tagged source, the workflow
   uses it as the GitHub release body.
 - GitHub release assets, not npm registry publication, are the release target.
