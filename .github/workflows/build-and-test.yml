@@ -3,9 +3,9 @@ name: Build and test
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main, Development1]
+    branches: [main]
   push:
-    branches: [Development1]
+    branches: [main]
 
 permissions:
   contents: read
@@ -23,7 +23,21 @@ jobs:
       - name: Set the checkout initialization branch
         run: git config --global init.defaultBranch main
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Select the proportional validation lane
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "heavy=true" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/classify-ci-changes.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        if: steps.changes.outputs.heavy == 'true'
         with:
           distribution: temurin
           java-version: "17"
@@ -33,23 +47,28 @@ jobs:
           node-version: "24"
           cache: npm
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        if: steps.changes.outputs.heavy == 'true'
         with:
           log-accepted-android-sdk-licenses: false
           packages: ''
       - name: Install npm and Android dependencies
+        if: steps.changes.outputs.heavy == 'true'
         run: |
           npm ci
           # cmdline-tools 22 deprecates sdkmanager in favor of this Android CLI command.
           android sdk install platform-tools platforms/android-37.0
       - name: Install pinned static-analysis tools
+        if: steps.changes.outputs.heavy == 'true'
         run: |
           # v1.7.12 recognizes the pinned macOS 26 GitHub-hosted runner.
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           go install mvdan.cc/sh/v3/cmd/shfmt@v3.12.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Audit npm dependencies
+        if: steps.changes.outputs.heavy == 'true'
         run: npm audit --audit-level=low
       - name: Run desktop and Android gates
+        if: steps.changes.outputs.heavy == 'true'
         run: |
           ./gradlew \
             :shared:compileKotlinDesktop \
@@ -61,22 +80,36 @@ jobs:
             :androidApp:lintRelease \
             :androidApp:bundleRelease
       - name: Run static repository checks
+        if: steps.changes.outputs.heavy == 'true'
         run: ./scripts/static-check.sh
       - name: Run release-script tests
         run: |
           node --test \
+            scripts/classify-ci-changes.test.mjs \
             scripts/check-android-native-compatibility.test.mjs \
             scripts/check-android-instrumentation-results.test.mjs \
             scripts/check-release-checklist.test.mjs \
-            scripts/check-release-tag.test.mjs \
+            scripts/check-release-request.test.mjs \
             scripts/check-release-workflow.test.mjs \
             scripts/jdeploy-local-smoke.test.mjs \
+            scripts/prepare-jdeploy-macos-installers.test.mjs \
             scripts/prepare-jdeploy-github-release.test.mjs \
-            scripts/publish-jdeploy-github-release.test.mjs
-          node scripts/check-android-native-compatibility.mjs \
+            scripts/publish-google-play-internal.test.mjs \
+            scripts/publish-github-release.test.mjs \
+            scripts/release-manifest.test.mjs \
+            scripts/update-jdeploy-metadata.test.mjs
+          if [[ "${{ steps.changes.outputs.heavy }}" == "true" ]]; then
+            node scripts/check-android-native-compatibility.mjs \
             androidApp/build/outputs/bundle/release/androidApp-release.aab
+          fi
+      - name: Check evidence-only whitespace
+        if: steps.changes.outputs.heavy != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: git diff --check "$BASE_SHA" "$HEAD_SHA"
       - name: Stop Gradle before saving the setup cache
-        if: always()
+        if: always() && steps.changes.outputs.heavy == 'true'
         run: ./gradlew --stop
       - name: Preserve failure diagnostics
         if: failure()

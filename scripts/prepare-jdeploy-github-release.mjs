@@ -9,10 +9,10 @@ const githubPackageName = "serialslinger";
 const requiredReleaseFiles = ["jdeploy-release-notes.md", "package-info.json", "package.json"];
 
 export function validateReleaseContext(environment, packageJson) {
-  if (environment.GITHUB_REF_TYPE !== "tag") {
-    throw new Error("jDeploy GitHub release preparation is allowed only for a tag workflow.");
+  if (environment.SERIALSLINGER_RELEASE_WORKFLOW !== "1") {
+    throw new Error("jDeploy GitHub release preparation is allowed only inside the guarded release workflow.");
   }
-  const tag = environment.GITHUB_REF_NAME || "";
+  const tag = environment.SERIALSLINGER_RELEASE_TAG || "";
   if (!/^[A-Za-z0-9._-]+$/.test(tag) || tag.length > 16) {
     throw new Error(`Release tag ${tag || "<empty>"} is not a supported jDeploy tag name.`);
   }
@@ -22,8 +22,8 @@ export function validateReleaseContext(environment, packageJson) {
   if (packageJson.name !== githubPackageName) {
     throw new Error(`GitHub jDeploy package name must be ${githubPackageName}.`);
   }
-  if (!environment.GITHUB_SHA || !environment.GITHUB_REPOSITORY || !environment.GH_TOKEN) {
-    throw new Error("GitHub release preparation requires GITHUB_SHA, GITHUB_REPOSITORY, and GH_TOKEN.");
+  if (!environment.SERIALSLINGER_RELEASE_COMMIT || !environment.GITHUB_REPOSITORY || !environment.GH_TOKEN) {
+    throw new Error("GitHub release preparation requires an exact release commit, repository, and token.");
   }
   return tag;
 }
@@ -38,8 +38,8 @@ export function withGithubReleaseMetadata(packageJson, environment) {
     jdeploy: {
       ...packageJson.jdeploy,
       jdeployVersion,
-      commitHash: environment.GITHUB_SHA,
-      gitTag: environment.GITHUB_REF_NAME
+      commitHash: environment.SERIALSLINGER_RELEASE_COMMIT,
+      gitTag: environment.SERIALSLINGER_RELEASE_TAG
     }
   };
 }

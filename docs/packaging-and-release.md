@@ -78,15 +78,18 @@ The repository includes a macOS-focused GitHub Actions workflow at [.github/work
 It:
 
 - uses pinned macOS, Java, Node, and GitHub Action revisions
-- verifies the tag, package version, checklist identity, and checklist source commit agree
-- reruns desktop tests, Android host/unit tests, release lint, release bundling, and jDeploy preflight
-- prepares and publishes with repository-owned, tested scripts rather than a moving third-party action branch
-- publishes jDeploy release artifacts for tags beginning with `v`
+- accepts only a manual request from protected `main` whose exact commit already passed required CI
+- defaults to a complete dry run with no tag or public mutation
+- prepares and verifies final assets locally before any upload
+- reruns packaging-specific desktop verification and jDeploy preflight without duplicating the full Android/desktop source gate
 - targets GitHub releases rather than npm publishing
-- refreshes the special `jdeploy` release icon asset
-- repairs the macOS installer wrapper branding, applies a final ad-hoc signature after all customization, and verifies the resulting bundle integrity
+- applies macOS wrapper branding and the final ad-hoc signature before archiving, then verifies a fresh extraction
+- creates SHA-256 release evidence and GitHub artifact attestations
+- requires the protected `production` environment for publication
+- reads back every draft asset before making the release public
+- refreshes moving `jdeploy` metadata only after the immutable release succeeds, while preserving the previous primary as its fallback
 
-Pull requests and `Development1` pushes run the desktop/Android build-and-test workflow. Separate pinned Linux and Windows workflows install the local jDeploy package and execute its hardware-free version probe through the genuine installed launcher on native x64 and ARM64 GitHub-hosted runners. Their manual `workflow_dispatch` path accepts a `release_tag`, downloads the exact public ARM64 installer for that tag, and probes the installed release. Candidate results validate the tested checkout; a release checklist item requires evidence for the exact release candidate or published artifact. Historical checklist skips remain historical facts and are not rewritten after a retrospective run.
+Pull requests and pushes to `main` run the desktop/Android build-and-test workflow. Checklist/release-note-only changes use the same required check but skip the Android SDK and Gradle lane; source, script, workflow, build, and general documentation changes receive the complete gate. Separate pinned Linux and Windows workflows install the local jDeploy package and execute its hardware-free version probe through the genuine installed launcher on native x64 and ARM64 GitHub-hosted runners. Their manual path accepts a `release_tag`, downloads the exact public installer for that tag, and probes the installed release.
 
 The intended release flow is:
 
@@ -104,12 +107,10 @@ The intended release flow is:
 9. run `just macos-installed-smoke`, review the hosted Windows Intel x64, Windows ARM64, Linux Intel x64, and Linux ARM64 candidate results, and dispatch the ARM64 workflows with the release tag after publication; record concrete evidence for each architecture or an explicit skip reason and requester
 10. create `docs/release-notes/vX.Y.Z.md` from [release-notes-template.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-notes-template.md), validate it with `npm run release:notes -- --checklist <checklist.json>`, and provide the Android release-notes section as copyable Play Console text
 11. copy [release-checklist-template.json](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/release-checklist-template.json), mark each pre-tag item `done` with evidence or `skipped` with `skipReason` and `skipRequestedBy`, then run `npm run release:checklist -- --file <checklist.json> --phase pre-tag`
-12. squash-merge the release-candidate pull request into protected `Development1`, then fast-forward `main` to that exact candidate
-13. on a new topic branch from `Development1`, set checklist `sourceCommit` to the candidate, record the main-sync evidence, and commit only that checklist update; squash-merge its pull request into `Development1`
-14. verify the resulting checklist-only commit has the candidate as its sole parent, fast-forward `main` to it, then create and push a tag like `v1.0.93`
-15. let the GitHub Actions workflow publish the release artifacts
-16. prepare the final tag, workflow, release-verification, and audit evidence on another topic branch, run `npm run release:checklist -- --file <checklist.json> --phase final`, and squash-merge its pull request into `Development1`
-17. fast-forward `main` from `Development1`, verify the two remote branch tips are identical, and leave `Development1` checked out; keep branch protections enabled for the entire release
+12. squash-merge the release-candidate pull request into protected `main` and wait for that exact commit's required source gate
+13. dispatch `jDeploy Release` with `publish=false`, review the proven artifact and generated manifest, and correct any failure before publication
+14. dispatch the same version from the same protected `main` commit with `publish=true`, approve the `production` environment job, and watch it through publication and metadata readback
+15. download the public release, verify it against `release-manifest.json`, and verify the GitHub attestation; the manifest and workflow run replace tag-only and post-publication evidence commits
 
 The release checklist gate is mandatory unless the user specifically asks to skip an item. A skipped item must be recorded in the checklist with both a concrete reason and the requester.
 
@@ -196,5 +197,17 @@ Useful commands:
 - `just android-signing-check`
 
 `scripts/build-signed-bundle.sh` prefers the ignored local `keystore.properties` file when its password fields are complete. When either password is absent or blank on macOS, it defaults the keystore path and alias to the established SerialSlinger upload-key locations and reads the shared PKCS#12 store/key password from the `SerialSlingerUploadStorePassword` login-Keychain service without printing it. `SERIALSLINGER_UPLOAD_KEY_PASSWORD` remains available if a future keystore uses a separate private-key password. The checked certificate fingerprint was independently matched to Play Console on October 1, 2026. The final verification rejects unsigned AABs and certificates that do not match that fingerprint. A plain `bundleRelease` can still produce an unsigned bundle when signing inputs are absent and therefore is not proof of Play-upload readiness.
+
+The hosted [Android Play deployment workflow](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/.github/workflows/android-play-deploy.yml) is deliberately separate from desktop/jDeploy publication. It uses an official Google Play Publishing API edit transaction and is limited to the internal-testing track. Its `commit_edit=false` default uploads and validates the signed bundle inside an edit, then deletes the edit so nothing becomes live. `commit_edit=true` commits the validated edit for internal testers. Production promotion remains a separate explicit Play Console action.
+
+Configure these values as secrets on the protected `android-play-internal` GitHub environment:
+
+- `ANDROID_UPLOAD_KEYSTORE_BASE64`
+- `ANDROID_UPLOAD_STORE_PASSWORD`
+- `ANDROID_UPLOAD_KEY_ALIAS`
+- `ANDROID_UPLOAD_KEY_PASSWORD`
+- `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`
+
+The service account should have only the Play Console permissions needed to upload releases to internal testing. The workflow materializes credentials only in the ephemeral runner, verifies the upload certificate before contacting Play, attests the signed AAB, serializes edits through workflow concurrency, and removes temporary credential files in an `always()` step.
 
 For normal releases, use the same shared release flow above before building or uploading an Android bundle. That means the shared release label and Android `versionCode` move together, platform parity is reviewed, and the Android tablet regression remains part of the release gate. Only diverge from the jDeploy release procedure when a release is intentionally scoped to Android and that exception is recorded.

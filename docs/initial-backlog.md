@@ -31,18 +31,7 @@
 
 ## Release Workflow
 
-- before the next jDeploy deployment, address the GitHub Actions Node.js 20
-  deprecation warning from the nested jDeploy release action path
-- after the protected `Development1` release flow has completed at least one
-  full deployment successfully, evaluate consolidating development and releases
-  onto one protected `main` branch with short-lived topic branches
-- in the simplified flow, tag the fully tested `main` commit and let GitHub
-  Actions publish it; keep release notes, workflow links, artifact hashes, and
-  verification summaries in the GitHub Release or immutable release assets
-  instead of adding post-publication evidence commits
-- evaluate GitHub artifact attestations for downloadable packages and immutable
-  releases using a draft-first asset upload; adopt them only after the workflow
-  verifies every required asset before publication
-- retire the checklist-only tag commit only after its source-commit, version,
-  checklist, and changed-file guarantees have equivalent automated enforcement
-  in the tag workflow; preserve historical tags and release records unchanged
+- evaluate Developer ID signing and Apple notarization after the main-only,
+  dry-run-first release workflow has completed a production deployment
+- evaluate automated Play production staged rollouts only after the protected
+  internal-testing upload has been exercised and its readback is reliable

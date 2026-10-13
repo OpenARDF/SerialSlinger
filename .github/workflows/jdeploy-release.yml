@@ -1,29 +1,61 @@
 name: jDeploy Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Plain release version matching protected main, for example 2.2.0
+        required: true
+        type: string
+      publish:
+        description: Create the tag and public release after the protected approval gate
+        required: true
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: jdeploy-release-${{ github.repository }}
   cancel-in-progress: false
 
+env:
+  SERIALSLINGER_RELEASE_VERSION: ${{ inputs.version }}
+  SERIALSLINGER_RELEASE_TAG: v${{ inputs.version }}
+  SERIALSLINGER_RELEASE_COMMIT: ${{ github.sha }}
+  SERIALSLINGER_RELEASE_WORKFLOW: "1"
+  SERIALSLINGER_RELEASE_DRY_RUN: ${{ inputs.publish != true && '1' || '0' }}
+
 jobs:
-  publish-macos-release:
-    name: Validate and publish GitHub release installers
-    # Pin the release environment so a future moving-label migration cannot alter a tag build.
+  prepare-release:
+    name: Prepare and prove final release assets
     runs-on: macos-26
     timeout-minutes: 45
+    permissions:
+      actions: read
+      attestations: write
+      checks: read
+      contents: read
+      id-token: write
     steps:
-      - name: Check out repository
+      - name: Check out the exact protected-main commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The tag guard verifies the checklist-only tag commit against its parent.
-          fetch-depth: 2
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Verify the release request and completed source CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/check-release-request.mjs
+          conclusion="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+            --jq '[.check_runs[] | select(.name == "Desktop, Android, lint, and release-script gates")] | sort_by(.completed_at) | last | .conclusion // empty')"
+          test "$conclusion" = "success" || {
+            echo "Required source CI has not passed for $GITHUB_SHA (conclusion: ${conclusion:-missing})." >&2
+            exit 1
+          }
 
       - name: Set up Temurin JDK 17
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -38,60 +70,90 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - name: Print tool versions
-        run: |
-          java -version
-          node --version
-          npm --version
-
-      - name: Verify release tag, checklist, and notes
-        run: node ./scripts/check-release-tag.mjs
-
-      - name: Install npm dependencies
+      - name: Install pinned package dependencies
         run: npm ci
 
-      - name: Audit npm dependencies
-        run: npm audit --audit-level=low
-
-      - name: Run desktop and Android regression gates
-        run: |
-          ./gradlew \
-            :shared:desktopTest \
-            :shared:testAndroidHostTest \
-            :androidApp:testDebugUnitTest \
-            :androidApp:lintRelease \
-            :androidApp:bundleRelease \
-            prepareDesktopJdeployBundle \
-            verifyDesktopJdeployBundle
-
-      - name: Run jDeploy release preflight
+      - name: Build and verify the desktop release payload
         run: npm run jdeploy:release-preflight
 
-      - name: Prepare installer assets with the pinned jDeploy CLI
+      - name: Prepare final installer assets locally
         env:
           GH_TOKEN: ${{ github.token }}
           JDEPLOY_REGISTRY_URL: https://www.jdeploy.com/
-        run: node ./scripts/prepare-jdeploy-github-release.mjs
+        run: |
+          node scripts/prepare-jdeploy-github-release.mjs
+          ./scripts/prepare-jdeploy-macos-installers.sh jdeploy/github-release-files
+          node --test scripts/prepare-jdeploy-macos-installers.test.mjs
+          npm pack --ignore-scripts --pack-destination jdeploy/github-release-files
 
-      - name: Publish jDeploy metadata and installer assets
+      - name: Create and verify immutable release evidence
+        env:
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node scripts/release-manifest.mjs create \
+            --directory jdeploy/github-release-files \
+            --version "$SERIALSLINGER_RELEASE_VERSION" \
+            --tag "$SERIALSLINGER_RELEASE_TAG" \
+            --source-commit "$SERIALSLINGER_RELEASE_COMMIT" \
+            --workflow-url "$WORKFLOW_URL"
+          node scripts/release-manifest.mjs verify --directory jdeploy/github-release-files
+
+      - name: Attest final release assets
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: jdeploy/github-release-files/*
+
+      - name: Preserve the proven release payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: serialslinger-${{ inputs.version }}-release
+          if-no-files-found: error
+          retention-days: 14
+          path: jdeploy/github-release-files/*
+
+      - name: Report dry-run result
+        if: inputs.publish != true
+        run: echo "Release assets passed the complete dry run; no tag, release, or moving metadata was changed." >> "$GITHUB_STEP_SUMMARY"
+
+  publish-release:
+    name: Approve and publish proven release assets
+    if: inputs.publish == true
+    needs: prepare-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out the exact proven commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Download the exact proven payload
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: serialslinger-${{ inputs.version }}-release
+          path: release-files
+
+      - name: Reverify the transferred payload
+        run: node scripts/release-manifest.mjs verify --directory release-files
+
+      - name: Create tag, upload once, read back, and publish
         env:
           GH_TOKEN: ${{ github.token }}
           SERIALSLINGER_ALLOW_GITHUB_RELEASE_PUBLISH: "1"
-        run: ./scripts/publish-jdeploy-github-release.sh
+        run: ./scripts/publish-github-release.sh release-files
 
-      - name: Upload canonical npm package tarball
+      - name: Update moving jDeploy metadata last
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          npm pack --ignore-scripts
-          gh release upload "${{ github.ref_name }}" serialslinger-*.tgz --clobber
-
-      - name: Repair and verify macOS jDeploy installers
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./scripts/repair-jdeploy-github-release-macos.sh "${{ github.ref_name }}"
-
-      - name: Publish GitHub release with checked notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit "${{ github.ref_name }}" --draft=false --notes-file "docs/release-notes/${{ github.ref_name }}.md"
+          SERIALSLINGER_ALLOW_GITHUB_RELEASE_PUBLISH: "1"
+        run: ./scripts/update-jdeploy-metadata.sh release-files
