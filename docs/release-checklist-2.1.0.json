@@ -4,7 +4,7 @@
   "previousRelease": "v2.0.25",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "",
+  "sourceCommit": "781c75f4af3d8b64e524411b285cff138cc6de15",
   "version": "2.1.0",
   "androidVersionCode": "34",
   "releaseNotesFile": "docs/release-notes/v2.1.0.md",
@@ -148,8 +148,8 @@
     {
       "id": "merged-to-main",
       "description": "Squash-merge the verified release candidate pull request into protected Development1, fast-forward main to that exact candidate before tagging, and record both commits.",
-      "status": "pending",
-      "evidence": "",
+      "status": "done",
+      "evidence": "Release candidate PR #11 was squash-merged into protected Development1 as 781c75f4af3d8b64e524411b285cff138cc6de15 on 2026-10-12 EDT; main was then fast-forwarded and pushed to that exact commit.",
       "skipReason": "",
       "skipRequestedBy": ""
     },
