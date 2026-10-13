@@ -3,9 +3,29 @@ import test from "node:test";
 
 import {
   parseProtobufFields,
+  readBundleManifestIdentity,
   readBundlePageAlignment,
-  readElfLoadAlignments
+  readElfLoadAlignments,
+  verifyBundleIdentity,
 } from "./check-android-native-compatibility.mjs";
+
+function bytesField(fieldNumber, value) {
+  const bytes = Buffer.from(value);
+  return Buffer.concat([Buffer.from([(fieldNumber << 3) | 2, bytes.length]), bytes]);
+}
+
+function manifestAttribute(name, value) {
+  return bytesField(4, Buffer.concat([bytesField(2, name), bytesField(3, value)]));
+}
+
+function minimalManifest(packageName, versionName) {
+  const element = Buffer.concat([
+    bytesField(3, "manifest"),
+    manifestAttribute("package", packageName),
+    manifestAttribute("versionName", versionName),
+  ]);
+  return bytesField(1, element);
+}
 
 function minimalBundleConfig(alignment) {
   // BundleConfig { optimizations { uncompress_native_libraries { enabled: true, alignment } } }
@@ -37,6 +57,16 @@ test("distinguishes a 4 KB BundleConfig page alignment", () => {
 test("parses repeated protobuf fields without losing values", () => {
   const fields = parseProtobufFields(Buffer.from([0x08, 0x01, 0x08, 0x02]));
   assert.deepEqual(fields.get(1), [1, 2]);
+});
+
+test("reads and verifies package and version from the built-bundle manifest", () => {
+  const identity = readBundleManifestIdentity(minimalManifest("com.SerialSlinger.openardf", "2.2.0"));
+  assert.deepEqual(identity, { packageName: "com.SerialSlinger.openardf", versionName: "2.2.0" });
+  assert.doesNotThrow(() => verifyBundleIdentity(identity, identity));
+  assert.throws(
+    () => verifyBundleIdentity(identity, { ...identity, versionName: "2.2.1" }),
+    /does not match expected version/u,
+  );
 });
 
 test("reads ELF64 load-segment alignment", () => {

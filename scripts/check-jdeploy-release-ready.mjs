@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { execFileSync } from "node:child_process";
 import { platform } from "node:os";
-import { remoteVersionTagIsAllowed } from "./check-release-tag.mjs";
+import { remoteVersionTagIsAllowed } from "./check-release-request.mjs";
 
 const repoRoot = process.cwd();
 const packageJsonPath = path.join(repoRoot, "package.json");
@@ -11,6 +11,7 @@ const packageLockPath = path.join(repoRoot, "package-lock.json");
 const buildGradlePath = path.join(repoRoot, "build.gradle.kts");
 const justfilePath = path.join(repoRoot, "Justfile");
 const workflowPath = path.join(repoRoot, ".github", "workflows", "jdeploy-release.yml");
+const androidPlayWorkflowPath = path.join(repoRoot, ".github", "workflows", "android-play-deploy.yml");
 const buildWorkflowPath = path.join(repoRoot, ".github", "workflows", "build-and-test.yml");
 const linuxSmokeWorkflowPath = path.join(repoRoot, ".github", "workflows", "linux-desktop-smoke.yml");
 const windowsSmokeWorkflowPath = path.join(repoRoot, ".github", "workflows", "windows-desktop-smoke.yml");
@@ -91,6 +92,7 @@ const packageLock = JSON.parse(readFile(packageLockPath, "package-lock.json is m
 const buildGradleText = readFile(buildGradlePath, "build.gradle.kts is missing.");
 const justfileText = readFile(justfilePath, "Justfile is missing.");
 const workflowText = readFile(workflowPath, "The jDeploy release workflow is missing.");
+const androidPlayWorkflowText = readFile(androidPlayWorkflowPath, "The Android Play deployment workflow is missing.");
 const buildWorkflowText = readFile(buildWorkflowPath, "The build-and-test workflow is missing.");
 const linuxSmokeWorkflowText = readFile(linuxSmokeWorkflowPath, "The Linux installed-package workflow is missing.");
 const windowsSmokeWorkflowText = readFile(windowsSmokeWorkflowPath, "The Windows installed-package workflow is missing.");
@@ -120,21 +122,34 @@ ensure(packageJson.overrides?.["brace-expansion"] === "1.1.21", "The patched bra
 ensure(dependencyTodoText.includes("jDeploy 6.1.7"), "The jDeploy warning waiver must name the pinned tool version.");
 ensure(dependencyTodoText.includes("glob"), "The jDeploy warning waiver must cover the transitive glob notice.");
 ensure(dependencyTodoText.includes("inflight"), "The jDeploy warning waiver must cover the transitive inflight notice.");
-ensure(workflowText.includes('tags:\n      - "v*"'), "The jDeploy release workflow is not configured for v* tags.");
+ensure(workflowText.includes("workflow_dispatch:"), "The jDeploy release workflow must be manually dispatched.");
 ensure(workflowText.includes("runs-on: macos-26"), "The release workflow must use the pinned macos-26 runner.");
-ensure(workflowText.includes("fetch-depth: 2"), "The release workflow must fetch the tagged checklist commit's parent.");
+ensure(workflowText.includes("fetch-depth: 0"), "The release workflow must fetch full tag history for safe retries.");
 ensure(workflowText.includes('node-version: "24"'), "The release workflow must use Node 24.");
-ensure(workflowText.includes("check-release-tag.mjs"), "The release workflow must validate the tag and checklist before publication.");
-ensure(workflowText.includes(":androidApp:lintRelease"), "The release workflow must run Android release lint.");
-ensure(workflowText.includes(":androidApp:bundleRelease"), "The release workflow must build the Android release bundle.");
+ensure(workflowText.includes("check-release-request.mjs"), "The release workflow must validate its manual main-branch request.");
+ensure(workflowText.includes("environment: production"), "The publication job must use the protected production environment.");
+ensure(workflowText.includes("inputs.publish == true"), "Publication must require the explicit publish input.");
 ensure(workflowText.includes("jdeploy:release-preflight"), "The release workflow must run the jDeploy preflight.");
 ensure(workflowText.includes("prepare-jdeploy-github-release.mjs"), "The release workflow must use the local jDeploy release preparer.");
-ensure(workflowText.includes("publish-jdeploy-github-release.sh"), "The release workflow must use the guarded local publisher.");
+ensure(workflowText.includes("prepare-jdeploy-macos-installers.sh"), "The release workflow must finalize macOS assets locally.");
+ensure(workflowText.includes("release-manifest.mjs create"), "The release workflow must create immutable asset evidence.");
+ensure(workflowText.includes("actions/attest@"), "The release workflow must attest the final assets.");
+ensure(workflowText.includes("publish-github-release.sh"), "The release workflow must use the guarded publisher.");
+ensure(workflowText.includes("update-jdeploy-metadata.sh"), "The release workflow must update moving metadata separately.");
 ensure(!workflowText.includes("shannah/jdeploy@"), "The release workflow must not use the mutable jDeploy action.");
 ensure(!workflowText.includes("@master"), "The release workflow must not use actions from a moving master branch.");
-ensure(workflowText.includes("Repair and verify macOS jDeploy installers"), "The jDeploy workflow must repair and verify macOS installers.");
-ensure(workflowText.includes("docs/release-notes/"), "The jDeploy workflow must use checked release notes when present.");
-ensure(workflowText.includes("--notes-file"), "The jDeploy workflow must publish checked release notes with gh release edit --notes-file when present.");
+ensure(
+  workflowText.indexOf("publish-github-release.sh") < workflowText.indexOf("update-jdeploy-metadata.sh"),
+  "Moving jDeploy metadata must be updated only after versioned release publication.",
+);
+ensure(androidPlayWorkflowText.includes("environment: android-play-internal"), "Play deployment must use its protected environment.");
+ensure(androidPlayWorkflowText.includes("default: false"), "Play deployment must default to a discarded validation edit.");
+ensure(androidPlayWorkflowText.includes("publish-google-play-internal.mjs"), "Play deployment must use the official-API client.");
+ensure(
+  androidPlayWorkflowText.includes("ANDROID_UPLOAD_KEYSTORE_BASE64") &&
+    androidPlayWorkflowText.includes("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"),
+  "Play deployment must load its signing and API credentials from protected secrets.",
+);
 
 ensure(buildWorkflowText.includes(":shared:desktopTest"), "The build workflow must run desktop tests.");
 ensure(buildWorkflowText.includes(":shared:testAndroidHostTest"), "The build workflow must run Android host tests.");
@@ -166,19 +181,23 @@ ensure(windowsSmokeWorkflowText.includes("runs-on: windows-2025"), "The Windows 
 ensure(windowsSmokeWorkflowText.includes("npm run jdeploy:local-smoke"), "The Windows workflow must run the installed-package smoke.");
 ensure(windowsSmokeWorkflowText.includes(".\\gradlew.bat --stop"), "The Windows smoke must stop Gradle before cache save.");
 ensure(
-  fs.existsSync(path.join(repoRoot, "scripts", "repair-jdeploy-github-release-macos.sh")),
-  "The macOS jDeploy installer repair script is missing.",
+  fs.existsSync(path.join(repoRoot, "scripts", "prepare-jdeploy-macos-installers.sh")),
+  "The local macOS jDeploy installer preparation script is missing.",
 );
 ensure(
   fs.existsSync(path.join(repoRoot, "scripts", "check-release-notes.mjs")),
   "The release-notes validation script is missing.",
 );
 for (const scriptName of [
-  "check-release-tag.mjs",
+  "check-release-request.mjs",
   "check-release-checklist.mjs",
   "jdeploy-local-smoke.mjs",
   "prepare-jdeploy-github-release.mjs",
-  "publish-jdeploy-github-release.sh",
+  "prepare-jdeploy-macos-installers.sh",
+  "publish-google-play-internal.mjs",
+  "publish-github-release.sh",
+  "release-manifest.mjs",
+  "update-jdeploy-metadata.sh",
 ]) {
   ensure(fs.existsSync(path.join(repoRoot, "scripts", scriptName)), `Required release script is missing: ${scriptName}`);
 }
@@ -194,8 +213,17 @@ for (const requiredPath of [
   ensure(fs.existsSync(path.join(repoRoot, requiredPath)), `Required release gate file is missing: ${requiredPath}`);
 }
 const macosRepairScript = readFile(
-  path.join(repoRoot, "scripts", "repair-jdeploy-github-release-macos.sh"),
-  "The macOS jDeploy installer repair script is missing.",
+  path.join(repoRoot, "scripts", "prepare-jdeploy-macos-installers.sh"),
+  "The local macOS jDeploy installer preparation script is missing.",
+);
+const githubPublishScript = readFile(
+  path.join(repoRoot, "scripts", "publish-github-release.sh"),
+  "The guarded GitHub release publisher is missing.",
+);
+ensure(
+  githubPublishScript.includes('release_notes_path="docs/release-notes/$release_tag.md"') &&
+    githubPublishScript.includes("--notes-file"),
+  "The guarded publisher must use the checked versioned release notes.",
 );
 ensure(
   macosRepairScript.includes("shared/packaging/icons/SerialSlinger.icns"),
@@ -213,38 +241,48 @@ ensure(
   macosRepairScript.includes("codesign --verify --deep --strict"),
   "The macOS installer repair script must verify the final signed app bundle.",
 );
-ensure(
-  macosRepairScript.includes('gh release upload "$release_tag" "$archive_path" --repo "$repo" --clobber'),
-  "The macOS installer repair script must replace the versioned asset with its verified result.",
-);
+ensure(!macosRepairScript.includes("gh release"), "macOS installer preparation must finish before any GitHub upload.");
 const macosSignIndex = macosRepairScript.indexOf("codesign --force --deep --sign -");
 const macosVerifyIndex = macosRepairScript.indexOf("codesign --verify --deep --strict");
-const macosArchiveIndex = macosRepairScript.indexOf('tar -czf "$asset_dir/patched.tgz"');
-const macosUploadIndex = macosRepairScript.indexOf('gh release upload "$release_tag" "$archive_path"');
+const macosArchiveIndex = macosRepairScript.indexOf('tar -czf "$work_dir/patched.tgz"');
+const macosRoundTripIndex = macosRepairScript.indexOf('codesign --verify --deep --strict --verbose=2 "$archived_app"');
 ensure(
-  macosSignIndex < macosVerifyIndex && macosVerifyIndex < macosArchiveIndex && macosArchiveIndex < macosUploadIndex,
-  "The macOS installer repair must sign and verify final bundle contents before archiving and upload.",
+  macosSignIndex < macosVerifyIndex && macosVerifyIndex < macosArchiveIndex && macosArchiveIndex < macosRoundTripIndex,
+  "The macOS installer must be signed before archiving and verified again after archive extraction.",
 );
 
-const existingTag = execFileSync("git", ["ls-remote", "--tags", "origin", `refs/tags/${expectedTag}`], {
-  cwd: repoRoot,
-  encoding: "utf8",
-}).trim();
+const existingTagOutput = execFileSync(
+  "git",
+  ["ls-remote", "--tags", "origin", `refs/tags/${expectedTag}`, `refs/tags/${expectedTag}^{}`],
+  { cwd: repoRoot, encoding: "utf8" },
+).trim();
+const existingTagRefs = existingTagOutput
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => line.split(/\s+/u));
+const existingTagCommit =
+  existingTagRefs.find(([, ref]) => ref?.endsWith("^{}"))?.[0] ?? existingTagRefs[0]?.[0] ?? "";
 
-// A local pre-tag run must still reject a published version. The tag workflow is the one
-// intentional exception because GitHub starts it only after that exact tag reaches origin.
+// A local pre-release run rejects an existing version. An exact same-commit
+// workflow retry is the one intentional exception after publication has begun.
 ensure(
-  remoteVersionTagIsAllowed(existingTag, process.env, expectedTag),
+  remoteVersionTagIsAllowed(existingTagCommit, process.env, expectedTag),
   `Git tag '${expectedTag}' already exists on origin.`,
 );
 
 for (const testScript of [
   "scripts/check-android-instrumentation-results.test.mjs",
+  "scripts/classify-ci-changes.test.mjs",
   "scripts/check-release-checklist.test.mjs",
-  "scripts/check-release-tag.test.mjs",
+  "scripts/check-release-request.test.mjs",
+  "scripts/check-release-workflow.test.mjs",
   "scripts/jdeploy-local-smoke.test.mjs",
+  "scripts/prepare-jdeploy-macos-installers.test.mjs",
   "scripts/prepare-jdeploy-github-release.test.mjs",
-  "scripts/publish-jdeploy-github-release.test.mjs",
+  "scripts/publish-google-play-internal.test.mjs",
+  "scripts/publish-github-release.test.mjs",
+  "scripts/release-manifest.test.mjs",
+  "scripts/update-jdeploy-metadata.test.mjs",
 ]) {
   execFileSync(process.execPath, ["--test", testScript], { cwd: repoRoot, stdio: "inherit" });
 }

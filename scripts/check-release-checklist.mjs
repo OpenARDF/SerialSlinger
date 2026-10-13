@@ -1,75 +1,38 @@
 import fs from "node:fs";
 import process from "node:process";
 
+const preReleaseItems = [
+  "version-aligned",
+  "android-version-code",
+  "release-preflight",
+  "android-signing",
+  "android-native-compatibility",
+  "dependency-audit",
+  "static-analysis",
+  "platform-parity-review",
+  "android-instrumentation",
+  "android-regression",
+  "desktop-regression",
+  "macos-installed-smoke",
+  "windows-intel-x64-smoke",
+  "windows-arm64-smoke",
+  "linux-intel-x64-smoke",
+  "linux-arm64-smoke",
+  "android-release-notes",
+  "merged-to-main",
+];
+
+const legacyPostReleaseItems = [
+  "tag-pushed",
+  "workflow-published",
+  "release-verified",
+  "final-checklist-audit",
+];
+
 const phases = {
-  template: [
-    "version-aligned",
-    "android-version-code",
-    "release-preflight",
-    "android-signing",
-    "android-native-compatibility",
-    "dependency-audit",
-    "static-analysis",
-    "platform-parity-review",
-    "android-instrumentation",
-    "android-regression",
-    "desktop-regression",
-    "macos-installed-smoke",
-    "windows-intel-x64-smoke",
-    "windows-arm64-smoke",
-    "linux-intel-x64-smoke",
-    "linux-arm64-smoke",
-    "android-release-notes",
-    "merged-to-main",
-    "tag-pushed",
-    "workflow-published",
-    "release-verified",
-    "final-checklist-audit",
-  ],
-  "pre-tag": [
-    "version-aligned",
-    "android-version-code",
-    "release-preflight",
-    "android-signing",
-    "android-native-compatibility",
-    "dependency-audit",
-    "static-analysis",
-    "platform-parity-review",
-    "android-instrumentation",
-    "android-regression",
-    "desktop-regression",
-    "macos-installed-smoke",
-    "windows-intel-x64-smoke",
-    "windows-arm64-smoke",
-    "linux-intel-x64-smoke",
-    "linux-arm64-smoke",
-    "android-release-notes",
-    "merged-to-main",
-  ],
-  final: [
-    "version-aligned",
-    "android-version-code",
-    "release-preflight",
-    "android-signing",
-    "android-native-compatibility",
-    "dependency-audit",
-    "static-analysis",
-    "platform-parity-review",
-    "android-instrumentation",
-    "android-regression",
-    "desktop-regression",
-    "macos-installed-smoke",
-    "windows-intel-x64-smoke",
-    "windows-arm64-smoke",
-    "linux-intel-x64-smoke",
-    "linux-arm64-smoke",
-    "android-release-notes",
-    "merged-to-main",
-    "tag-pushed",
-    "workflow-published",
-    "release-verified",
-    "final-checklist-audit",
-  ],
+  template: preReleaseItems,
+  "pre-tag": preReleaseItems,
+  final: [...preReleaseItems, ...legacyPostReleaseItems],
 };
 
 const hardenedChecklistItems = new Set([
@@ -132,6 +95,15 @@ function requiresHardenedSchema(version) {
     (numeric[0] === 2 && numeric[1] === 0 && numeric[2] >= 24);
 }
 
+function requiresAutomatedEvidenceSchema(version) {
+  const match = typeof version === "string" ? version.match(/^(\d+)\.(\d+)\.(\d+)$/) : null;
+  if (!match) return false;
+  const numeric = match.slice(1).map(Number);
+  return numeric[0] > 2 ||
+    (numeric[0] === 2 && numeric[1] > 1) ||
+    (numeric[0] === 2 && numeric[1] === 1 && numeric[2] >= 1);
+}
+
 const args = parseArgs(process.argv.slice(2));
 if (!args.file) {
   usage();
@@ -160,8 +132,8 @@ const itemById = new Map(checklist.items.map((item) => [item.id, item]));
 const failures = [];
 
 if (args.phase === "template") {
-  if (checklist.schemaVersion !== 2) {
-    failures.push("template: schemaVersion must be 2.");
+  if (checklist.schemaVersion !== 3) {
+    failures.push("template: schemaVersion must be 3.");
   }
   if (checklist.version !== "x.y.z") {
     failures.push("template: version must be x.y.z.");
@@ -178,12 +150,21 @@ if (args.phase === "template") {
 }
 
 if (args.phase !== "template" && requiresHardenedSchema(checklist.version) && checklist.schemaVersion !== 2) {
-  failures.push("schemaVersion 2 is required for SerialSlinger 2.0.24 and later.");
+  if (!requiresAutomatedEvidenceSchema(checklist.version) && checklist.schemaVersion !== 2) {
+    failures.push("schemaVersion 2 is required for SerialSlinger 2.0.24 through 2.1.0.");
+  }
 }
 
-const hardenedSchemaApplies = args.phase === "template" || checklist.schemaVersion === 2 || requiresHardenedSchema(checklist.version);
+if (args.phase !== "template" && requiresAutomatedEvidenceSchema(checklist.version) && checklist.schemaVersion !== 3) {
+  failures.push("schemaVersion 3 is required for SerialSlinger 2.1.1 and later.");
+}
+
+const automatedEvidenceSchemaApplies = args.phase === "template" || checklist.schemaVersion === 3;
+const hardenedSchemaApplies = automatedEvidenceSchemaApplies || checklist.schemaVersion === 2 || requiresHardenedSchema(checklist.version);
 const requiredItems =
-  hardenedSchemaApplies
+  automatedEvidenceSchemaApplies
+    ? preReleaseItems
+    : hardenedSchemaApplies
     ? phases[args.phase]
     : phases[args.phase].filter((id) => !hardenedChecklistItems.has(id));
 

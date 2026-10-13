@@ -13,10 +13,10 @@ import {
 } from "./prepare-jdeploy-github-release.mjs";
 
 const environment = {
-  GITHUB_REF_TYPE: "tag",
-  GITHUB_REF_NAME: "v2.1.0",
+  SERIALSLINGER_RELEASE_WORKFLOW: "1",
+  SERIALSLINGER_RELEASE_TAG: "v2.1.0",
+  SERIALSLINGER_RELEASE_COMMIT: "0123456789abcdef",
   GITHUB_REPOSITORY: "OpenARDF/SerialSlinger",
-  GITHUB_SHA: "0123456789abcdef",
   GH_TOKEN: "test-token"
 };
 const packageJson = {
@@ -29,20 +29,20 @@ const packageJson = {
 test("validates a matching tag release context", () => {
   assert.equal(validateReleaseContext(environment, packageJson), "v2.1.0");
   assert.throws(
-    () => validateReleaseContext({ ...environment, GITHUB_REF_TYPE: "branch" }, packageJson),
-    /only for a tag workflow/
+    () => validateReleaseContext({ ...environment, SERIALSLINGER_RELEASE_WORKFLOW: "0" }, packageJson),
+    /guarded release workflow/
   );
   assert.throws(
     () => validateReleaseContext({ ...environment, GH_TOKEN: "" }, packageJson),
-    /requires GITHUB_SHA, GITHUB_REPOSITORY, and GH_TOKEN/
+    /requires an exact release commit, repository, and token/
   );
 });
 
 test("adds only jDeploy release metadata", () => {
   const prepared = withGithubReleaseMetadata(packageJson, environment);
   assert.equal(prepared.jdeploy.jdeployVersion, "6.1.7");
-  assert.equal(prepared.jdeploy.commitHash, environment.GITHUB_SHA);
-  assert.equal(prepared.jdeploy.gitTag, environment.GITHUB_REF_NAME);
+  assert.equal(prepared.jdeploy.commitHash, environment.SERIALSLINGER_RELEASE_COMMIT);
+  assert.equal(prepared.jdeploy.gitTag, environment.SERIALSLINGER_RELEASE_TAG);
   assert.equal(packageJson.jdeploy.commitHash, undefined);
 });
 

@@ -42,14 +42,19 @@ android-signing-check:
 # Run repository-owned Node workflow and packaging tests.
 scripts-test:
     node --test \
+        scripts/classify-ci-changes.test.mjs \
         scripts/check-android-native-compatibility.test.mjs \
         scripts/check-android-instrumentation-results.test.mjs \
         scripts/check-release-checklist.test.mjs \
         scripts/check-release-workflow.test.mjs \
-        scripts/check-release-tag.test.mjs \
+        scripts/check-release-request.test.mjs \
         scripts/jdeploy-local-smoke.test.mjs \
+        scripts/prepare-jdeploy-macos-installers.test.mjs \
         scripts/prepare-jdeploy-github-release.test.mjs \
-        scripts/publish-jdeploy-github-release.test.mjs
+        scripts/publish-google-play-internal.test.mjs \
+        scripts/publish-github-release.test.mjs \
+        scripts/release-manifest.test.mjs \
+        scripts/update-jdeploy-metadata.test.mjs
 
 # Validate workflows, portable shell, shell formatting, and Git whitespace.
 static-check:
@@ -129,6 +134,22 @@ jdeploy-preflight:
 
 # Run every automatable release gate; hardware checks remain controlled by the checklist.
 release-check: check dependency-audit jdeploy-preflight
+
+# Run the hosted release workflow without creating a tag or public release.
+release-dry-run version:
+    gh workflow run "jDeploy Release" --ref main -f version={{quote(version)}} -f publish=false
+
+# Run the hosted release workflow through its protected publication approval.
+release-publish version:
+    gh workflow run "jDeploy Release" --ref main -f version={{quote(version)}} -f publish=true
+
+# Validate a signed bundle in a discarded Google Play internal-track edit.
+android-play-validate version:
+    gh workflow run "Android Play deployment" --ref main -f version={{quote(version)}} -f commit_edit=false
+
+# Commit a validated signed bundle to Google Play internal testing.
+android-play-internal version:
+    gh workflow run "Android Play deployment" --ref main -f version={{quote(version)}} -f commit_edit=true
 
 # Scan tracked history and the current worktree before a sensitive push or release.
 secret-check:

@@ -1,10 +1,9 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "release": "vX.Y.Z",
   "previousRelease": "vX.Y.Z",
   "repository": "OpenARDF/SerialSlinger",
   "channel": "stable",
-  "sourceCommit": "",
   "version": "x.y.z",
   "androidVersionCode": "",
   "releaseNotesFile": "docs/release-notes/vX.Y.Z.md",
@@ -147,39 +146,7 @@
     },
     {
       "id": "merged-to-main",
-      "description": "Squash-merge the verified release candidate pull request into protected Development1, fast-forward main to that exact candidate before tagging, and record both commits.",
-      "status": "pending",
-      "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
-    },
-    {
-      "id": "tag-pushed",
-      "description": "Squash-merge the checklist-only tag-evidence pull request into protected Development1, verify its sole parent and changed file, fast-forward main, then create and push the annotated vX.Y.Z tag.",
-      "status": "pending",
-      "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
-    },
-    {
-      "id": "workflow-published",
-      "description": "Watch the jDeploy Release GitHub Actions workflow through publication and record the run ID, conclusion, and duration.",
-      "status": "pending",
-      "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
-    },
-    {
-      "id": "release-verified",
-      "description": "Verify the GitHub release is published, non-draft, non-prerelease unless requested, targets the intended commit, and exposes downloadable assets.",
-      "status": "pending",
-      "evidence": "",
-      "skipReason": "",
-      "skipRequestedBy": ""
-    },
-    {
-      "id": "final-checklist-audit",
-      "description": "Run the final checklist guard on the post-release evidence update prepared as a protected pull request into Development1 without moving the tag.",
+      "description": "Squash-merge the verified release candidate pull request into protected main and record the resulting exact source commit and successful required check.",
       "status": "pending",
       "evidence": "",
       "skipReason": "",
