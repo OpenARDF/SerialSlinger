@@ -7,6 +7,7 @@ import yauzl from "yauzl";
 const PAGE_SIZE_16_KB = 16 * 1024;
 const PAGE_ALIGNMENT_16_KB = 2;
 const BUNDLE_CONFIG_ENTRY = "BundleConfig.pb";
+const MANIFEST_ENTRY = "base/manifest/AndroidManifest.xml";
 const NATIVE_LIBRARY_PATTERN = /^[^/]+\/lib\/([^/]+)\/([^/]+\.so)$/;
 const REQUIRED_64_BIT_ABIS = new Set(["arm64-v8a", "x86_64"]);
 
@@ -77,6 +78,44 @@ function requireSingleField(fields, fieldNumber, label) {
     fail(`${label} expected one field ${fieldNumber}, found ${values.length}`);
   }
   return values[0];
+}
+
+function protobufString(value, label) {
+  if (!Buffer.isBuffer(value)) fail(`${label} is not a protobuf string`);
+  return value.toString("utf8");
+}
+
+export function readBundleManifestIdentity(manifest) {
+  // App Bundles store AndroidManifest.xml as Resources.XmlNode protobuf data.
+  // The root node's field 1 is the manifest element; element field 4 contains
+  // XmlAttribute messages whose fields 2 and 3 are the name and raw value.
+  const root = parseProtobufFields(manifest);
+  const element = parseProtobufFields(requireSingleField(root, 1, "manifest root node"));
+  const elementName = protobufString(requireSingleField(element, 3, "manifest element name"), "manifest element name");
+  if (elementName !== "manifest") fail(`Expected manifest root element, found ${elementName}`);
+
+  const attributes = new Map();
+  for (const attributeBytes of element.get(4) || []) {
+    const attribute = parseProtobufFields(attributeBytes);
+    const name = protobufString(requireSingleField(attribute, 2, "manifest attribute name"), "manifest attribute name");
+    const rawValues = attribute.get(3) || [];
+    if (rawValues.length === 1 && Buffer.isBuffer(rawValues[0])) {
+      attributes.set(name, rawValues[0].toString("utf8"));
+    }
+  }
+  const packageName = attributes.get("package") || "";
+  const versionName = attributes.get("versionName") || "";
+  if (!packageName || !versionName) fail("The bundle manifest lacks package or versionName identity.");
+  return { packageName, versionName };
+}
+
+export function verifyBundleIdentity(identity, expected) {
+  if (identity.packageName !== expected.packageName) {
+    fail(`Bundle package ${identity.packageName} does not match expected package ${expected.packageName}`);
+  }
+  if (identity.versionName !== expected.versionName) {
+    fail(`Bundle version ${identity.versionName} does not match expected version ${expected.versionName}`);
+  }
 }
 
 export function readBundlePageAlignment(bundleConfig) {
@@ -185,7 +224,7 @@ function readZipEntry(zipFile, entry) {
 
 async function readRelevantBundleEntries(bundlePath) {
   const zipFile = await openZip(bundlePath);
-  const result = { bundleConfig: null, nativeLibraries: [] };
+  const result = { bundleConfig: null, manifest: null, nativeLibraries: [] };
   return new Promise((resolve, reject) => {
     zipFile.on("error", reject);
     zipFile.on("end", () => resolve(result));
@@ -194,6 +233,8 @@ async function readRelevantBundleEntries(bundlePath) {
         const nativeMatch = NATIVE_LIBRARY_PATTERN.exec(entry.fileName);
         if (entry.fileName === BUNDLE_CONFIG_ENTRY) {
           result.bundleConfig = await readZipEntry(zipFile, entry);
+        } else if (entry.fileName === MANIFEST_ENTRY) {
+          result.manifest = await readZipEntry(zipFile, entry);
         } else if (nativeMatch) {
           result.nativeLibraries.push({
             path: entry.fileName,
@@ -215,8 +256,10 @@ export async function checkBundle(bundlePath) {
   if (!existsSync(bundlePath)) fail(`Android App Bundle does not exist: ${bundlePath}`);
   const entries = await readRelevantBundleEntries(bundlePath);
   if (!entries.bundleConfig) fail(`${bundlePath} does not contain ${BUNDLE_CONFIG_ENTRY}`);
+  if (!entries.manifest) fail(`${bundlePath} does not contain ${MANIFEST_ENTRY}`);
 
   const pageAlignment = readBundlePageAlignment(entries.bundleConfig);
+  const identity = readBundleManifestIdentity(entries.manifest);
   if (pageAlignment !== PAGE_ALIGNMENT_16_KB) {
     fail(`Bundle requests page-alignment enum ${pageAlignment}; expected 16 KB`);
   }
@@ -239,6 +282,7 @@ export async function checkBundle(bundlePath) {
   }
 
   console.log(`PASS: ${bundlePath} requests 16 KB native-library packaging alignment.`);
+  console.log(`PASS: Bundle identity is ${identity.packageName} version ${identity.versionName}.`);
   if (verified.length === 0) {
     console.log("PASS: The bundle contains no 64-bit native libraries requiring ELF inspection.");
   } else {
@@ -246,17 +290,34 @@ export async function checkBundle(bundlePath) {
       console.log(`PASS: ${library.path} load segments are aligned to at least ${library.minimumAlignment} bytes.`);
     }
   }
-  return { pageAlignment, verified };
+  return { identity, pageAlignment, verified };
 }
 
 async function main() {
-  const bundlePath = process.argv[2];
-  if (!bundlePath || process.argv.length !== 3) {
-    console.error("Usage: node scripts/check-android-native-compatibility.mjs <app-bundle.aab>");
+  const [bundlePath, ...argumentsList] = process.argv.slice(2);
+  const options = {};
+  for (let index = 0; index < argumentsList.length; index += 2) {
+    const name = argumentsList[index];
+    const value = argumentsList[index + 1];
+    if (!name?.startsWith("--") || value === undefined) {
+      console.error("Expected --name value option pairs.");
+      process.exit(2);
+    }
+    options[name.slice(2)] = value;
+  }
+  if (!bundlePath || (Boolean(options["expected-version"]) !== Boolean(options["expected-package"]))) {
+    console.error("Usage: node scripts/check-android-native-compatibility.mjs <app-bundle.aab> [--expected-version X.Y.Z --expected-package application.id]");
     process.exit(2);
   }
   try {
-    await checkBundle(bundlePath);
+    const result = await checkBundle(bundlePath);
+    if (options["expected-version"]) {
+      verifyBundleIdentity(result.identity, {
+        packageName: options["expected-package"],
+        versionName: options["expected-version"],
+      });
+      console.log("PASS: The built bundle identity matches the requested Play release.");
+    }
   } catch (error) {
     console.error(`ERROR: ${error.message}`);
     process.exit(1);

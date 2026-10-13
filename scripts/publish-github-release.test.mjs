@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -151,6 +151,53 @@ test("a successful retry verifies but never mutates an existing public release",
     assert.doesNotMatch(calls, /gh release upload/u);
     assert.doesNotMatch(calls, /gh release edit/u);
     assert.doesNotMatch(calls, /git push/u);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a self-consistent public release that differs from this run's proven manifest", () => {
+  const fixture = makeFixture();
+  const publicDirectory = join(fixture.root, "public-release");
+  try {
+    cpSync(fixture.releaseDirectory, publicDirectory, { recursive: true });
+    writeFileSync(join(publicDirectory, "SerialSlinger.Installer-mac-arm64.tgz"), "different installer\n");
+    const differentManifest = createReleaseManifest({
+      directory: publicDirectory,
+      version: "2.1.0",
+      tag: "v2.1.0",
+      sourceCommit: "0123456789abcdef",
+      workflowUrl: "https://example.invalid/run/older",
+      generatedAt: "2026-10-11T12:00:00.000Z",
+    });
+    writeFileSync(join(publicDirectory, manifestFileName), `${JSON.stringify(differentManifest, null, 2)}\n`);
+    writeFileSync(join(fixture.stateDirectory, "release"), "public\n");
+    assert.throws(
+      () =>
+        execFileSync("bash", [publishScript, fixture.releaseDirectory], {
+          cwd: resolve("."),
+          env: {
+            ...process.env,
+            PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+            FAKE_CALL_LOG: fixture.callLog,
+            FAKE_EXISTING_TAG: "1",
+            FAKE_RELEASE_FILES: publicDirectory,
+            FAKE_STATE: fixture.stateDirectory,
+            GH_TOKEN: "test-token",
+            GITHUB_REPOSITORY: "OpenARDF/SerialSlinger",
+            SERIALSLINGER_ALLOW_GITHUB_RELEASE_PUBLISH: "1",
+            SERIALSLINGER_RELEASE_COMMIT: "0123456789abcdef",
+            SERIALSLINGER_RELEASE_TAG: "v2.1.0",
+            SERIALSLINGER_RELEASE_WORKFLOW: "1",
+          },
+          stdio: "pipe",
+        }),
+      /Command failed/u,
+    );
+    const calls = readFileSync(fixture.callLog, "utf8");
+    assert.match(calls, /gh release download/u);
+    assert.doesNotMatch(calls, /gh release upload/u);
+    assert.doesNotMatch(calls, /gh release edit/u);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

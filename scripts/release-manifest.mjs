@@ -78,6 +78,21 @@ export function verifyReleaseManifest(directory, manifest) {
   }
 }
 
+export function compareReleaseManifests(expected, actual) {
+  const comparable = (manifest) => ({
+    schemaVersion: manifest.schemaVersion,
+    product: manifest.product,
+    version: manifest.version,
+    tag: manifest.tag,
+    sourceCommit: manifest.sourceCommit,
+    verification: manifest.verification,
+    assets: [...manifest.assets].sort((left, right) => left.name.localeCompare(right.name)),
+  });
+  if (JSON.stringify(comparable(expected)) !== JSON.stringify(comparable(actual))) {
+    throw new Error("Release manifests do not describe the same source identity and asset set.");
+  }
+}
+
 function parseArguments(argv) {
   const [command, ...rest] = argv;
   const args = { command };
@@ -94,11 +109,11 @@ function parseArguments(argv) {
 
 function main() {
   const args = parseArguments(process.argv.slice(2));
-  const directory = resolve(args.directory || "");
-  if (!existsSync(directory)) {
-    throw new Error(`Release asset directory does not exist: ${directory}`);
-  }
+  const directory = args.directory ? resolve(args.directory) : "";
   if (args.command === "create") {
+    if (!directory || !existsSync(directory)) {
+      throw new Error(`Release asset directory does not exist: ${directory || "<missing>"}`);
+    }
     for (const name of ["version", "tag", "source-commit", "workflow-url"]) {
       if (!args[name]) {
         throw new Error(`--${name} is required when creating a release manifest.`);
@@ -118,13 +133,31 @@ function main() {
     return;
   }
   if (args.command === "verify") {
+    if (!directory || !existsSync(directory)) {
+      throw new Error(`Release asset directory does not exist: ${directory || "<missing>"}`);
+    }
     const manifestPath = join(directory, manifestFileName);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     verifyReleaseManifest(directory, manifest);
     console.log(`Verified ${manifest.assets.length} release assets against ${manifestFileName}.`);
     return;
   }
-  throw new Error("Usage: release-manifest.mjs create|verify --directory <path> [...]");
+  if (args.command === "compare") {
+    const expectedDirectory = resolve(args["expected-directory"] || "");
+    const actualDirectory = resolve(args["actual-directory"] || "");
+    for (const [label, candidate] of [["expected", expectedDirectory], ["actual", actualDirectory]]) {
+      if (!args[`${label}-directory`] || !existsSync(candidate)) {
+        throw new Error(`${label} release asset directory does not exist: ${args[`${label}-directory`] || "<missing>"}`);
+      }
+    }
+    const expected = JSON.parse(readFileSync(join(expectedDirectory, manifestFileName), "utf8"));
+    const actual = JSON.parse(readFileSync(join(actualDirectory, manifestFileName), "utf8"));
+    compareReleaseManifests(expected, actual);
+    verifyReleaseManifest(actualDirectory, actual);
+    console.log("Verified the read-back release against this run's proven source identity and asset set.");
+    return;
+  }
+  throw new Error("Usage: release-manifest.mjs create|verify|compare [named directory arguments]");
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

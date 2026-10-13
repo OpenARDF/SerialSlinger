@@ -48,7 +48,9 @@ if [[ "$existing_release_state" == $'false\tfalse' ]]; then
 	readback_dir="$(mktemp -d)"
 	trap 'rm -rf "$readback_dir"' EXIT
 	gh release download "$release_tag" --repo "$GITHUB_REPOSITORY" -D "$readback_dir"
-	node scripts/release-manifest.mjs verify --directory "$readback_dir"
+	node scripts/release-manifest.mjs compare \
+		--expected-directory "$release_files_dir" \
+		--actual-directory "$readback_dir"
 	echo "$release_tag is already public and matches the proven manifest; no immutable assets were changed."
 	exit 0
 fi
@@ -74,7 +76,9 @@ cleanup() {
 }
 trap cleanup EXIT
 gh release download "$release_tag" --repo "$GITHUB_REPOSITORY" -D "$readback_dir"
-node scripts/release-manifest.mjs verify --directory "$readback_dir"
+node scripts/release-manifest.mjs compare \
+	--expected-directory "$release_files_dir" \
+	--actual-directory "$readback_dir"
 
 gh release edit "$release_tag" \
 	--repo "$GITHUB_REPOSITORY" \

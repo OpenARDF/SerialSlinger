@@ -51,10 +51,11 @@ jobs:
         with:
           log-accepted-android-sdk-licenses: false
           packages: ''
-      - name: Install npm and Android dependencies
+      - name: Install pinned npm dependencies
+        run: npm ci
+      - name: Install Android dependencies
         if: steps.changes.outputs.heavy == 'true'
         run: |
-          npm ci
           # cmdline-tools 22 deprecates sdkmanager in favor of this Android CLI command.
           android sdk install platform-tools platforms/android-37.0
       - name: Install pinned static-analysis tools

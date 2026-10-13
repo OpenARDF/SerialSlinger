@@ -53,3 +53,10 @@ test("release automation defaults to a dry run and moves metadata last", () => {
       releaseAutomation.indexOf("update-jdeploy-metadata.sh"),
   );
 });
+
+test("Play deployment verifies the identity embedded in the built bundle", () => {
+  const playAutomation = readFileSync(".github/workflows/android-play-deploy.yml", "utf8");
+  assert.match(playAutomation, /check-android-native-compatibility\.mjs/u);
+  assert.match(playAutomation, /--expected-version/u);
+  assert.match(playAutomation, /--expected-package/u);
+});

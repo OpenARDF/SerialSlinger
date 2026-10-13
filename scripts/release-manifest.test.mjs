@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createReleaseManifest, verifyReleaseManifest } from "./release-manifest.mjs";
+import { compareReleaseManifests, createReleaseManifest, verifyReleaseManifest } from "./release-manifest.mjs";
 
 test("creates and verifies deterministic asset evidence", () => {
   const directory = mkdtempSync(join(tmpdir(), "serialslinger-release-manifest-test-"));
@@ -52,4 +52,29 @@ test("rejects a release without a verified macOS installer", () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("compares source identity and assets while allowing retry metadata to change", () => {
+  const expected = {
+    schemaVersion: 1,
+    product: "SerialSlinger",
+    version: "2.2.0",
+    tag: "v2.2.0",
+    sourceCommit: "abc123",
+    workflowUrl: "https://example.invalid/run/1",
+    generatedAt: "2026-10-12T12:00:00Z",
+    verification: { finalAssetsPreparedLocally: true },
+    assets: [{ name: "asset.tgz", size: 4, sha256: "1234" }],
+  };
+  assert.doesNotThrow(() =>
+    compareReleaseManifests(expected, {
+      ...expected,
+      workflowUrl: "https://example.invalid/run/2",
+      generatedAt: "2026-10-13T12:00:00Z",
+    }),
+  );
+  assert.throws(
+    () => compareReleaseManifests(expected, { ...expected, assets: [{ ...expected.assets[0], sha256: "5678" }] }),
+    /do not describe the same/u,
+  );
 });
