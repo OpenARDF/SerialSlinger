@@ -162,3 +162,6 @@ The protected `Android Play deployment` workflow handles stage 3 separately
 from jDeploy publication. Its default mode validates inputs without committing a
 Play edit. Production promotion remains a separate explicit Play Console action
 until a dedicated staged-rollout workflow is intentionally approved.
+
+Before applying for production access, review the
+[Google Play production readiness checklist](multiplatform-roadmap.md#google-play-production-readiness).
