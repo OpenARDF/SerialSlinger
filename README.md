@@ -33,4 +33,5 @@ The project currently includes:
 
 ## More Information
 
+- [Multiplatform roadmap](docs/multiplatform-roadmap.md)
 - [SignalSlinger Partner Project](https://github.com/OpenARDF/SignalSlinger)

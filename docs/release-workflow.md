@@ -164,4 +164,4 @@ Play edit. Production promotion remains a separate explicit Play Console action
 until a dedicated staged-rollout workflow is intentionally approved.
 
 Before applying for production access, review the
-[Google Play production readiness checklist](initial-backlog.md#google-play-production-readiness).
+[Google Play production readiness checklist](multiplatform-roadmap.md#google-play-production-readiness).

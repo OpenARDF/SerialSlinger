@@ -1,29 +1,16 @@
-# Initial Backlog
+# SerialSlinger Multiplatform Roadmap
 
-## Foundation
+## Current State
 
-- choose the implementation stack for desktop and future mobile support
-- document the first supported settings table
-- define the initial device settings model
-- define connection and error states
+SerialSlinger supports Android, macOS, Windows, and Linux. The apps share
+Kotlin protocol, settings, and session logic for reading and configuring
+connected devices. See the [developer guide](developer-guide.md) for the
+platform architecture and the [release workflow](release-workflow.md) for
+validation and distribution.
 
-## TDD First Targets
+## Near-Term Roadmap
 
-- a `DeviceSettings` model test
-- a field validation test suite
-- a settings diff test suite
-- a protocol parser/encoder test suite
-- an application workflow test suite for `load -> edit -> submit`
-
-## First UX Questions To Answer
-
-- Which settings are always visible in the first table?
-- Which fields are read-only vs editable?
-- How should invalid values be shown before submit?
-- Should submit send all values or only changed values?
-- Should the UI refresh from device after submit automatically?
-
-## Google Play production readiness
+### Google Play production readiness
 
 Complete these items before applying for production access for
 `com.SerialSlinger.openardf`. Review this checklist monthly and before applying.
@@ -57,15 +44,44 @@ and store screenshot inventory still need a Play Console check.
   permissions, outstanding policy declarations, and listing status before
   applying. Record the results for this app.
 
-## Future Device Controls
+### Future Device Controls
 
 - evaluate an advanced thermal shutdown threshold control; keep the cutoff
   read-only until firmware command semantics, safety limits, validation, and
   tester guidance are defined
 
-## Release Workflow
+### Release Workflow
 
 - evaluate Developer ID signing and Apple notarization after the main-only,
   dry-run-first release workflow has completed a production deployment
 - evaluate automated Play production staged rollouts only after the protected
   internal-testing upload has been exercised and its readback is reliable
+
+## Initial Planning Notes
+
+These were the foundation tasks and design questions from the initial backlog.
+The [stack decision](stack-decision.md), [first settings table](first-settings-table.md),
+and [domain model](domain-model.md) document the resulting design.
+
+### Foundation
+
+- choose the implementation stack for desktop and future mobile support
+- document the first supported settings table
+- define the initial device settings model
+- define connection and error states
+
+### TDD First Targets
+
+- a `DeviceSettings` model test
+- a field validation test suite
+- a settings diff test suite
+- a protocol parser/encoder test suite
+- an application workflow test suite for `load -> edit -> submit`
+
+### First UX Questions To Answer
+
+- Which settings are always visible in the first table?
+- Which fields are read-only vs editable?
+- How should invalid values be shown before submit?
+- Should submit send all values or only changed values?
+- Should the UI refresh from device after submit automatically?

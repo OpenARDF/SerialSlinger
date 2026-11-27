@@ -109,6 +109,6 @@ iOS is currently out of scope for direct USB or serial support. If SignalSlinger
 - [stack-decision.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/stack-decision.md)
 - [first-settings-table.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/first-settings-table.md)
 - [domain-model.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/domain-model.md)
-- [initial-backlog.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/initial-backlog.md)
+- [Multiplatform roadmap](multiplatform-roadmap.md)
 - [signalslinger-release-handling.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/signalslinger-release-handling.md)
 - [bootloader-install-tester-setup.md](/Users/charlesscharlau/Documents/GitHub/SerialSlinger/docs/bootloader-install-tester-setup.md)
